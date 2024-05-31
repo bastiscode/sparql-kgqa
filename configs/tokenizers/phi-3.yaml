@@ -1,0 +1,9 @@
+tokenize:
+  type: huggingface
+  path: relpath(phi-3/tokenizer.json)
+special:
+  tokens:
+    - <|endoftext|>
+    - <unk>
+  pad: <|endoftext|>
+  unk: <unk>

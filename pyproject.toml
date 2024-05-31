@@ -1,0 +1,40 @@
+[project]
+name = "sparql_kgqa"
+version = "0.1.0"
+description = "Train and run large language models for SPARQL QA."
+authors = [
+    { name = "Sebastian Walter", email = "swalter@cs.uni-freiburg.de" }
+]
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+
+keywords = ["nlp", "text", "llm", "SPARQL", "QA", "knowledge graph"]
+
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Text Processing",
+    "Topic :: Utilities"
+]
+
+dependencies = [
+    "dtpu>=0.6.0",
+    "transformers>=4.37.0",
+    "flask-sock>=0.7.0",
+    "braceexpand>=0.1.7"
+]
+
+[project.scripts]
+"sparql-kgqa" = "sparql_kgqa.api.cli:main"
+
+[project.urls]
+Github = "https://github.com/bastiscode/sparql-kgqa"
+
+[tool.distutils.bdist_wheel]
+universal = true
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
