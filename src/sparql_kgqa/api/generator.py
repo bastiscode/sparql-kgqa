@@ -1,4 +1,5 @@
 from typing import Any, Iterator
+import re
 
 import torch
 from torch import nn
@@ -17,8 +18,8 @@ from text_utils.inference import (
     search,
     beam_search
 )
-from text_utils.inference.utils import Beam
-from text_utils.constraints import Constraint
+from text_utils.inference.utils import Beam, BeamStopFn, DecodeFn, MaskUpdateFn, StopFn
+from text_utils.constraints import Constraint, ContinuationConstraint
 
 from sparql_kgqa.model import (
     Model,
@@ -114,6 +115,7 @@ class SPARQLGenerator(TextProcessor):
             self.tokenizer.get_vocab(),
             False
         )
+        self._disable_sparql_constraint = False
 
         self.model = self.model.compile(
             **self.cfg["inference"].get("compile", {})
@@ -158,19 +160,33 @@ class SPARQLGenerator(TextProcessor):
         return data.InferenceData(text, {})
 
     @torch.inference_mode()
-    def _inference(
+    def _iterative_inference(
         self,
-        batch: data.InferenceBatch,
-        constraint: Constraint | None = None,
-        yield_intermediate: bool = False
+        initial_token_ids: list[int],
     ) -> Iterator[Any]:
-        initial_token_ids = batch.token_ids()
-        if constraint is not None:
-            constraint.reset()
+        decoded_token_ids = []
+
+        kgs = "|".join(re.escape(kg) for kg in self._entity_indices)
+        START_PATTERN = re.compile(f"<(kg(?:e|p)) kg='({kgs})'>$")
+        END_PATTERN = re.compile(f"</kg(?:e|p)>$")
+
+        index: tuple[str, str] | None = None
+
+        def sparql_stop_fn(token_ids: list[int]) -> bool:
+            nonlocal index
+
+            if token_ids[-1] == self._eos_token_id:
+                return True
+
+            decoded = self.tokenizer.de_tokenize(
+                token_ids[len(initial_token_ids):]
+            )
+            pattern = START_PATTERN if index is None else END_PATTERN
+            return pattern.search(decoded) is not None
 
         # decode fn gets in token ids and additional kwargs,
         # and return logits over next tokens and additional info
-        def _decode_fn(
+        def decode_fn(
             token_ids: torch.Tensor,
             **kwargs: Any
         ) -> tuple[torch.Tensor, dict[str, Any]]:
@@ -183,7 +199,7 @@ class SPARQLGenerator(TextProcessor):
             )
             return dec, {"kv_cache": cache}
 
-        def _kwargs_update_fn(
+        def kwargs_update_fn(
             kwargs: dict[str, Any],
             info: dict[str, Any],
             mask: torch.Tensor
@@ -191,23 +207,74 @@ class SPARQLGenerator(TextProcessor):
             kv_cache = info.get("kv_cache", None)
             if kv_cache is None:
                 return
+
             kwargs["kv_cache"] = tuple(
                 tuple(c[mask.to(c.device)] for c in cache)
                 for cache in info["kv_cache"]
             )
 
-        if (self._beam_width or 1) > 1:
-            assert self._beam_width is not None
-            logit_fns = []
-            initial_beams = []
+        while len(decoded_token_ids) == 0 or decoded_token_ids[-1] != self._eos_token_id:
+            decoded_string = self.tokenizer.de_tokenize(decoded_token_ids)
+            if END_PATTERN.search(decoded_string) is not None:
+                index = None
 
-            for token_ids in initial_token_ids:
-                beam = Beam(token_ids, [0.0] * len(token_ids))
+            elif index is not None:
+                match = START_PATTERN.search(decoded_string)
+                if match is not None:
+                    index = (match.group(1), match.group(2))
 
-                if constraint is not None:
-                    beam.info["constraint"] = constraint.clone()
+            if self._beam_width > 1 and index is not None:
+                stop_fn = lambda beam: sparql_stop_fn(beam.token_ids)
+                beam_width = self._beam_width
+            else:
+                stop_fn = lambda token_ids, _: sparql_stop_fn(token_ids.tolist())
+                beam_width = 1
 
-                initial_beams.append(beam)
+            if index is not None and index[0] == "kge":
+                constraint = ContinuationConstraint(
+                    self._entity_indices[index[1]]
+                )
+            elif index is not None and index[0] == "kgp":
+                constraint = ContinuationConstraint(
+                    self._property_indices[index[1]]
+                )
+            elif self._disable_sparql_constraint:
+                constraint = None
+            else:
+                constraint = self._sparql_constraint
+                constraint.reset(decoded_string.encode())
+
+            last_output = []
+            for output in self._partial_inference(
+                decode_fn,
+                initial_token_ids + decoded_token_ids,
+                constraint,
+                stop_fn, # type: ignore
+                beam_width,
+                kwargs_update_fn,
+            ):
+                yield decoded_token_ids + output
+                last_output = output
+
+            decoded_token_ids.extend(last_output)
+
+    def _partial_inference(
+        self,
+        decode_fn: DecodeFn,
+        initial_token_ids: list[int],
+        constraint: Constraint | None,
+        stop_fn: BeamStopFn | StopFn,
+        beam_width: int = 1, 
+        kwargs_update_fn: MaskUpdateFn | None = None,
+    ) -> Iterator[list[int]]:
+        logit_fns = []
+
+        if beam_width > 1:
+            beam = Beam(
+                initial_token_ids, 
+                [0.0] * len(initial_token_ids),
+                {"constraint": constraint} if constraint is not None else None
+            )
 
             # add constrain logit fn if any of the beams have a constraint
             if constraint is not None:
@@ -246,40 +313,29 @@ class SPARQLGenerator(TextProcessor):
                     self._temp
                 ))
 
-            def beam_stop_fn(beam: Beam) -> bool:
-                return beam.token_ids[-1] == self._eos_token_id
-
             yield from (
-                [beam[0].token_ids for beam in beams]
-                for beams in
-                beam_search(
-                    decode_fn=_decode_fn,
-                    initial=initial_beams,
+                beams[0][0].token_ids for beams in beam_search(
+                    decode_fn=decode_fn,
+                    initial=[beam],
                     pad_token_id=self.tokenizer.pad_token_id(),
                     max_length=self.max_length,
-                    stop_fn=beam_stop_fn,
+                    stop_fn=stop_fn, # type: ignore
                     device=self.devices[0],
                     normalize_by_length=True,
                     alpha=1.0,
-                    beam_width=self._beam_width,
+                    beam_width=beam_width,
                     sample_fn=sample_fn,
                     candidate_fn=candidate_fn,
                     logit_fns=logit_fns,
-                    kwargs_update_fn=_kwargs_update_fn,
-                    yield_intermediate=yield_intermediate
+                    kwargs_update_fn=kwargs_update_fn,
+                    yield_intermediate=True
                 )
             )
             return
 
-        logit_fns = []
-
         if constraint is not None:
-            constraints = [
-                constraint.clone()
-                for _ in range(len(initial_token_ids))
-            ]
             logit_fns.append(inference_utils.constraint_logit_fn(
-                lambda idx: constraints[idx],  # type: ignore
+                lambda _: constraint,  # type: ignore
                 self._eos_token_id
             ))
 
@@ -301,63 +357,25 @@ class SPARQLGenerator(TextProcessor):
         # after sampling a token
         if constraint is not None:
             sample_fn = inference_utils.constraint_sample_fn(
-                lambda idx: constraints[idx],  # type: ignore
+                lambda _: constraint,  # type: ignore
                 sample_fn,
                 self._eos_token_id
             )
 
-        def stop_fn(token_ids: torch.Tensor, _: list[int]) -> torch.Tensor:
-            return token_ids == self._eos_token_id
-
-        yield from search(
-            decode_fn=_decode_fn,
-            initial_token_ids=initial_token_ids,
-            pad_token_id=self.tokenizer.pad_token_id(),
-            max_length=self.max_length,
-            sample_fn=sample_fn,
-            logit_fns=logit_fns,
-            stop_fn=stop_fn,
-            device=self.devices[0],
-            kwargs_update_fn=_kwargs_update_fn,
-            yield_intermediate=yield_intermediate
+        yield from (
+            output[0] for output in search(
+                decode_fn=decode_fn,
+                initial_token_ids=[initial_token_ids],
+                pad_token_id=self.tokenizer.pad_token_id(),
+                max_length=self.max_length,
+                sample_fn=sample_fn,
+                logit_fns=logit_fns,
+                stop_fn=stop_fn, # type: ignore
+                device=self.devices[0],
+                kwargs_update_fn=kwargs_update_fn,
+                yield_intermediate=True
+            )
         )
-
-    def _process_results(
-        self,
-        items: list[data.InferenceItem],
-        outputs: list[Any],
-    ) -> data.InferenceData:
-        assert len(outputs) == 1, "expected single output"
-        output = outputs[0]
-        item = items[0]
-
-        text = self.tokenizer.de_tokenize(
-            item.tokenization.token_ids + output
-        )
-        if not self._full_outputs:
-            input_text = self.tokenizer.de_tokenize(
-                item.tokenization.token_ids
-            )
-            text = text[len(input_text):]
-        return data.InferenceData(text, item.data.info)
-
-    def _get_constraint(
-        self,
-        constraint: Const
-    ) -> Constraint:
-        if isinstance(constraint, str):
-            return grammar.RegexConstraint(
-                constraint,
-                self._continuations
-            )
-        else:
-            gram, lexer, exact = constraint
-            return grammar.LR1Constraint(
-                gram,
-                lexer,
-                self._continuations,
-                exact
-            )
 
     def set_indices(
         self,
@@ -395,10 +413,11 @@ class SPARQLGenerator(TextProcessor):
         temperature: float = 1.0,
         top_k: int = 10,
         top_p: float = 0.95,
-        beam_width: int | None = None,
+        beam_width: int = 1,
         max_length: int | None = None,
         use_cache: bool = False,
-        full_outputs: bool = False
+        full_outputs: bool = False,
+        disable_sparql_constraint: bool = False
     ) -> None:
         assert sampling_strategy in ["greedy", "top_k", "top_p"]
         self._sampling_strategy = sampling_strategy
@@ -409,6 +428,7 @@ class SPARQLGenerator(TextProcessor):
         self._max_length = max_length
         self._use_cache = use_cache
         self._full_outputs = full_outputs
+        self._disable_sparql_constraint = disable_sparql_constraint
 
     def generate_live(
         self,
@@ -420,8 +440,18 @@ class SPARQLGenerator(TextProcessor):
             iter([self._prepare_input(text, info, preprocessed)]),
             1,
         ))
-        items = None
-        for outputs in self._inference(batch, yield_intermediate=True):
-            if items is None:
-                items = batch.items()
-            yield self._process_results(items, outputs).text
+
+        initial_token_ids = batch.token_ids()[0]
+        item = batch.items()[0]
+
+        if not self._full_outputs:
+            input_text_len = len(self.tokenizer.de_tokenize(
+                item.tokenization.token_ids
+            ))
+        else:
+            input_text_len = 0
+
+        for output in self._iterative_inference(initial_token_ids):
+            yield self.tokenizer.de_tokenize(
+                item.tokenization.token_ids + output
+            )[input_text_len:]

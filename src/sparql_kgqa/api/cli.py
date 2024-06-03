@@ -2,6 +2,8 @@ import json
 import argparse
 from typing import Iterable, Iterator
 
+from tqdm import tqdm
+
 from text_utils.api.cli import TextProcessingCli
 from text_utils.api.processor import TextProcessor
 
@@ -39,15 +41,22 @@ class SPARQLGenerationCli(TextProcessingCli):
         return gen
 
     def format_output(self, output: str) -> Iterable[str]:
-        return super().format_output(output)
+        if self.args.file is not None and self.args.output_format == "jsonl":
+            return [json.dumps(output)]
+
+        return [output]
 
     def process_iter(
         self,
         processor: SPARQLGenerator,
         iter: Iterator[str]
     ) -> Iterator[str]:
-        for item in iter:
-            if self.args.file is not None and self.args.file_format == "jsonl":
+        for item in tqdm(
+            iter, 
+            desc="Generating SPARQL", 
+            disable=not self.args.progress or self.args.process
+        ):
+            if self.args.file is not None and self.args.input_format == "jsonl":
                 item = json.loads(item)
 
             *_, final = processor.generate_live(
@@ -74,7 +83,7 @@ def main():
     parser.add_argument(
         "--beam-width",
         type=int,
-        default=None,
+        default=1,
         help="Beam width to use for beam search decoding"
     )
     parser.add_argument(
@@ -114,11 +123,16 @@ def main():
         "(default is only generated text)"
     )
     parser.add_argument(
-        "--file-format",
-        choices=["jsonl", "lines"],
+        "--input-format",
+        choices=["text", "jsonl"],
         default="text",
-        help="Whether to treat input/output files as jsonl, line-separated, "
-        "or single piece of text"
+        help="Whether to treat input files as jsonl or text"
+    )
+    parser.add_argument(
+        "--output-format",
+        choices=["text", "jsonl"],
+        default="text",
+        help="Whether to format output as jsonl or text"
     )
     parser.add_argument(
         "--info",
@@ -151,6 +165,11 @@ def main():
         action=KgAction,
         metavar=("ENTITY_INDEX", "RELATION_INDEX", "KG_NAME"),
         help="Add knowledge graph to the generation process"
+    )
+    parser.add_argument(
+        "--no-sparql-constraint",
+        action="store_true",
+        help="Whether to remove SPARQL grammar constraint"
     )
     args = parser.parse_args()
     # set default device to auto if not set
