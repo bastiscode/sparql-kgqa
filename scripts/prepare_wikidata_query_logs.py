@@ -7,7 +7,7 @@ from urllib.parse import unquote_plus
 
 from tqdm import tqdm
 
-from llm_text_generation.sparql.utils import (
+from sparql_kgqa.sparql.utils import (
     KgIndex,
     general_prefixes,
     load_kg_index,

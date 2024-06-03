@@ -6,11 +6,13 @@ from multiprocessing import Pool
 from tqdm import tqdm
 
 from text_utils.io import load_text_file
+from text_utils import grammar
 
 
-from llm_text_generation.sparql.utils import (
+from sparql_kgqa.sparql.utils import (
     QLEVER_URLS,
-    calc_f1
+    calc_f1,
+    load_sparql_parser
 )
 
 
@@ -35,7 +37,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def calc_f1_map(
-    args: Tuple[str, str, bool, str, str | None]
+    args: Tuple[str, str, grammar.LR1Parser, bool, str, str | None]
 ) -> Tuple[Optional[float], bool, bool]:
     return calc_f1(*args)
 
@@ -69,6 +71,7 @@ def evaluate(args: argparse.Namespace):
     if args.save_incorrect:
         delete_file_or_create_dir(args.save_incorrect)
 
+    parser = load_sparql_parser([args.kg])
     f1s = []
     pred_invalid = 0
     tgt_invalid = 0
@@ -79,6 +82,7 @@ def evaluate(args: argparse.Namespace):
                 zip(
                     predictions,
                     targets,
+                    len(targets) * [parser],
                     len(targets) * [not args.empty_target_invalid],
                     len(targets) * [args.kg],
                     len(targets) * [args.qlever_endpoint]

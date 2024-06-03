@@ -14,7 +14,7 @@ from peft.tuners.lora import LoraModel
 from text_utils.configuration import load_config
 
 
-from deep_sparql.api.generator import SPARQLGenerator
+from sparql_kgqa.api.generator import SPARQLGenerator
 
 
 def parse_args() -> argparse.Namespace:

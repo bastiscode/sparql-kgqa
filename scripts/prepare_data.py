@@ -7,7 +7,7 @@ import collections
 from tqdm import tqdm
 from datasets import load_dataset
 
-from llm_text_generation.sparql.utils import (
+from sparql_kgqa.sparql.utils import (
     general_prefixes,
     load_kg_index,
     prefix_pattern,
