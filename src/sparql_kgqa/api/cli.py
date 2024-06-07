@@ -1,4 +1,5 @@
 import json
+import random
 import argparse
 from typing import Iterable, Iterator
 
@@ -10,6 +11,7 @@ from text_utils.api.processor import TextProcessor
 from sparql_kgqa import version
 from sparql_kgqa.api.generator import SPARQLGenerator
 from sparql_kgqa.api.server import SPARQLGenerationServer
+from sparql_kgqa.sparql.utils import load_examples
 
 
 class SPARQLGenerationCli(TextProcessingCli):
@@ -32,18 +34,18 @@ class SPARQLGenerationCli(TextProcessingCli):
             beam_width=self.args.beam_width,
             max_length=self.args.max_length,
             use_cache=self.args.kv_cache,
-            full_outputs=self.args.full_outputs
+            full_outputs=self.args.full_outputs,
+            disable_sparql_constraint=self.args.no_sparql_constraint
         )
 
-        for kg in self.args.knowledge_graph:
+        for kg in self.args.knowledge_graph or []:
             gen.set_indices(*kg)
 
         return gen
 
     def format_output(self, output: str) -> Iterable[str]:
-        if self.args.file is not None and self.args.output_format == "jsonl":
+        if self.args.output_format == "jsonl":
             return [json.dumps(output)]
-
         return [output]
 
     def process_iter(
@@ -51,6 +53,11 @@ class SPARQLGenerationCli(TextProcessingCli):
         processor: SPARQLGenerator,
         iter: Iterator[str]
     ) -> Iterator[str]:
+        if self.args.examples is not None:
+            examples = load_examples(self.args.examples)
+        else:
+            examples = []
+
         for item in tqdm(
             iter, 
             desc="Generating SPARQL", 
@@ -59,10 +66,18 @@ class SPARQLGenerationCli(TextProcessingCli):
             if self.args.file is not None and self.args.input_format == "jsonl":
                 item = json.loads(item)
 
+            sampled = random.sample(
+                examples, 
+                min(len(examples), self.args.num_examples)
+            )
+
             *_, final = processor.generate_live(
                 item,
                 info=self.args.info,
-                preprocessed=self.args.preprocessed
+                examples=sampled,
+                preprocessed=self.args.preprocessed,
+                postprocess=not self.args.no_postprocessing,
+                pretty=self.args.pretty
             )
 
             yield final
@@ -145,10 +160,20 @@ def main():
         action="store_true",
         help="Whether input is already preprocessed"
     )
+    parser.add_argument(
+        "--no-postprocessing",
+        action="store_true",
+        help="Whether to skip postprocessing"
+    )
+    parser.add_argument(
+        "--pretty",
+        action="store_true",
+        help="Whether to pretty format SPARQL during postprocessing"
+    )
 
     class KgAction(argparse.Action):
         def __call__(self, parser, namespace, values, option_string=None):
-            if len(values) != 3:  # type: ignore
+            if len(values) != 5:  # type: ignore
                 parser.error(f"{option_string} requires exactly three strings")
             # Retrieve the current list or create a new one if it's None
             current_list = getattr(namespace, self.dest, None) or []
@@ -161,17 +186,44 @@ def main():
         "-kg",
         "--knowledge-graph",
         type=str,
-        nargs=3,
+        nargs=5,
         action=KgAction,
-        metavar=("ENTITY_INDEX", "RELATION_INDEX", "KG_NAME"),
+        metavar=(
+            "ENTITY_INDEX",
+            "RELATION_INDEX",
+            "ENTITY_PREFIXES",
+            "RELATION_PREFIXES",
+            "KG_NAME"
+        ),
         help="Add knowledge graph to the generation process"
+    )
+    parser.add_argument(
+        "--examples",
+        type=str,
+        default=None,
+        help="Path to examples file"
+    )
+    parser.add_argument(
+        "--num-examples",
+        type=int,
+        default=3,
+        help="Number of examples to add to the generation process, randomly selected"
+        "if there are more examples than this number"
     )
     parser.add_argument(
         "--no-sparql-constraint",
         action="store_true",
         help="Whether to remove SPARQL grammar constraint"
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Seed for random number generator"
+    )
     args = parser.parse_args()
+    if args.seed is not None:
+        random.seed(args.seed)
     # set default device to auto if not set
     # (different from underlying library which sets a single gpu as default)
     args.device = args.device or "auto"

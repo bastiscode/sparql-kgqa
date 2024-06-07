@@ -28,7 +28,11 @@ from sparql_kgqa.model import (
 )
 from sparql_kgqa.sparql.utils import (
     ContIndex,
+    general_prefixes,
+    load_prefixes,
     load_sparql_constraint,
+    load_sparql_parser,
+    postprocess_sparql_query,
     preprocess_natural_language_query
 )
 
@@ -116,6 +120,7 @@ class SPARQLGenerator(TextProcessor):
             False
         )
         self._disable_sparql_constraint = False
+        self._sparql_parser = load_sparql_parser([])
 
         self.model = self.model.compile(
             **self.cfg["inference"].get("compile", {})
@@ -123,6 +128,7 @@ class SPARQLGenerator(TextProcessor):
 
         self._entity_indices = {}
         self._property_indices = {}
+        self._prefixes = general_prefixes()
 
     def to(self, device: Device) -> "SPARQLGenerator":
         self.devices = get_devices(device)
@@ -136,13 +142,15 @@ class SPARQLGenerator(TextProcessor):
         self,
         text: str,
         info: str | None = None,
+        examples: list[tuple[str, str]] | None = None,
         preprocessed: bool = False
     ) -> data.InferenceData:
         if not preprocessed:
             text = preprocess_natural_language_query(
                 text,
                 list(self._entity_indices),
-                info
+                info,
+                examples
             )
         else:
             assert info is None, \
@@ -381,6 +389,8 @@ class SPARQLGenerator(TextProcessor):
         self,
         entity_index: str | ContIndex,  # type: ignore
         property_index: str | ContIndex,  # type: ignore
+        entity_prefixes: str | dict[str, str],
+        property_prefixes: str | dict[str, str],
         kg: str
     ) -> None:
         if kg in self._entity_indices:
@@ -398,14 +408,24 @@ class SPARQLGenerator(TextProcessor):
                 vocab
             )
 
+        if isinstance(entity_prefixes, str):
+            entity_prefixes = load_prefixes(entity_prefixes)
+        if isinstance(property_prefixes, str):
+            property_prefixes = load_prefixes(property_prefixes)
+
         self._entity_indices[kg] = entity_index
         self._property_indices[kg] = property_index
+        self._prefixes.update(entity_prefixes)
+        self._prefixes.update(property_prefixes)
+
         # reload constraint with new kgs
+        kgs = list(self._entity_indices)
         self._sparql_constraint = load_sparql_constraint(
-            list(self._entity_indices),
+            kgs,
             vocab,
             False
         )
+        self._sparql_parser = load_sparql_parser(kgs)
 
     def set_inference_options(
         self,
@@ -432,12 +452,15 @@ class SPARQLGenerator(TextProcessor):
 
     def generate_live(
         self,
-        text: str,
+        query: str,
         info: str | None = None,
-        preprocessed: bool = False
+        examples: list[tuple[str, str]] | None = None,
+        preprocessed: bool = False,
+        postprocess: bool = True,
+        pretty: bool = False
     ) -> Iterator[str]:
         batch = next(self._get_loader(
-            iter([self._prepare_input(text, info, preprocessed)]),
+            iter([self._prepare_input(query, info, examples, preprocessed)]),
             1,
         ))
 
@@ -451,7 +474,19 @@ class SPARQLGenerator(TextProcessor):
         else:
             input_text_len = 0
 
+        sparql = ""
         for output in self._iterative_inference(initial_token_ids):
-            yield self.tokenizer.de_tokenize(
+            sparql = self.tokenizer.de_tokenize(
                 item.tokenization.token_ids + output
             )[input_text_len:]
+            yield sparql
+
+        if postprocess:
+            yield postprocess_sparql_query(
+                sparql,
+                self._sparql_parser,
+                self._entity_indices,
+                self._property_indices,
+                self._prefixes,
+                pretty
+            )

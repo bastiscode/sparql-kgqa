@@ -8,10 +8,11 @@ from tqdm import tqdm
 from datasets import load_dataset
 
 from sparql_kgqa.sparql.utils import (
+    clean,
     general_prefixes,
+    load_sparql_parser,
     load_kg_index,
-    prefix_pattern,
-    clean_prefixes,
+    fix_prefixes,
     replace_vars_and_special_tokens,
     preprocess_natural_language_query,
     replace_entities_and_properties
@@ -63,7 +64,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-Sample = collections.namedtuple("Sample", ["question", "sparql", "result"])
+Sample = collections.namedtuple("Sample", ["question", "sparql"])
 
 
 SPLIT_RENAME = {
@@ -106,7 +107,7 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
                     subj = "wd:" + subj
 
                 sparql = f"SELECT ?x WHERE {{ {subj} {prop} {obj} . }}"
-                samples.append(Sample(question, sparql, None))
+                samples.append(Sample(question, sparql))
             output[split] = samples
 
     elif args.qald_10 is not None:
@@ -144,7 +145,7 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
                     sparql
                 )
                 for q in questions:
-                    samples.append(Sample(q, sparql, None))
+                    samples.append(Sample(q, sparql))
 
             output[split] = samples
 
@@ -163,7 +164,7 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
                 for q in questions:
                     if q is None or q.strip() == "" or "{" in q or "}" in q:
                         continue
-                    samples.append(Sample(q, sparql, None))
+                    samples.append(Sample(q, sparql))
             output[split] = samples
 
     elif args.mcwq is not None:
@@ -196,7 +197,7 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
                     question
                 )
                 sparql = item["sparql"]
-                samples.append(Sample(question, sparql, None))
+                samples.append(Sample(question, sparql))
             output[split] = samples
 
     elif args.qa_wiki is not None:
@@ -206,7 +207,7 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
             for line in inf:
                 line = line.strip()
                 sparql, question = line.split("\t")
-                samples.append(Sample(question, sparql, None))
+                samples.append(Sample(question, sparql))
         output["train"] = samples
 
     else:
@@ -222,14 +223,16 @@ def format_query(
 ) -> str:
     if version == "v1":
         return f"Generate a SPARQL query over {kg.capitalize()} for " \
-            f"the question \"{query}\""
+            f"the question \"{clean(query)}\""
 
-    query = preprocess_natural_language_query(query, [kg], None)
+    query = preprocess_natural_language_query(query, [kg], None, None)
     return json.dumps(query)
 
 
 def prepare(args: argparse.Namespace):
     kg, data = load_data(args)
+    parser = load_sparql_parser([kg])
+
     prefixes = general_prefixes()
 
     ent_index = load_kg_index(
@@ -238,23 +241,16 @@ def prepare(args: argparse.Namespace):
         args.entity_prefixes,
         args.progress
     )
-    ent_pattern = prefix_pattern(ent_index.prefixes)
     prefixes.update(ent_index.prefixes)
+    ent_indices = {kg: ent_index}
 
     prop_index = load_kg_index(
         args.property_index,
         prefixes_path=args.property_prefixes,
         progress=args.progress
     )
-    prop_pattern = prefix_pattern(prop_index.prefixes)
     prefixes.update(prop_index.prefixes)
-
-    prefix_patterns = {
-        short: re.compile(
-            rf"\b{re.escape(short)}(\w+)\b|<{re.escape(long)}(\w+)>"
-        )
-        for short, long in prefixes.items()
-    }
+    prop_indices = {kg: prop_index}
 
     os.makedirs(args.output, exist_ok=True)
 
@@ -263,108 +259,98 @@ def prepare(args: argparse.Namespace):
             args.output,
             f"{split}_input.txt"
         )
+        input_raw = os.path.join(
+            args.output,
+            f"{split}_input.raw.txt"
+        )
         assert len(samples) > 0, f"no samples for split {split}"
-        has_sparql = samples[0].sparql is not None
-        target_name = "sparql" if has_sparql else "result"
         target = os.path.join(
             args.output,
-            f"{split}_{target_name}.txt"
+            f"{split}_sparql.txt"
         )
-        raw = os.path.join(
+        target_raw = os.path.join(
             args.output,
-            f"{split}_raw.txt"
+            f"{split}_sparql.raw.txt"
         )
         incomplete = 0
+        invalid = 0
         total = 0
         with open(input, "w") as inf, \
+                open(input_raw, "w") as inrf, \
                 open(target, "w") as tf, \
-                open(raw, "w") as rf:
+                open(target_raw, "w") as trf:
             for sample in tqdm(
                 samples,
                 desc=f"processing and writing {split} samples",
                 leave=False,
                 disable=not args.progress
             ):
-                # clean sample
+                # clean sparql in sample
                 sample = Sample(
-                    re.sub(
-                        r"\s+",
-                        " ",
-                        sample.question,
-                        flags=re.MULTILINE
-                    ).strip(),
-                    re.sub(
-                        r"\s+",
-                        " ",
-                        sample.sparql,
-                        flags=re.MULTILINE
-                    ).strip()
-                    if has_sparql else None,
-                    None if has_sparql else sample.result
+                    sample.question,
+                    clean(sample.sparql),
                 )
 
-                if has_sparql:
+                try:
                     sparqls, inc = replace_entities_and_properties(
                         sample.sparql,
-                        kg,
-                        ent_index,
-                        prop_index,
-                        ent_pattern,
-                        prop_pattern,
+                        parser,
+                        ent_indices,
+                        prop_indices,
                         args.version,
                         "in_order" if split == "train" else "only_first"
                     )
-                    incomplete += inc
-                    total += len(sparqls)
-                    if len(sparqls) == 0:
-                        continue
+                except:
+                    invalid += 1
+                    continue
 
-                    # same as above, but without replacing
-                    # with natural language entities
-                    raw_sparql = clean_prefixes(
-                        sample.sparql,
-                        prefix_patterns,
+                incomplete += inc
+                if args.skip_incomplete and inc:
+                    continue
+
+                total += len(sparqls)
+                if len(sparqls) == 0:
+                    continue
+
+                # same as above, but without replacing
+                # with natural language entities
+                raw_sparql = fix_prefixes(
+                    sample.sparql,
+                    parser,
+                    prefixes,
+                )
+                raw_sparql = replace_vars_and_special_tokens(
+                    raw_sparql,
+                    parser,
+                    args.version
+                )
+
+                for sparql in sparqls:
+                    sparql = fix_prefixes(
+                        sparql,
+                        parser,
                         prefixes,
                     )
-                    raw_sparql = replace_vars_and_special_tokens(
-                        raw_sparql,
+                    sparql = replace_vars_and_special_tokens(
+                        sparql,
+                        parser,
                         args.version
                     )
-
-                    for sparql in sparqls:
-                        sparql = clean_prefixes(
-                            sparql,
-                            prefix_patterns,
-                            prefixes,
-                        )
-                        sparql = replace_vars_and_special_tokens(
-                            sparql,
-                            args.version
-                        )
-                        tf.write(sparql + "\n")
-                        rf.write(raw_sparql + "\n")
-                        inf.write(format_query(
-                            sample.question,
-                            args.version,
-                            kg
-                        ) + "\n")
-                else:
-                    tf.write("\n")
-                    rf.write(
-                        " ".join(r.strip() for r in sample.result)
-                        + "\n"
-                    )
+                    tf.write(sparql + "\n")
+                    trf.write(raw_sparql + "\n")
                     inf.write(format_query(
                         sample.question,
                         args.version,
                         kg
                     ) + "\n")
+                    inrf.write(json.dumps(sample.question) + "\n")
 
         print(
             f"Generated {total:,} SPARQL queries while "
             f"processing {len(samples):,} {split} samples with "
             f"{incomplete:,} ({incomplete / len(samples):.2%}) "
-            "being incomplete"
+            f"being incomplete and {invalid:,} ({invalid / len(samples):.2%}) "
+            "being invalid"
         )
 
 

@@ -1,18 +1,20 @@
 import argparse
 import json
-import re
 import os
 from typing import TextIO
 from urllib.parse import unquote_plus
 
 from tqdm import tqdm
 
+from text_utils import grammar
+
 from sparql_kgqa.sparql.utils import (
     KgIndex,
     general_prefixes,
     load_kg_index,
-    prefix_pattern,
-    clean_prefixes,
+    clean,
+    fix_prefixes,
+    load_sparql_parser,
     replace_vars_and_special_tokens,
     replace_entities_and_properties
 )
@@ -35,6 +37,7 @@ def prepare_file(
     files: dict[str, TextIO],
     ent_index: KgIndex,
     prop_index: KgIndex,
+    parser: grammar.LR1Parser,
     seen: set[str],
     sources: list[str],
     args: argparse.Namespace
@@ -47,17 +50,8 @@ def prepare_file(
     prefixes.update(ent_index.prefixes)
     prefixes.update(prop_index.prefixes)
 
-    prefix_patterns = {
-        short: re.compile(
-            rf"\b{re.escape(short)}(\w+)\b|<{re.escape(long)}(\w+)>"
-        )
-        for short, long in prefixes.items()
-    }
-
-    ent_pattern = prefix_pattern(ent_index.prefixes)
-    prop_pattern = prefix_pattern(prop_index.prefixes)
-
-    clean_pattern = re.compile(r"\s+", flags=re.MULTILINE)
+    ent_indices = {"wikidata": ent_index}
+    prop_indices = {"wikidata": prop_index}
 
     with open(file, "r") as f:
         _ = next(f)  # forward headers
@@ -78,25 +72,24 @@ def prepare_file(
 
             seen.add(sparql)
 
-            sparql = clean_pattern.sub(" ", unquote_plus(sparql)).strip()
+            sparql = clean(unquote_plus(sparql))
 
-            sparql_raw = clean_prefixes(
+            sparql_raw = fix_prefixes(
                 sparql,
-                prefix_patterns,
+                parser,
                 prefixes
             )
             sparql_raw = replace_vars_and_special_tokens(
                 sparql_raw,
+                parser,
                 args.version
             )
 
             sparqls_natural, inc = replace_entities_and_properties(
                 sparql,
-                "wikidata",
-                ent_index,
-                prop_index,
-                ent_pattern,
-                prop_pattern,
+                parser,
+                ent_indices,
+                prop_indices,
                 args.version,
                 "in_order"
             )
@@ -106,13 +99,14 @@ def prepare_file(
                 files[source].write(sparql + "\n")
                 files[f"{source}_input"].write(get_prompt("wikidata") + "\n")
 
-                sparql_natural = clean_prefixes(
+                sparql_natural = fix_prefixes(
                     sparql_natural,
-                    prefix_patterns,
+                    parser,
                     prefixes
                 )
                 sparql_natural = replace_vars_and_special_tokens(
                     sparql_natural,
+                    parser,
                     args.version
                 )
 
@@ -123,6 +117,8 @@ def prepare_file(
 
 
 def prepare(args: argparse.Namespace):
+    parser = load_sparql_parser(["wikidata"])
+
     sources = []
     if not args.robotic_only:
         sources.append("organic")
@@ -184,6 +180,7 @@ def prepare(args: argparse.Namespace):
             files,
             entity_index,
             property_index,
+            parser,
             seen,
             sources,
             args
