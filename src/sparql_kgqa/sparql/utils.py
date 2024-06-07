@@ -482,10 +482,12 @@ def query_qlever(
     kg: str,
     qlever_endpoint: str | None
 ) -> SelectResult | AskResult:
-    parse = parser.parse(sparql_query, skip_empty=False, collapse_single=True)
-    query_type = _find_with_name(parse, "QueryType", set())["children"][0]["name"]
+    parse = parser.parse(sparql_query, skip_empty=False, collapse_single=False)
+    query_type = _find_with_name(parse, "QueryType")
+    assert query_type is not None
+    query_type = query_type["children"][0]["name"]
     if query_type == "AskQuery":
-        sparql_query = _parse_to_string(_ask_to_select(parse))
+        raise NotImplementedError("ask queries are not supported")
     elif query_type != "SelectQuery":
         raise ValueError(f"unsupported query type {query_type}")
 
