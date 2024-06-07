@@ -782,6 +782,7 @@ def replace_entities_and_properties(
 
     def _replace_objs(parse: dict) -> tuple[dict, bool, bool]:
         empty = True
+        ident = False
         incomplete = False
         for obj in _find_all_with_name(parse, "iri"):
             child = obj["children"][0]
@@ -801,18 +802,20 @@ def replace_entities_and_properties(
 
             if rep is not None:
                 obj["value"] = rep
+                if rep == val:
+                    ident = True
             else:
                 incomplete = True
 
-        return parse, incomplete, empty
+        return parse, incomplete, empty or ident
 
     parse, incomplete, _ = _replace_objs(parse)
     sparqls = [_parse_to_string(parse)]
 
     done = replacement == "only_first"
     while not done:
-        parse, inc, empty = _replace_objs(copy.deepcopy(org_parse))
-        done = inc or empty
+        parse, inc, stop = _replace_objs(copy.deepcopy(org_parse))
+        done = inc or stop
         if not done:
             sparqls.append(_parse_to_string(parse))
 
