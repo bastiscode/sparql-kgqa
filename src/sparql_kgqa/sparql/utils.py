@@ -780,17 +780,18 @@ def replace_entities_and_properties(
         # in none of the supported indices was the key found
         return None
 
-    def _replace_objs(parse: dict) -> tuple[dict, int, int]:
-        total = 0
-        replaced = 0
+    def _replace_objs(parse: dict) -> tuple[dict, bool, bool]:
+        empty = True
+        incomplete = False
         for obj in _find_all_with_name(parse, "iri"):
             child = obj["children"][0]
             if child["name"] == "PrefixedName":
                 val = child["children"][0]["value"]
-            elif child["name"] == "IRIREF":
-                val = child["value"]
             else:
-                continue
+                assert child["name"] == "IRIREF"
+                val = child["value"]
+
+            empty = False
 
             rep = _replace_obj(val, entity_indices, entity_replacements, True)
             # if rep is unchanged, this means that the val is not supported
@@ -800,20 +801,18 @@ def replace_entities_and_properties(
 
             if rep is not None:
                 obj["value"] = rep
-                total += 1
-                if rep != val:
-                    replaced += 1
+            else:
+                incomplete = True
 
-        return parse, replaced, total
+        return parse, incomplete, empty
 
-    parse, replaced, total = _replace_objs(parse)
-    incomplete = replaced < total
+    parse, incomplete, _ = _replace_objs(parse)
     sparqls = [_parse_to_string(parse)]
 
     done = replacement == "only_first"
     while not done:
-        parse, replaced, total = _replace_objs(copy.deepcopy(org_parse))
-        done = replaced < total or total == 0
+        parse, inc, empty = _replace_objs(copy.deepcopy(org_parse))
+        done = inc or empty
         if not done:
             sparqls.append(_parse_to_string(parse))
 
