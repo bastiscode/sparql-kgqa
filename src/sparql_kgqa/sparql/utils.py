@@ -798,10 +798,11 @@ def replace_entities_and_properties(
             if rep == val:
                 rep = _replace_obj(val, property_indices, property_replacements, False)
 
-            total += 1
             if rep is not None:
                 obj["value"] = rep
-                replaced += 1
+                total += 1
+                if rep != val:
+                    replaced += 1
 
         return parse, replaced, total
 
