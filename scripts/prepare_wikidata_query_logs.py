@@ -41,10 +41,11 @@ def prepare_file(
     seen: set[str],
     sources: list[str],
     args: argparse.Namespace
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, int]:
     num_total = 0
     num_duplicate = 0
     num_incomplete = 0
+    num_invalid = 0
 
     prefixes = general_prefixes()
     prefixes.update(ent_index.prefixes)
@@ -65,6 +66,7 @@ def prepare_file(
             if source not in sources:
                 continue
 
+            sparql = clean(unquote_plus(sparql))
             num_total += 1
             if sparql in seen:
                 num_duplicate += 1
@@ -72,13 +74,16 @@ def prepare_file(
 
             seen.add(sparql)
 
-            sparql = clean(unquote_plus(sparql))
+            try:
+                sparql_raw = fix_prefixes(
+                    sparql,
+                    parser,
+                    prefixes
+                )
+            except Exception as e:
+                num_invalid += 1
+                continue
 
-            sparql_raw = fix_prefixes(
-                sparql,
-                parser,
-                prefixes
-            )
             sparql_raw = replace_vars_and_special_tokens(
                 sparql_raw,
                 parser,
@@ -113,7 +118,7 @@ def prepare_file(
                 files[f"{source}_natural"].write(sparql_natural + "\n")
                 files[f"{source}_raw"].write(sparql_raw + "\n")
 
-    return num_total, num_duplicate, num_incomplete
+    return num_total, num_duplicate, num_incomplete, num_invalid
 
 
 def prepare(args: argparse.Namespace):
@@ -167,6 +172,7 @@ def prepare(args: argparse.Namespace):
     num_total = 0
     num_duplicate = 0
     num_incomplete = 0
+    num_invalid = 0
     seen = set()
 
     for file in tqdm(
@@ -175,7 +181,7 @@ def prepare(args: argparse.Namespace):
         leave=False,
         disable=not args.progress
     ):
-        total, duplicate, incomplete = prepare_file(
+        total, duplicate, incomplete, invalid = prepare_file(
             file,
             files,
             entity_index,
@@ -188,6 +194,7 @@ def prepare(args: argparse.Namespace):
         num_total += total
         num_duplicate += duplicate
         num_incomplete += incomplete
+        num_invalid += invalid
 
     for f in files.values():
         f.close()
@@ -200,7 +207,11 @@ def prepare(args: argparse.Namespace):
         f"{num_incomplete:,} / {num_total:,} incomplete "
         f"({num_incomplete / num_total:.1%})"
     )
-    print(f"organic_only: {args.organic_only}")
+    print(
+        f"{num_invalid:,} / {num_total:,} invalid "
+        f"({num_invalid / num_total:.1%})"
+    )
+    print(f"sources: {sources}")
 
 
 def parse_args() -> argparse.Namespace:

@@ -801,6 +801,7 @@ def replace_entities_and_properties(
             total += 1
             if rep is not None:
                 obj["value"] = rep
+                replaced += 1
 
         return parse, replaced, total
 
