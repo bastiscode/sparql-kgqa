@@ -5,7 +5,7 @@ import torch
 from torch import nn
 from peft import get_peft_model
 
-from text_utils import data, tokenization, grammar
+from text_utils import data, tokenization
 from text_utils.api.processor import ModelInfo, TextProcessor
 from text_utils.api.utils import (
     Device,
@@ -221,12 +221,19 @@ class SPARQLGenerator(TextProcessor):
                 for cache in info["kv_cache"]
             )
 
-        while len(decoded_token_ids) == 0 or decoded_token_ids[-1] != self._eos_token_id:
+        initial_length = len(initial_token_ids)
+
+        while (
+            (len(decoded_token_ids) == 0
+            or decoded_token_ids[-1] != self._eos_token_id)
+            and initial_length + len(decoded_token_ids) < self.max_length
+        ):
             decoded_string = self.tokenizer.de_tokenize(decoded_token_ids)
-            if END_PATTERN.search(decoded_string) is not None:
+            if index is not None:
+                assert END_PATTERN.search(decoded_string) is not None
                 index = None
 
-            elif index is not None:
+            else:
                 match = START_PATTERN.search(decoded_string)
                 if match is not None:
                     index = (match.group(1), match.group(2))
