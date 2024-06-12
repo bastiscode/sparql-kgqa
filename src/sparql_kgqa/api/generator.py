@@ -11,7 +11,6 @@ from text_utils.api.utils import (
     Device,
     device_info,
     get_devices,
-    get_peft_config
 )
 from text_utils.inference import (
     utils as inference_utils,
@@ -67,17 +66,9 @@ class SPARQLGenerator(TextProcessor):
     def _model_from_config(
         cls,
         cfg: dict[str, Any],
-        _: Device
+        device: Device
     ) -> nn.Module:
-        model = model_from_config(cfg["model"])
-        peft = cfg["train"].get("peft", None)
-        if peft is not None:
-            peft_cfg = get_peft_config(peft)
-            model.model = get_peft_model(
-                model.model,  # type: ignore
-                peft_cfg
-            )
-        return model
+        return model_from_config(cfg["model"])
 
     @property
     def max_length(self) -> int:

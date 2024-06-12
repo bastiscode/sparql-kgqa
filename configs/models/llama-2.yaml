@@ -1,2 +1,2 @@
 type: pretrained_decoder
-name: env(LLAMA2_MODEL:llama-2-7b)
+model: env(LLAMA2_MODEL:llama-2-7b)

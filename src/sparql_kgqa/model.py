@@ -10,6 +10,7 @@ import torch
 from torch import nn
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from torch.utils.hooks import RemovableHandle
+from peft import PeftModel, PeftConfig, LoraConfig, IA3Config  # type: ignore
 from transformers import (
     AutoModelForCausalLM,
     PreTrainedModel,
@@ -118,72 +119,73 @@ PRETRAINED_DECODERS = [
 
 
 class PretrainedDecoder(Model):
+    model: PreTrainedModel | PeftModel
+
     def __init__(
         self,
-        name: str | PreTrainedModel,
+        model: str | PreTrainedModel,
         **kwargs: Any
     ):
         super().__init__()
         if kwargs.get("device_map") is not None:
             kwargs["device_map"] = brace_expand_keys(kwargs["device_map"])
 
-        if isinstance(name, PreTrainedModel):
-            assert isinstance(name, PreTrainedModel)
-            self.model = name
+        if isinstance(model, PreTrainedModel):
+            self.model = model
         else:
-            assert name in PRETRAINED_DECODERS, f"unknown model {name}"
-            if name.startswith("llama-3"):
-                name = name.lower()
-                if name.endswith("8b"):
-                    name = "Meta-Llama-3-8B"
-                elif name.endswith("8b-instruct"):
-                    name = "Meta-Llama-3-8B-Instruct"
-                elif name.endswith("70b"):
-                    name = "Meta-Llama-3-70B"
+            assert model in PRETRAINED_DECODERS, f"unknown model {model}"
+            if model.startswith("llama-3"):
+                model = model.lower()
+                if model.endswith("8b"):
+                    model = "Meta-Llama-3-8B"
+                elif model.endswith("8b-instruct"):
+                    model = "Meta-Llama-3-8B-Instruct"
+                elif model.endswith("70b"):
+                    model = "Meta-Llama-3-70B"
                 else:
-                    name = "Meta-Llama-3-70B-Instruct"
+                    model = "Meta-Llama-3-70B-Instruct"
                 self.model = LlamaForCausalLM.from_pretrained(
-                    f"meta-llama/{name}",
+                    f"meta-llama/{model}",
                     torch_dtype=kwargs.pop("torch_dtype", "auto"),
                     **kwargs
                 )  # type: ignore
-            elif name.startswith("llama-2"):
+            elif model.startswith("llama-2"):
                 self.model = LlamaForCausalLM.from_pretrained(
-                    f"meta-llama/{name.capitalize()}-hf",
+                    f"meta-llama/{model.capitalize()}-hf",
                     torch_dtype=kwargs.pop("torch_dtype", "auto"),
                     **kwargs
                 )  # type: ignore
-            elif name.startswith("mistral-7b"):
-                if name.endswith("instruct"):
-                    name = "Mistral-7B-Instruct-v0.2"
+            elif model.startswith("mistral-7b"):
+                if model.endswith("instruct"):
+                    model = "Mistral-7B-Instruct-v0.2"
                 else:
-                    name = "Mistral-7B-v0.1"
+                    model = "Mistral-7B-v0.1"
                 self.model = MistralForCausalLM.from_pretrained(
-                    f"mistralai/{name}",
+                    f"mistralai/{model}",
                     torch_dtype=kwargs.pop("torch_dtype", "auto"),
                     **kwargs
                 )  # type: ignore
-            elif name.startswith("mixtral-8x7b"):
-                if name.endswith("instruct"):
-                    name = "Mixtral-8x7B-Instruct-v0.1"
+            elif model.startswith("mixtral-8x7b"):
+                if model.endswith("instruct"):
+                    model = "Mixtral-8x7B-Instruct-v0.1"
                 else:
-                    name = "Mixtral-8x7B-v0.1"
+                    model = "Mixtral-8x7B-v0.1"
                 self.model = MixtralForCausalLM.from_pretrained(
-                    f"mistralai/{name}",
+                    f"mistralai/{model}",
                     torch_dtype=kwargs.pop("torch_dtype", "auto"),
                     **kwargs
                 )  # type: ignore
-            elif name.startswith("mixtral-8x22b"):
-                if name.endswith("4bit"):
-                    name = "Mixtral-8x22B-v0.1-4bit"
+            elif model.startswith("mixtral-8x22b"):
+                if model.endswith("4bit"):
+                    model = "Mixtral-8x22B-v0.1-4bit"
                 else:
-                    name = "Mixtral-8x22B-v0.1"
+                    model = "Mixtral-8x22B-v0.1"
                 self.model = MixtralForCausalLM.from_pretrained(
-                    f"mistral-community/{name}",
+                    f"mistral-community/{model}",
                     torch_dtype=kwargs.pop("torch_dtype", "auto"),
                     **kwargs
                 )  # type: ignore
-            elif name == "phi-2":
+            elif model == "phi-2":
                 self.model = PhiForCausalLM.from_pretrained(
                     "microsoft/phi-2",
                     torch_dtype=kwargs.pop("torch_dtype", "auto"),
@@ -191,7 +193,7 @@ class PretrainedDecoder(Model):
                 )  # type: ignore
             else:
                 self.model = GPT2LMHeadModel.from_pretrained(
-                    name,
+                    model,
                     torch_dtype=kwargs.pop("torch_dtype", "auto"),
                     **kwargs
                 )  # type: ignore
@@ -401,6 +403,19 @@ class PretrainedDecoder(Model):
                 devices[-1]
             )
         return self
+
+
+def peft_config(
+    cfg: dict[str, Any]
+) -> PeftConfig:
+    peft = copy.deepcopy(cfg)
+    typ = peft.pop("type")
+    if typ == "lora":
+        return LoraConfig(**peft)
+    elif typ == "ia3":
+        return IA3Config(**peft)
+    else:
+        raise ValueError(f"unknown peft type: {typ}")
 
 
 def model_from_config(

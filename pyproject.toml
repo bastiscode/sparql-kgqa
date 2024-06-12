@@ -22,6 +22,7 @@ classifiers = [
 dependencies = [
     "dtpu>=0.6.0",
     "transformers>=4.37.0",
+    "peft>=0.11",
     "flask-sock>=0.7.0",
     "braceexpand>=0.1.7"
 ]

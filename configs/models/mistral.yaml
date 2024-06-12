@@ -1,2 +1,2 @@
 type: pretrained_decoder
-name: env(MISTRAL_MODEL:mistral-7b)
+model: env(MISTRAL_MODEL:mistral-7b)

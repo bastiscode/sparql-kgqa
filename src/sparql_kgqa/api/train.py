@@ -4,17 +4,18 @@ from typing import Dict, Any, Tuple
 import torch
 from torch import nn
 from peft import (
-    PeftConfig,
-    prepare_model_for_kbit_training,
+    PeftModel,
     get_peft_model
 )
 
 from text_utils.api.trainer import ShardingPolicy, Trainer
 from text_utils import data
+from transformers import PreTrainedModel
 
 from sparql_kgqa.model import (
     PretrainedDecoder,
-    model_from_config
+    model_from_config,
+    peft_config
 )
 
 
@@ -33,18 +34,20 @@ class TextGenerationTrainer(Trainer):
     def _prepare_peft(
         cls,
         model: nn.Module,
-        peft_cfg: PeftConfig,
-        use8_bit: bool = False
+        cfg: dict[str, Any],
     ) -> nn.Module:
+        peft_cfg = peft_config(cfg)
         if isinstance(model, PretrainedDecoder):
-            if use8_bit:
-                model.model = prepare_model_for_kbit_training(
-                    model.model
-                )
-            model.model = get_peft_model(model.model, peft_cfg)
+            assert isinstance(model.model, PreTrainedModel)
+            peft_model = get_peft_model(
+                model.model,
+                peft_cfg
+            )
+            assert isinstance(peft_model, PeftModel)
+            model.model = peft_model
         else:
             raise RuntimeError(
-                "peft is only supported for pretrained models"
+                "peft is only supported for pretrained decoder models"
             )
         return model
 
@@ -58,15 +61,6 @@ class TextGenerationTrainer(Trainer):
         input_type = inputs.pop("type")
         assert input_type == "generation", \
             f"unexpected input type: {input_type}"
-
-        # print([(item.data.input, item.data.target) for item in batch.items()])
-        # from text_utils import tokenization
-        # tok = tokenization.Tokenizer.from_config(
-        #     self.cfg["inference"]["tokenizer"]
-        # )
-        # for lab in list(inputs["labels"]):
-        #     print(tok.de_tokenize([l for l in lab if l >= 0], False))
-        # exit()
 
         labels = torch.from_numpy(
             inputs.pop("labels")

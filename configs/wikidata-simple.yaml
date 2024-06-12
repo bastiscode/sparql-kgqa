@@ -32,7 +32,10 @@ train:
     lr: env(LR:0.00005)
     weight_decay: env(WEIGHT_DECAY:0.01)
     weight_decay_modules:
+      # for full fine-tuning
       Conv1D: [weight]
+      # for lora fine-tuning
+      Linear: [lora_A.default.weight, lora_B.default.weight]
     fused: env(FUSED:null)
     foreach: env(FOREACH:null)
   lr_scheduler:
