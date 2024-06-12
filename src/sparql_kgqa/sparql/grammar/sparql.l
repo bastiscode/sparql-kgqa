@@ -157,6 +157,8 @@ STRING_LITERAL_LONG2 '"""' ( ( '"' | '""' )? ( [^"\\] | {ECHAR} ) )* '"""'
 NIL '(' {WS}* ')'
 ANON '[' {WS}* ']'
 
-// ignore whitespace and comments
+// whitespace (ignored)
 ; {WS}+
-; '#' [^\x0D\x0A]*
+
+// comments (comment in to allow and ignore)
+// ; '#' [^\x0D\x0A]*

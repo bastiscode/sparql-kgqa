@@ -18,7 +18,13 @@ from text_utils.inference import (
     search,
     beam_search
 )
-from text_utils.inference.utils import Beam, BeamStopFn, DecodeFn, MaskUpdateFn, StopFn
+from text_utils.inference.utils import (
+    Beam,
+    BeamStopFn,
+    DecodeFn,
+    MaskUpdateFn,
+    StopFn
+)
 from text_utils.constraints import Constraint, ContinuationConstraint
 
 from sparql_kgqa.model import (
@@ -114,10 +120,14 @@ class SPARQLGenerator(TextProcessor):
         self._use_cache = False
         self._full_outputs = False
         self._max_length = None
+
+        # SPARQL stuff
+        self._exact = self.cfg["inference"].get("exact", False)
+        self._force_exact = False
         self._sparql_constraint = load_sparql_constraint(
             [],
             self.tokenizer.get_vocab(),
-            False
+            self._exact or self._force_exact
         )
         self._disable_sparql_constraint = False
         self._sparql_parser = load_sparql_parser([])
@@ -171,12 +181,15 @@ class SPARQLGenerator(TextProcessor):
     def _iterative_inference(
         self,
         initial_token_ids: list[int],
+        entities: dict[str, dict[str, str]],
+        properties: dict[str, dict[str, str]]
     ) -> Iterator[Any]:
         decoded_token_ids = []
+        last_output = []
 
         kgs = "|".join(re.escape(kg) for kg in self._entity_indices)
         START_PATTERN = re.compile(f"<(kg(?:e|p)) kg='({kgs})'>$")
-        END_PATTERN = re.compile(f"</kg(?:e|p)>$")
+        END_PATTERN = re.compile("</kg(?:e|p)>$")
 
         index: tuple[str, str] | None = None
 
@@ -187,7 +200,7 @@ class SPARQLGenerator(TextProcessor):
                 return True
 
             decoded = self.tokenizer.de_tokenize(
-                token_ids[len(initial_token_ids):]
+                token_ids[len(initial_token_ids) + len(decoded_token_ids):]
             )
             pattern = START_PATTERN if index is None else END_PATTERN
             return pattern.search(decoded) is not None
@@ -222,28 +235,50 @@ class SPARQLGenerator(TextProcessor):
             )
 
         initial_length = len(initial_token_ids)
+        constraint = None
 
         while (
             (len(decoded_token_ids) == 0
-            or decoded_token_ids[-1] != self._eos_token_id)
+             or decoded_token_ids[-1] != self._eos_token_id)
             and initial_length + len(decoded_token_ids) < self.max_length
         ):
-            decoded_string = self.tokenizer.de_tokenize(decoded_token_ids)
+            last_string = self.tokenizer.de_tokenize(last_output)
             if index is not None:
-                assert END_PATTERN.search(decoded_string) is not None
+                match = END_PATTERN.search(last_string)
+                assert match is not None
+                name = last_string[:match.start()]
+                assert isinstance(constraint, ContinuationConstraint)
+                value = constraint.get_value()
+                assert value is not None
+                kg = index[1]
+                if index[0] == "kge":
+                    if kg not in entities:
+                        entities[kg] = {}
+                    entities[kg][name] = value
+                else:
+                    if kg not in properties:
+                        properties[kg] = {}
+                    properties[kg][name] = value
+
                 index = None
 
             else:
-                match = START_PATTERN.search(decoded_string)
+                match = START_PATTERN.search(last_string)
                 if match is not None:
                     index = (match.group(1), match.group(2))
 
+            def beam_stop_fn(beam: Beam) -> bool:
+                return sparql_stop_fn(beam.token_ids)
+
+            def token_stop_fn(token_ids: torch.Tensor, _: int) -> bool:
+                return sparql_stop_fn(token_ids.tolist())
+
             if self._beam_width > 1 and index is not None:
-                stop_fn = lambda beam: sparql_stop_fn(beam.token_ids)
+                stop_fn = beam_stop_fn
                 beam_width = self._beam_width
             else:
-                stop_fn = lambda token_ids, _: sparql_stop_fn(token_ids.tolist())
                 beam_width = 1
+                stop_fn = token_stop_fn
 
             if index is not None and index[0] == "kge":
                 constraint = ContinuationConstraint(
@@ -256,20 +291,24 @@ class SPARQLGenerator(TextProcessor):
             elif self._disable_sparql_constraint:
                 constraint = None
             else:
+                decoded_string = self.tokenizer.de_tokenize(decoded_token_ids)
                 constraint = self._sparql_constraint
                 constraint.reset(decoded_string.encode())
 
+            i = 0
             last_output = []
-            for output in self._partial_inference(
+            for output, const in self._partial_inference(
                 decode_fn,
                 initial_token_ids + decoded_token_ids,
                 constraint,
-                stop_fn, # type: ignore
+                stop_fn,  # type: ignore
                 beam_width,
                 kwargs_update_fn,
             ):
                 yield decoded_token_ids + output
                 last_output = output
+                constraint = const
+                i += 1
 
             decoded_token_ids.extend(last_output)
 
@@ -279,16 +318,16 @@ class SPARQLGenerator(TextProcessor):
         initial_token_ids: list[int],
         constraint: Constraint | None,
         stop_fn: BeamStopFn | StopFn,
-        beam_width: int = 1, 
+        beam_width: int = 1,
         kwargs_update_fn: MaskUpdateFn | None = None,
-    ) -> Iterator[list[int]]:
+    ) -> Iterator[tuple[list[int], Constraint | None]]:
         logit_fns = []
 
         if beam_width > 1:
             beam = Beam(
-                initial_token_ids, 
+                initial_token_ids,
                 [0.0] * len(initial_token_ids),
-                {"constraint": constraint} if constraint is not None else None
+                {"constraint": constraint}
             )
 
             # add constrain logit fn if any of the beams have a constraint
@@ -299,14 +338,13 @@ class SPARQLGenerator(TextProcessor):
                 ))
 
                 def _update_beam(beam: Beam, token_id: int, log_p: float):
-                    new_beam = Beam.from_beam(beam, token_id, log_p)
+                    beam = Beam.from_beam(beam, token_id, log_p)
+                    beam.info["constraint"] = beam.info["constraint"].clone()
                     if token_id == self._eos_token_id:
-                        return new_beam
+                        return beam
 
-                    beam_const = beam.info["constraint"].clone()
-                    beam_const.next(token_id)
-                    new_beam.info["constraint"] = beam_const
-                    return new_beam
+                    beam.info["constraint"].next(token_id)
+                    return beam
 
                 candidate_fn = _update_beam
             else:
@@ -328,24 +366,24 @@ class SPARQLGenerator(TextProcessor):
                     self._temp
                 ))
 
-            yield from (
-                beams[0][0].token_ids for beams in beam_search(
-                    decode_fn=decode_fn,
-                    initial=[beam],
-                    pad_token_id=self.tokenizer.pad_token_id(),
-                    max_length=self.max_length,
-                    stop_fn=stop_fn, # type: ignore
-                    device=self.devices[0],
-                    normalize_by_length=True,
-                    alpha=1.0,
-                    beam_width=beam_width,
-                    sample_fn=sample_fn,
-                    candidate_fn=candidate_fn,
-                    logit_fns=logit_fns,
-                    kwargs_update_fn=kwargs_update_fn,
-                    yield_intermediate=True
-                )
-            )
+            for beams in beam_search(
+                decode_fn=decode_fn,
+                initial=[beam],
+                pad_token_id=self.tokenizer.pad_token_id(),
+                max_length=self.max_length,
+                stop_fn=stop_fn,  # type: ignore
+                device=self.devices[0],
+                normalize_by_length=True,
+                alpha=1.0,
+                beam_width=beam_width,
+                sample_fn=sample_fn,
+                candidate_fn=candidate_fn,
+                logit_fns=logit_fns,
+                kwargs_update_fn=kwargs_update_fn,
+                yield_intermediate=True
+            ):
+                best = beams[0][0]
+                yield (best.token_ids, best.info["constraint"])
             return
 
         if constraint is not None:
@@ -378,14 +416,14 @@ class SPARQLGenerator(TextProcessor):
             )
 
         yield from (
-            output[0] for output in search(
+            (output[0], constraint) for output in search(
                 decode_fn=decode_fn,
                 initial_token_ids=[initial_token_ids],
                 pad_token_id=self.tokenizer.pad_token_id(),
                 max_length=self.max_length,
                 sample_fn=sample_fn,
                 logit_fns=logit_fns,
-                stop_fn=stop_fn, # type: ignore
+                stop_fn=stop_fn,  # type: ignore
                 device=self.devices[0],
                 kwargs_update_fn=kwargs_update_fn,
                 yield_intermediate=True
@@ -430,7 +468,7 @@ class SPARQLGenerator(TextProcessor):
         self._sparql_constraint = load_sparql_constraint(
             kgs,
             vocab,
-            False
+            self._exact or self._force_exact
         )
         self._sparql_parser = load_sparql_parser(kgs)
 
@@ -444,7 +482,8 @@ class SPARQLGenerator(TextProcessor):
         max_length: int | None = None,
         use_cache: bool = False,
         full_outputs: bool = False,
-        disable_sparql_constraint: bool = False
+        disable_sparql_constraint: bool = False,
+        force_exact: bool = False
     ) -> None:
         assert sampling_strategy in ["greedy", "top_k", "top_p"]
         self._sampling_strategy = sampling_strategy
@@ -456,6 +495,7 @@ class SPARQLGenerator(TextProcessor):
         self._use_cache = use_cache
         self._full_outputs = full_outputs
         self._disable_sparql_constraint = disable_sparql_constraint
+        self._force_exact = force_exact
 
     def generate_live(
         self,
@@ -481,8 +521,14 @@ class SPARQLGenerator(TextProcessor):
         else:
             input_text_len = 0
 
+        entities = {}
+        properties = {}
         sparql = ""
-        for output in self._iterative_inference(initial_token_ids):
+        for output in self._iterative_inference(
+            initial_token_ids,
+            entities,
+            properties
+        ):
             sparql = self.tokenizer.de_tokenize(
                 item.tokenization.token_ids + output
             )[input_text_len:]
@@ -492,8 +538,8 @@ class SPARQLGenerator(TextProcessor):
             yield postprocess_sparql_query(
                 sparql,
                 self._sparql_parser,
-                self._entity_indices,
-                self._property_indices,
+                entities,
+                properties,
                 self._prefixes,
                 pretty
             )

@@ -64,11 +64,11 @@ class KgIndex:
                 key = self.reverse_prefixes[v]
                 key = key + d[k + "_"]
             return key
-        
+
         match = self.short_key_pattern.fullmatch(key)
         if match is not None:
             return key
-        
+
         return None
 
     def get(
@@ -228,6 +228,7 @@ def load_sparql_constraint(
         exact
     )
 
+
 def _parse_to_string(parse: dict) -> str:
     def _flatten(parse: dict) -> str:
         if "value" in parse:
@@ -244,43 +245,79 @@ def _parse_to_string(parse: dict) -> str:
 
     return _flatten(parse)
 
+
 def prettify(
     sparql: str,
-    parser: grammar.LR1Parser
+    parser: grammar.LR1Parser,
+    indent: int = 2
 ) -> str:
     parse = parser.parse(sparql, skip_empty=True, collapse_single=False)
 
     # some simple rules for pretty printing:
-    # 1. new lines after prologue (PrologueDecl) and triple blocks (TriplesBlock)
+    # 1. new lines after prologue (PrologueDecl) and triple blocks
+    # (TriplesBlock)
     # 2. new lines after { and before }
     # 3. increase indent after { and decrease before }
 
-    indent = 0
-    
-    def _pretty(parse: dict) -> str:
-        nonlocal indent
-        s = ""
+    assert indent > 0, "indent step must be positive"
+    current_indent = 0
+    s = ""
 
-        if parse["name"] == "}":
-            indent -= 2
-            s += "\n"
+    def _pretty(parse: dict) -> bool:
+        nonlocal current_indent
+        nonlocal s
+        newline = False
 
         if "value" in parse:
+            if parse["name"] in [
+                "UNION",
+                "MINUS"
+            ]:
+                s = s.rstrip() + " "
+
+            elif parse["name"] == "}":
+                current_indent -= indent
+                s = s.rstrip()
+                s += "\n" + " " * current_indent
+
+            elif parse["name"] == "{":
+                current_indent += indent
+
             s += parse["value"]
+
+        elif len(parse["children"]) == 1:
+            newline = _pretty(parse["children"][0])
+
         else:
-            s += " ".join(_pretty(p) for p in parse["children"])
+            for i, child in enumerate(parse["children"]):
+                if i > 0 and not newline and child["name"] != "(":
+                    s += " "
 
-        if parse["name"] == "PrologueDecl":
-            s += "\n"
-        if parse["name"] == "TriplesBlock":
-            s += "\n"
-        if parse["name"] == "{":
-            indent += 2
-            s += "\n"
+                newline = _pretty(child)
 
-        return s
+        if not newline and parse["name"] in [
+            "{",
+            "}",
+            ".",
+            "PrefixDecl",
+            "BaseDecl",
+            "TriplesBlock",
+            "GroupClause",
+            "HavingClause",
+            "OrderClause",
+            "LimitClause",
+            "OffsetClause",
+            "GraphPatternNotTriples"
+        ]:
+            s += "\n" + " " * current_indent
+            newline = True
 
-    return _pretty(parse)
+        return newline
+
+    newline = _pretty(parse)
+    if newline:
+        s = s.rstrip()
+    return s
 
 
 def _find_with_name(
@@ -348,8 +385,10 @@ def ask_to_select(
 
 _CLEAN_PATTERN = re.compile(r"\s+", flags=re.MULTILINE)
 
+
 def clean(s: str) -> str:
     return _CLEAN_PATTERN.sub(" ", s).strip()
+
 
 def preprocess_natural_language_query(
     query: str,
@@ -368,8 +407,8 @@ def preprocess_natural_language_query(
     return f"""\
 Task:
 SPARQL query generation over the specified knowledge graphs given a natural \
-language query, optional additional information / guidance, and optional examples \
-of query and SPARQL pairs.
+language query, optional additional information / guidance, and optional \
+examples of query and SPARQL pairs.
 
 Knowledge graphs:
 {kg_list}
@@ -384,14 +423,14 @@ SPARQL:
 """
 
 
-_KG_PATTERN = re.compile("^<kg(?:e|p) kg='(\\w+)'>")
+_KG_PATTERN = re.compile("^<kg(?:e|p) kg='(\\w+)'>(.*?)</kg(?:e|p)>$")
 
 
 def postprocess_sparql_query(
     sparql: str,
     parser: grammar.LR1Parser,
-    entity_indices: dict[str, ContIndex],
-    property_indices: dict[str, ContIndex],
+    entities: dict[str, dict[str, str]],
+    properties: dict[str, dict[str, str]],
     prefixes: dict[str, str],
     pretty: bool = False,
 ) -> str:
@@ -405,26 +444,26 @@ def postprocess_sparql_query(
         kg_match = _KG_PATTERN.search(val)
         assert kg_match is not None
         kg = kg_match.group(1)
-        if kg not in entity_indices:
+        if kg not in entities:
             continue
-        index = entity_indices[kg]
-        value = index.get_value(val[kg_match.end():].encode("utf8"))
-        if value is None:
+        kg_entities = entities[kg]
+        value = kg_match.group(2)
+        if value not in kg_entities:
             continue
-        entity["value"] = value
+        entity["value"] = kg_entities[value]
 
     for prop in _find_all_with_name(parse, "KGP"):
         val = prop["value"]
         kg_match = _KG_PATTERN.search(val)
         assert kg_match is not None
         kg = kg_match.group(1)
-        if kg not in property_indices:
+        if kg not in properties:
             continue
-        index = property_indices[kg]
-        value = index.get_value(val[kg_match.end():].encode("utf8"))
-        if value is None:
+        kg_properties = properties[kg]
+        value = kg_match.group(2)
+        if value not in kg_properties:
             continue
-        prop["value"] = value
+        prop["value"] = kg_properties[value]
 
     sparql = _parse_to_string(parse)
     sparql = fix_prefixes(sparql, parser, prefixes)
@@ -613,20 +652,6 @@ def calc_f1(
     return f1, False, False
 
 
-def format_ent(ent: str, version: str, kg: str) -> str:
-    if version == "v2":
-        return f"<kge kg='{kg}'>{ent}</kge>"
-    else:
-        return f"<boe>{ent}<eoe>"
-
-
-def format_prop(prop: str, version: str, kg: str) -> str:
-    if version == "v2":
-        return f"<kgp kg='{kg}'>{prop}</kgp>"
-    else:
-        return f"<bop>{prop}<eop>"
-
-
 def fix_prefixes(
     sparql: str,
     parser: grammar.LR1Parser,
@@ -637,7 +662,8 @@ def fix_prefixes(
 
     >>> parser = grammar.LR1Parser(*_load_sparql_grammar([]))
     >>> prefixes = {"test:": "http://test.com/"}
-    >>> s = "PREFIX bla: <unrelated> SELECT ?x WHERE { ?x <http://test.com/prop> ?y }"
+    >>> s = "PREFIX bla: <unrelated> SELECT ?x WHERE { ?x \
+    <http://test.com/prop> ?y }"
     >>> fix_prefixes(s, parser, prefixes)
     'SELECT ?x WHERE { ?x <http://test.com/prop> ?y }'
     >>> s = "SELECT ?x WHERE { ?x test:prop ?y }"
@@ -722,6 +748,20 @@ def replace_vars_and_special_tokens(
     return _parse_to_string(parse)
 
 
+def format_ent(ent: str, version: str, kg: str) -> str:
+    if version == "v2":
+        return f"<kge kg='{kg}'>{ent}</kge>"
+    else:
+        return f"<boe>{ent}<eoe>"
+
+
+def format_prop(prop: str, version: str, kg: str) -> str:
+    if version == "v2":
+        return f"<kgp kg='{kg}'>{prop}</kgp>"
+    else:
+        return f"<bop>{prop}<eop>"
+
+
 def replace_entities_and_properties(
     sparql: str,
     parser: grammar.LR1Parser,
@@ -748,8 +788,8 @@ def replace_entities_and_properties(
     }
 
     def _replace_obj(
-        obj: str, 
-        indices: dict[str, KgIndex], 
+        obj: str,
+        indices: dict[str, KgIndex],
         replacements: dict[str, collections.Counter],
         is_ent: bool
     ) -> str | None:
@@ -800,7 +840,8 @@ def replace_entities_and_properties(
             # if rep is unchanged, this means that the val is not supported
             # by any of the entity indices
             if rep == val:
-                rep = _replace_obj(val, property_indices, property_replacements, False)
+                rep = _replace_obj(val, property_indices,
+                                   property_replacements, False)
 
             if rep is not None:
                 obj["value"] = rep

@@ -35,7 +35,8 @@ class SPARQLGenerationCli(TextProcessingCli):
             max_length=self.args.max_length,
             use_cache=self.args.kv_cache,
             full_outputs=self.args.full_outputs,
-            disable_sparql_constraint=self.args.no_sparql_constraint
+            disable_sparql_constraint=self.args.no_sparql_constraint,
+            force_exact=self.args.force_exact
         )
 
         for kg in self.args.knowledge_graph or []:
@@ -50,24 +51,25 @@ class SPARQLGenerationCli(TextProcessingCli):
 
     def process_iter(
         self,
-        processor: SPARQLGenerator,
+        processor: TextProcessor,
         iter: Iterator[str]
     ) -> Iterator[str]:
+        assert isinstance(processor, SPARQLGenerator)
         if self.args.examples is not None:
             examples = load_examples(self.args.examples)
         else:
             examples = []
 
         for item in tqdm(
-            iter, 
-            desc="Generating SPARQL", 
+            iter,
+            desc="Generating SPARQL",
             disable=not self.args.progress or self.args.process
         ):
-            if self.args.file is not None and self.args.input_format == "jsonl":
+            if self.args.input_format == "jsonl":
                 item = json.loads(item)
 
             sampled = random.sample(
-                examples, 
+                examples,
                 min(len(examples), self.args.num_examples)
             )
 
@@ -165,11 +167,6 @@ def main():
         action="store_true",
         help="Whether to skip postprocessing"
     )
-    parser.add_argument(
-        "--pretty",
-        action="store_true",
-        help="Whether to pretty format SPARQL during postprocessing"
-    )
 
     class KgAction(argparse.Action):
         def __call__(self, parser, namespace, values, option_string=None):
@@ -207,13 +204,23 @@ def main():
         "--num-examples",
         type=int,
         default=3,
-        help="Number of examples to add to the generation process, randomly selected"
-        "if there are more examples than this number"
+        help="Number of examples to add to the generation process, randomly "
+        "selected if there are more examples than this number"
     )
     parser.add_argument(
         "--no-sparql-constraint",
         action="store_true",
         help="Whether to remove SPARQL grammar constraint"
+    )
+    parser.add_argument(
+        "--pretty",
+        action="store_true",
+        help="Whether to pretty format SPARQL during postprocessing"
+    )
+    parser.add_argument(
+        "--force-exact",
+        action="store_true",
+        help="Whether to force using a exact SPARQL constraint"
     )
     parser.add_argument(
         "--seed",
