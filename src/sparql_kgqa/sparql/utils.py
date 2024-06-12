@@ -1,4 +1,6 @@
 import re
+import pprint
+import uuid
 import collections
 import copy
 import requests
@@ -322,8 +324,11 @@ def prettify(
 
 def _find_with_name(
     parse: dict,
-    name: str
+    name: str,
+    skip: set | None = None
 ) -> dict | None:
+    if skip is not None and parse["name"] in skip:
+        return None
     if parse["name"] == name:
         return parse
     for child in parse.get("children", []):
@@ -335,52 +340,16 @@ def _find_with_name(
 
 def _find_all_with_name(
     parse: dict,
-    name: str
+    name: str,
+    skip: set | None = None
 ) -> Iterator[dict]:
+    if skip is not None and parse["name"] in skip:
+        return
     if parse["name"] == name:
         yield parse
         return
     for child in parse.get("children", []):
         yield from _find_all_with_name(child, name)
-
-
-def ask_to_select(
-    sparql: str,
-    parser: grammar.LR1Parser
-) -> str:
-    parse = parser.parse(sparql, skip_empty=False, collapse_single=True)
-
-    sub_parse = _find_with_name(parse, "QueryType")
-    if sub_parse is None:
-        return _parse_to_string(parse)
-
-    query = sub_parse["children"][0]
-    if query["name"] != "AskQuery":
-        return _parse_to_string(parse)
-
-    # we have an ask query
-    # find the first var that is not in a subselect
-    var_parse = _find_with_name(sub_parse, "Var")
-    if var_parse is not None:
-        # ask query has a var, convert to select
-        query["name"] = "SelectQuery"
-        # replace ASK terminal with SelectClause
-        query["children"][0] = {
-            'name': 'SelectClause',
-            'children': [
-                {
-                    'name': 'SELECT',
-                    'value': 'SELECT',
-                },
-                {
-                    'name': '*',
-                    'value': '*',
-                }
-            ],
-        }
-        return parse
-
-    raise NotImplementedError
 
 
 _CLEAN_PATTERN = re.compile(r"\s+", flags=re.MULTILINE)
@@ -484,16 +453,7 @@ class SelectRecord:
         self.label = label
 
     def __repr__(self) -> str:
-        if self.data_type is None:
-            return ""
-        elif self.data_type == "uri":
-            assert self.value is not None
-            last = self.value.split("/")[-1]
-            if self.label is not None:
-                return f"{self.label} ({last})"
-            return last
-        else:
-            return self.label or self.value or ""
+        return self.label or self.value or ""
 
 
 AskResult = bool
@@ -512,7 +472,94 @@ class SelectResult:
         return len(self.results)
 
     def __repr__(self) -> str:
-        return f"SPARQLResult({self.vars}, {self.results})"
+        return pprint.pformat(
+            self.results,
+            compact=True
+        )
+
+
+def ask_to_select(
+    sparql: str,
+    parser: grammar.LR1Parser
+) -> str:
+    parse = parser.parse(sparql, skip_empty=False, collapse_single=False)
+
+    sub_parse = _find_with_name(parse, "QueryType")
+    assert sub_parse is not None
+
+    ask_query = sub_parse["children"][0]
+    assert ask_query["name"] == "AskQuery"
+
+    # we have an ask query
+    # find the first var or iri
+    ask_var = _find_with_name(sub_parse, "Var", skip={"SubSelect"})
+    if ask_var is not None:
+        var = ask_var["children"][0]["value"]
+        # ask query has a var, convert to select
+        ask_query["name"] = "SelectQuery"
+        # replace ASK terminal with SelectClause
+        ask_query["children"][0] = {
+            'name': 'SelectClause',
+            'children': [
+                {
+                    'name': 'SELECT',
+                    'value': 'SELECT',
+                },
+                {
+                    'name': 'Var',
+                    'value': var
+                }
+            ],
+        }
+        return _parse_to_string(parse)
+
+    # ask query does not have a var, convert to select
+    # and introduce own var
+    # generate unique var name with uuid
+    var = f"?{uuid.uuid4().hex}"
+    iri = _find_with_name(sub_parse, "iri", skip={"SubSelect"})
+    assert iri is not None
+
+    child = iri["children"][0]
+    if child["name"] == "PrefixedName":
+        iri = child["children"][0]["value"]
+        child["children"][0]["value"] = var
+    elif child["name"] == "IRIREF":
+        iri = child["value"]
+        child["value"] = var
+    else:
+        raise ValueError(f"unsupported iri format {iri}")
+
+    where_clause = ask_query["children"][2]
+    group_graph_pattern = _find_with_name(
+        where_clause,
+        "GroupGraphPattern",
+        skip={"SubSelect"}
+    )
+    assert group_graph_pattern is not None
+    values = {
+        "name": "CustomValuesClause",
+        "value": f"VALUES {var} {{ {iri} }}"
+    }
+    group_graph_pattern["children"].insert(1, values)
+
+    ask_query["name"] = "SelectQuery"
+    # replace ASK terminal with SelectClause
+    ask_query["children"][0] = {
+        'name': 'SelectClause',
+        'children': [
+            {
+                'name': 'SELECT',
+                'value': 'SELECT',
+            },
+            {
+                'name': 'Var',
+                'value': var
+            }
+        ],
+    }
+
+    return _parse_to_string(parse)
 
 
 def query_qlever(
@@ -526,7 +573,7 @@ def query_qlever(
     assert query_type is not None
     query_type = query_type["children"][0]["name"]
     if query_type == "AskQuery":
-        raise NotImplementedError("ask queries are not supported")
+        sparql_query = ask_to_select(sparql_query, parser)
     elif query_type != "SelectQuery":
         raise ValueError(f"unsupported query type {query_type}")
 
