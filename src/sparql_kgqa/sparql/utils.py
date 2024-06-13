@@ -360,7 +360,7 @@ def clean(s: str) -> str:
 def preprocess_natural_language_query(
     query: str,
     kgs: list[str],
-    information: str | None,
+    info: str | None,
     examples: list[tuple[str, str]] | None
 ) -> str:
     if examples is None or len(examples) == 0:
@@ -371,8 +371,8 @@ def preprocess_natural_language_query(
             for i, (query, sparql) in enumerate(examples)
         ) + "\n"
 
-    if information is not None and information.strip() == "":
-        information = None
+    if info is not None and info.strip() == "":
+        info = None
 
     kg_list = "\n".join(kgs)
     return f"""\
@@ -388,7 +388,7 @@ Query:
 {query}
 
 Additional information / guidance:
-{information}
+{info}
 {example_list}
 SPARQL:
 """

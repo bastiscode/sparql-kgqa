@@ -20,8 +20,6 @@ class SPARQLGenerationServer(TextProcessingServer):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
 
-        use_cache = config.get("use_cache", False)
-
         kgs: dict[str, tuple[
             ContIndex, ContIndex, dict[str, str], dict[str, str]
         ]] = {}
