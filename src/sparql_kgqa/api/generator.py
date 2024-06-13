@@ -3,9 +3,8 @@ import re
 
 import torch
 from torch import nn
-from transformers import PreTrainedModel
 
-from text_utils import data, tokenization
+from text_utils import data, tokenization, continuations
 from text_utils.api.processor import ModelInfo, TextProcessor
 from text_utils.api.utils import (
     Device,
@@ -33,7 +32,6 @@ from sparql_kgqa.model import (
     peft_model_from_config
 )
 from sparql_kgqa.sparql.utils import (
-    ContIndex,
     general_prefixes,
     load_prefixes,
     load_sparql_constraint,
@@ -46,6 +44,7 @@ _BASE_URL = ""
 _NAME_TO_ZIP = {}
 
 Const = str | tuple[str, str, bool]
+ContIndex = continuations.ContinuationIndex
 
 
 class SPARQLGenerator(TextProcessor):
@@ -444,11 +443,16 @@ class SPARQLGenerator(TextProcessor):
                 entity_index,
                 vocab
             )
+        else:
+            entity_index = entity_index.clone_with_continuations(vocab)
+
         if isinstance(property_index, str):
             property_index = ContIndex.load_with_continuations(
                 property_index,
                 vocab
             )
+        else:
+            property_index = property_index.clone_with_continuations(vocab)
 
         if isinstance(entity_prefixes, str):
             entity_prefixes = load_prefixes(entity_prefixes)
@@ -494,7 +498,7 @@ class SPARQLGenerator(TextProcessor):
         self._disable_sparql_constraint = disable_sparql_constraint
         self._force_exact = force_exact
 
-    def generate_live(
+    def generate(
         self,
         query: str,
         info: str | None = None,
@@ -503,8 +507,9 @@ class SPARQLGenerator(TextProcessor):
         postprocess: bool = True,
         pretty: bool = False
     ) -> Iterator[str]:
+        input = self._prepare_input(query, info, examples, preprocessed)
         batch = next(self._get_loader(
-            iter([self._prepare_input(query, info, examples, preprocessed)]),
+            iter([input]),
             1,
         ))
 
@@ -517,6 +522,8 @@ class SPARQLGenerator(TextProcessor):
             ))
         else:
             input_text_len = 0
+
+        yield input.text
 
         entities = {}
         properties = {}

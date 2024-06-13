@@ -73,7 +73,7 @@ class SPARQLGenerationCli(TextProcessingCli):
                 min(len(examples), self.args.num_examples)
             )
 
-            *_, final = processor.generate_live(
+            *_, final = processor.generate(
                 item,
                 info=self.args.info,
                 examples=sampled,

@@ -5,8 +5,13 @@ from typing import Dict, Any
 from flask_sock import Sock
 
 from text_utils.api.server import TextProcessingServer, Error
+from text_utils import continuations
 
 from sparql_kgqa.api.generator import SPARQLGenerator
+from sparql_kgqa.sparql.utils import load_prefixes
+
+
+ContIndex = continuations.ContinuationIndex
 
 
 class SPARQLGenerationServer(TextProcessingServer):
@@ -17,18 +22,30 @@ class SPARQLGenerationServer(TextProcessingServer):
 
         use_cache = config.get("use_cache", False)
 
-        kgs = {}
+        kgs: dict[str, tuple[
+            ContIndex, ContIndex, dict[str, str], dict[str, str]
+        ]] = {}
         for kg, indices in config.get("knowledge_graphs", {}).items():
             assert "entity" in indices and "property" in indices, \
                 f"expected 'entity' and 'property' in indices for {kg} \
                 knowledge graph"
-            kgs[kg] = (indices["entity"], indices["property"])
+            ent_index = ContIndex.load(indices["entity"]["index"])
+            prop_index = ContIndex.load(indices["property"]["index"])
+            ent_prefixes = load_prefixes(
+                indices["entity"]["prefixes"]
+            )
+            prop_prefixes = load_prefixes(
+                indices["property"]["prefixes"]
+            )
+            kgs[kg] = (ent_index, prop_index, ent_prefixes, prop_prefixes)
 
-        for cfg, text_processor in zip(config["models"], self.text_processors):
-            for kg in cfg.get("knowledge_graphs", []):
+        for text_processor in self.text_processors:
+            for kg, indices in kgs.items():
                 assert isinstance(text_processor, SPARQLGenerator)
-                ent_index, prop_index = kgs[kg]
-                text_processor.set_indices(ent_index, prop_index, kg)
+                text_processor.set_indices(
+                    *indices,
+                    kg
+                )
 
         self.websocket = Sock(self.server)
 
@@ -57,7 +74,7 @@ class SPARQLGenerationServer(TextProcessingServer):
                 info = json.get("info", None)
 
                 sampling_strategy = json.get("sampling_strategy", "greedy")
-                beam_width = json.get("beam_width", None)
+                beam_width = json.get("beam_width", 1)
                 top_k = json.get("top_k", 10)
                 top_p = json.get("top_p", 0.95)
                 temp = json.get("temperature", 1.0)
@@ -82,7 +99,11 @@ class SPARQLGenerationServer(TextProcessingServer):
                     )
 
                     start = time.perf_counter()
-                    for text in gen.generate_live(text, info):  # type: ignore
+                    for text in gen.generate(
+                        text,
+                        info,
+                        pretty=True
+                    ):  # type: ignore
                         ws.send(J.dumps({
                             "output": text,
                             "runtime": {

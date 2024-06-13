@@ -9,10 +9,8 @@ from typing import Iterator
 
 from tqdm import tqdm
 
-from text_utils import text, grammar, continuations
+from text_utils import text, grammar
 from text_utils.api.table import generate_table
-
-ContIndex = continuations.ContinuationIndex
 
 QLEVER_API = "https://qlever.cs.uni-freiburg.de/api"
 QLEVER_URLS = {
@@ -372,6 +370,10 @@ def preprocess_natural_language_query(
             f"{i+1}. Example:\n{clean(query)}\n{clean(sparql)}"
             for i, (query, sparql) in enumerate(examples)
         ) + "\n"
+
+    if information is not None and information.strip() == "":
+        information = None
+
     kg_list = "\n".join(kgs)
     return f"""\
 Task:
