@@ -35,8 +35,8 @@ class TextGenerationTrainer(Trainer):
             cfg
         )
 
-    def _prepare_batch(self, batch: data.TrainBatch) -> Tuple[
-        Dict[str, Any],
+    def _prepare_batch(self, batch: data.TrainBatch) -> tuple[
+        dict[str, Any],
         torch.Tensor
     ]:
         assert len(batch) > 0, "got empty batch"

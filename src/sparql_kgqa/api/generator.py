@@ -317,6 +317,7 @@ class SPARQLGenerator(TextProcessor):
         beam_width: int = 1,
         kwargs_update_fn: MaskUpdateFn | None = None,
     ) -> Iterator[tuple[list[int], Constraint | None]]:
+        initial_length = len(initial_token_ids)
         logit_fns = []
 
         if beam_width > 1:
@@ -339,7 +340,14 @@ class SPARQLGenerator(TextProcessor):
                     if token_id == self._eos_token_id:
                         return beam
 
-                    beam.info["constraint"].next(token_id)
+                    const = beam.info["constraint"]
+                    if isinstance(const, ContinuationConstraint):
+                        decoded = self.tokenizer.de_tokenize(
+                            beam.token_ids[initial_length:]
+                        )
+                        const.reset(decoded.encode())
+                    else:
+                        beam.info["constraint"].next(token_id)
                     return beam
 
                 candidate_fn = _update_beam
