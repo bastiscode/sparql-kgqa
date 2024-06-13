@@ -392,7 +392,7 @@ SPARQL:
 """
 
 
-_KG_PATTERN = re.compile("^<kg(?:e|p) kg='(\\w+)'>(.*?)</kg(?:e|p)>$")
+_KG_PATTERN = re.compile("^<kg(?:e|p) kg='(\\w*)'>(.*?)</kg(?:e|p)>$")
 
 
 def postprocess_sparql_query(
