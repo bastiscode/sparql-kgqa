@@ -76,7 +76,6 @@ class SPARQLGenerationServer(TextProcessingServer):
                 top_k = json.get("top_k", 10)
                 top_p = json.get("top_p", 0.95)
                 temp = json.get("temperature", 1.0)
-                max_length = json.get("max_length", None)
 
                 with self.text_processor(json["model"]) as gen:
                     if isinstance(gen, Error):
@@ -92,8 +91,6 @@ class SPARQLGenerationServer(TextProcessingServer):
                         top_k=top_k,
                         top_p=top_p,
                         beam_width=beam_width,
-                        use_cache=use_cache,
-                        max_length=max_length
                     )
 
                     start = time.perf_counter()
