@@ -3,19 +3,13 @@ from typing import Dict, Any, Tuple
 
 import torch
 from torch import nn
-from peft import (
-    PeftModel,
-    get_peft_model
-)
 
 from text_utils.api.trainer import ShardingPolicy, Trainer
 from text_utils import data
-from transformers import PreTrainedModel
 
 from sparql_kgqa.model import (
-    PretrainedDecoder,
     model_from_config,
-    peft_config
+    peft_model_from_config
 )
 
 
@@ -36,20 +30,10 @@ class TextGenerationTrainer(Trainer):
         model: nn.Module,
         cfg: dict[str, Any],
     ) -> nn.Module:
-        peft_cfg = peft_config(cfg)
-        if isinstance(model, PretrainedDecoder):
-            assert isinstance(model.model, PreTrainedModel)
-            peft_model = get_peft_model(
-                model.model,
-                peft_cfg
-            )
-            assert isinstance(peft_model, PeftModel)
-            model.model = peft_model
-        else:
-            raise RuntimeError(
-                "peft is only supported for pretrained decoder models"
-            )
-        return model
+        return peft_model_from_config(
+            model,  # type: ignore
+            cfg
+        )
 
     def _prepare_batch(self, batch: data.TrainBatch) -> Tuple[
         Dict[str, Any],

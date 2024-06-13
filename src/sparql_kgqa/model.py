@@ -10,7 +10,12 @@ import torch
 from torch import nn
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from torch.utils.hooks import RemovableHandle
-from peft import PeftModel, PeftConfig, LoraConfig, IA3Config  # type: ignore
+from peft import (
+    PeftModel,
+    LoraConfig,
+    IA3Config,
+    get_peft_model
+)
 from transformers import (
     AutoModelForCausalLM,
     PreTrainedModel,
@@ -405,17 +410,22 @@ class PretrainedDecoder(Model):
         return self
 
 
-def peft_config(
+def peft_model_from_config(
+    model: Model,
     cfg: dict[str, Any]
-) -> PeftConfig:
+) -> Model:
     peft = copy.deepcopy(cfg)
     typ = peft.pop("type")
     if typ == "lora":
-        return LoraConfig(**peft)
+        peft_cfg = LoraConfig(**peft)
     elif typ == "ia3":
-        return IA3Config(**peft)
+        peft_cfg = IA3Config(**peft)
     else:
         raise ValueError(f"unknown peft type: {typ}")
+
+    assert isinstance(model.model, PreTrainedModel)
+    model.model = get_peft_model(model.model, peft_cfg)
+    return model
 
 
 def model_from_config(

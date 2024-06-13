@@ -3,7 +3,7 @@ import re
 
 import torch
 from torch import nn
-from peft import get_peft_model
+from transformers import PreTrainedModel
 
 from text_utils import data, tokenization
 from text_utils.api.processor import ModelInfo, TextProcessor
@@ -29,7 +29,8 @@ from text_utils.constraints import Constraint, ContinuationConstraint
 from sparql_kgqa.model import (
     Model,
     PretrainedDecoder,
-    model_from_config
+    model_from_config,
+    peft_model_from_config
 )
 from sparql_kgqa.sparql.utils import (
     ContIndex,
@@ -68,7 +69,12 @@ class SPARQLGenerator(TextProcessor):
         cfg: dict[str, Any],
         device: Device
     ) -> nn.Module:
-        return model_from_config(cfg["model"])
+        model = model_from_config(cfg["model"])
+        assert isinstance(model, PretrainedDecoder)
+        peft = cfg["train"].get("peft", None)
+        if peft is not None:
+            model = peft_model_from_config(model, peft)
+        return model
 
     @property
     def max_length(self) -> int:
