@@ -2,6 +2,7 @@ import time
 import json as J
 from typing import Dict, Any
 
+from flask import request
 from flask_socketio import SocketIO, send, disconnect
 
 from text_utils.api.server import TextProcessingServer, Error
@@ -45,7 +46,20 @@ class SPARQLGenerationServer(TextProcessingServer):
                     kg
                 )
 
-        self.socketio = SocketIO(self.server)
+        self.socketio = SocketIO(
+            self.server,
+            cors_allowed_origins=self.allow_origin
+        )
+
+        self.connections = set()
+
+        @self.socketio.on("connect")
+        def _connect() -> None:
+            self.connections.add(request.sid)  # type: ignore
+
+        @self.socketio.on("disconnect")
+        def _disconnect() -> None:
+            self.connections.remove(request.sid)  # type: ignore
 
         @self.socketio.on("message")
         def _generate_live(data) -> None:
@@ -94,6 +108,10 @@ class SPARQLGenerationServer(TextProcessingServer):
                         info,
                         pretty=True
                     ):  # type: ignore
+                        if request.sid not in self.connections:
+                            # early explicit disconnect by client
+                            return
+
                         send(J.dumps({
                             "output": text,
                             "runtime": {
