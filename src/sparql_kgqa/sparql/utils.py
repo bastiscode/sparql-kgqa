@@ -363,16 +363,27 @@ def preprocess_natural_language_query(
     info: str | None,
     examples: list[tuple[str, str]] | None
 ) -> str:
+    if len(kgs) == 0:
+        kgs = ["None specified"]
+
     if examples is None or len(examples) == 0:
         example_list = ""
     else:
-        example_list = "\n" + "\n\n".join(
-            f"{i+1}. Example:\n{clean(query)}\n{clean(sparql)}"
-            for i, (query, sparql) in enumerate(examples)
-        ) + "\n"
+        example_list = "\n"
 
-    if info is not None and info.strip() == "":
-        info = None
+        for i, (query, sparql) in enumerate(examples):
+            if len(examples) > 1:
+                example_list += f"{i+1}. "
+            example_list += f"Example:\n{clean(query)}\n{clean(sparql)}"
+            if i < len(examples) - 1:
+                example_list += "\n\n"
+
+        example_list += "\n"
+
+    if info is None or info.strip() == "":
+        info = ""
+    else:
+        info = f"\nAdditional information / guidance:\n{info}\n"
 
     kg_list = "\n".join(kgs)
     return f"""\
@@ -386,10 +397,7 @@ Knowledge graphs:
 
 Query:
 {query}
-
-Additional information / guidance:
-{info}
-{example_list}
+{info}{example_list}
 SPARQL:
 """
 
