@@ -2,7 +2,7 @@ import time
 import json as J
 from typing import Dict, Any
 
-from flask_sock import Sock
+from flask_socketio import SocketIO, send, disconnect
 
 from text_utils.api.server import TextProcessingServer, Error
 from text_utils import continuations
@@ -45,25 +45,20 @@ class SPARQLGenerationServer(TextProcessingServer):
                     kg
                 )
 
-        self.websocket = Sock(self.server)
+        self.socketio = SocketIO(self.server)
 
-        @self.websocket.route(f"{self.base_url}/live")
-        def _generate_live(ws) -> None:
+        @self.socketio.on("message")
+        def _generate_live(data) -> None:
             try:
-                data = ws.receive(timeout=self.timeout)
                 json = J.loads(data)
-                if json is None:
-                    ws.send(J.dumps({
-                        "error": "request body must be json"
-                    }))
-                    return
-                elif "model" not in json:
-                    ws.send(J.dumps({
+
+                if "model" not in json:
+                    send(J.dumps({
                         "error": "missing model in json"
                     }))
                     return
                 elif "text" not in json:
-                    ws.send(J.dumps({
+                    send(J.dumps({
                         "error": "missing text in json"
                     }))
                     return
@@ -79,7 +74,7 @@ class SPARQLGenerationServer(TextProcessingServer):
 
                 with self.text_processor(json["model"]) as gen:
                     if isinstance(gen, Error):
-                        ws.send(J.dumps({
+                        send(J.dumps({
                             "error": gen.msg
                         }))
                         return
@@ -99,7 +94,7 @@ class SPARQLGenerationServer(TextProcessingServer):
                         info,
                         pretty=True
                     ):  # type: ignore
-                        ws.send(J.dumps({
+                        send(J.dumps({
                             "output": text,
                             "runtime": {
                                 "b": len(text.encode()),
@@ -108,8 +103,19 @@ class SPARQLGenerationServer(TextProcessingServer):
                         }))
 
             except Exception as error:
-                ws.send(J.dumps({
-                    "error": f"request failed with unexpected error: {error}"
+                send(J.dumps({
+                    "error": f"request failed with error: {error}"
                 }))
+
             finally:
-                ws.close()
+                disconnect()
+
+    def run(self) -> None:
+        self.socketio.run(
+            self.server,
+            "0.0.0.0",
+            self.port,
+            debug=False,
+            use_reloader=False,
+            log_output=False
+        )
