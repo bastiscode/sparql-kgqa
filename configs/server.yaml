@@ -1,6 +1,5 @@
 port: env(PORT:40000)
-timeout: 10
-base_url: env(BASE_URL:/api)
+timeout: env(TIMEOUT:10)
 
 models:
   # load a pretrained model by specifying the name

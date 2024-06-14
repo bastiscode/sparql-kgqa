@@ -48,6 +48,7 @@ class SPARQLGenerationServer(TextProcessingServer):
 
         self.socketio = SocketIO(
             self.server,
+            path="live",
             cors_allowed_origins=self.allow_origin
         )
 
