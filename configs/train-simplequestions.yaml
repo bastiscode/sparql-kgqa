@@ -6,11 +6,12 @@ seed: env(SEED:22)
 model: file(models/env(MODEL).yaml)
 
 train:
-  peft: file(peft/env(LORA).yaml)
+  peft: file(peft/env(PEFT:none).yaml)
   compile: env(COMPILE:false)
   gradient_checkpointing: env(GRADIENT_CHECKPOINTING:false)
   mixed_precision: env(MIXED_PRECISION:null)
   clip_grad_norm: env(CLIP_GRAD_NORM:1.0)
+  grad_accumulation: env(GRAD_ACCUMULATION:1)
   num_epochs: env(NUM_EPOCHS:1)
   eval_interval: eval(1 / env(EVAL_N:4))
   log_interval: eval(1 / env(LOG_N:100))
@@ -32,8 +33,9 @@ train:
     lr: env(LR:0.00005)
     weight_decay: env(WEIGHT_DECAY:0.01)
     weight_decay_modules:
-      # for lora fine-tuning
-      Linear: [lora_A.default.weight, lora_B.default.weight]
+      # default, override per model
+      Linear: [weight]
+      Conv1d: [weight]
     fused: env(FUSED:null)
     foreach: env(FOREACH:null)
   lr_scheduler:

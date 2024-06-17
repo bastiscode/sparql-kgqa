@@ -1,2 +1,2 @@
-- relpath(query_logs/robotic.yaml)
-- relpath(query_logs/organic.yaml)
+# - file(datasets/query_logs/robotic.yaml)
+- file(datasets/query_logs/organic.yaml)

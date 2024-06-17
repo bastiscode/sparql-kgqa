@@ -1,1 +1,1 @@
-- relpath(datasets/simplequestions/train.yaml)
+- file(datasets/simplequestions/train.yaml)
