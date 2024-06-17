@@ -243,7 +243,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--property-index", type=str, required=True)
     parser.add_argument("--property-prefixes", type=str, default=None)
     parser.add_argument("--version", choices=["v1", "v2"], default="v2")
-    parser.add_argument("-rec-limit", type=int, default=10000)
+    parser.add_argument("--rec-limit", type=int, default=10000)
     return parser.parse_args()
 
 
