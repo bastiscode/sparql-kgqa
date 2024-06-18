@@ -294,7 +294,7 @@ def prepare(args: argparse.Namespace):
                         args.version,
                         "in_order" if split == "train" else "only_first"
                     )
-                except:
+                except Exception:
                     invalid += 1
                     continue
 

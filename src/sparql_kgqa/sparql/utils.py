@@ -35,16 +35,16 @@ class KgIndex:
             for short, long in self.prefixes.items()
         }
         self.short_key_pattern = re.compile(
-            "|".join(
-                rf"({re.escape(short)})\w+"
+            r"(" + "|".join(
+                re.escape(short)
                 for short in self.prefixes
-            )
+            ) + r")\w+"
         )
         self.long_key_pattern = re.compile(
-            "|".join(
-                rf"{re.escape(long)}\w+"
+            r"<?(" + "|".join(
+                re.escape(long)
                 for long in self.prefixes.values()
-            )
+            ) + r")\w+>?"
         )
 
     @staticmethod
@@ -110,7 +110,7 @@ class KgIndex:
 
         match = self.long_key_pattern.fullmatch(key)
         if match is not None:
-            return key
+            return match.group(1)
 
         return None
 
