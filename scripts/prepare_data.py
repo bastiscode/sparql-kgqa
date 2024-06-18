@@ -8,10 +8,10 @@ from tqdm import tqdm
 from datasets import load_dataset
 
 from sparql_kgqa.sparql.utils import (
+    KgIndex,
     clean,
     general_prefixes,
     load_sparql_parser,
-    load_kg_index,
     fix_prefixes,
     replace_vars_and_special_tokens,
     preprocess_natural_language_query,
@@ -53,11 +53,8 @@ def parse_args() -> argparse.Namespace:
     data.add_argument("--monument", type=str)
 
     parser.add_argument("--output", type=str, required=True)
-    parser.add_argument("--entity-index", type=str, required=True)
-    parser.add_argument("--entity-redirects", type=str, default=None)
-    parser.add_argument("--entity-prefixes", type=str, required=True)
-    parser.add_argument("--property-index", type=str, required=True)
-    parser.add_argument("--property-prefixes", type=str, required=True)
+    parser.add_argument("--entities", type=str, required=True)
+    parser.add_argument("--properties", type=str, required=True)
     parser.add_argument("--version", choices=["v1", "v2"], default="v2")
     parser.add_argument("--skip-incomplete", action="store_true")
     parser.add_argument("--progress", action="store_true")
@@ -235,19 +232,16 @@ def prepare(args: argparse.Namespace):
 
     prefixes = general_prefixes()
 
-    ent_index = load_kg_index(
-        args.entity_index,
-        args.entity_redirects,
-        args.entity_prefixes,
+    ent_index = KgIndex.load(
+        args.entities,
         args.progress
     )
     prefixes.update(ent_index.prefixes)
     ent_indices = {kg: ent_index}
 
-    prop_index = load_kg_index(
-        args.property_index,
-        prefixes_path=args.property_prefixes,
-        progress=args.progress
+    prop_index = KgIndex.load(
+        args.properties,
+        args.progress
     )
     prefixes.update(prop_index.prefixes)
     prop_indices = {kg: prop_index}

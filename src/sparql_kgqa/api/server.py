@@ -1,4 +1,5 @@
 import time
+import os
 import json as J
 from typing import Dict, Any
 
@@ -12,7 +13,7 @@ from sparql_kgqa.api.generator import SPARQLGenerator
 from sparql_kgqa.sparql.utils import load_prefixes
 
 
-ContIndex = continuations.ContinuationIndex
+ContIndex = continuations.MmapContinuationIndex
 
 
 class SPARQLGenerationServer(TextProcessingServer):
@@ -22,28 +23,39 @@ class SPARQLGenerationServer(TextProcessingServer):
         super().__init__(config)
 
         kgs: dict[str, tuple[
-            ContIndex, ContIndex, dict[str, str], dict[str, str]
+            tuple[ContIndex, dict[str, str]],
+            tuple[ContIndex, dict[str, str]]
         ]] = {}
         for kg, indices in config.get("knowledge_graphs", {}).items():
             assert "entity" in indices and "property" in indices, \
                 f"expected 'entity' and 'property' in indices for {kg} \
                 knowledge graph"
-            ent_index = ContIndex.load(indices["entity"]["index"])
-            prop_index = ContIndex.load(indices["property"]["index"])
+
+            ent_index = ContIndex.load(
+                os.path.join(indices["entity"]["data"], "index.tsv"),
+                indices["entity"]["index"],
+                indices["entity"].get("common_suffix", "</kge>")
+            )
+            prop_index = ContIndex.load(
+                os.path.join(indices["property"]["data"], "index.tsv"),
+                indices["property"]["index"],
+                indices["property"].get("common_suffix", "</kgp>")
+            )
             ent_prefixes = load_prefixes(
-                indices["entity"]["prefixes"]
+                os.path.join(indices["entity"]["data"], "prefixes.tsv")
             )
             prop_prefixes = load_prefixes(
-                indices["property"]["prefixes"]
+                os.path.join(indices["property"]["data"], "prefixes.tsv")
             )
-            kgs[kg] = (ent_index, prop_index, ent_prefixes, prop_prefixes)
+            kgs[kg] = ((ent_index, ent_prefixes), (prop_index, prop_prefixes))
 
         for text_processor in self.text_processors:
-            for kg, indices in kgs.items():
+            for kg, (entity_indices, property_indices) in kgs.items():
                 assert isinstance(text_processor, SPARQLGenerator)
                 text_processor.set_indices(
-                    *indices,
-                    kg
+                    kg,
+                    entity_indices=entity_indices,
+                    property_indices=property_indices
                 )
 
         self.socketio = SocketIO(

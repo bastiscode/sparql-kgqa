@@ -12,7 +12,6 @@ from text_utils import grammar
 from sparql_kgqa.sparql.utils import (
     KgIndex,
     general_prefixes,
-    load_kg_index,
     clean,
     fix_prefixes,
     load_sparql_parser,
@@ -143,17 +142,14 @@ def prepare(args: argparse.Namespace):
             )
             return
 
-    entity_index = load_kg_index(
-        args.entity_index,
-        args.entity_redirects,
-        args.entity_prefixes,
+    entity_index = KgIndex.load(
+        args.entities,
         args.progress
     )
 
-    property_index = load_kg_index(
-        args.property_index,
-        prefixes_path=args.property_prefixes,
-        progress=args.progress
+    property_index = KgIndex.load(
+        args.properties,
+        args.progress
     )
 
     for source in sources:
@@ -237,11 +233,8 @@ def parse_args() -> argparse.Namespace:
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--organic-only", action="store_true")
     source.add_argument("--robotic-only", action="store_true")
-    parser.add_argument("--entity-index", type=str, required=True)
-    parser.add_argument("--entity-redirects", type=str, default=None)
-    parser.add_argument("--entity-prefixes", type=str, default=None)
-    parser.add_argument("--property-index", type=str, required=True)
-    parser.add_argument("--property-prefixes", type=str, default=None)
+    parser.add_argument("--entities", type=str, required=True)
+    parser.add_argument("--properties", type=str, required=True)
     parser.add_argument("--version", choices=["v1", "v2"], default="v2")
     parser.add_argument("--rec-limit", type=int, default=10000)
     return parser.parse_args()

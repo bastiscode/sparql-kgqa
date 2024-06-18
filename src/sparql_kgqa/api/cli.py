@@ -1,4 +1,5 @@
 import json
+import sys
 import random
 import argparse
 from typing import Iterable, Iterator
@@ -170,7 +171,7 @@ def main():
 
     class KgAction(argparse.Action):
         def __call__(self, parser, namespace, values, option_string=None):
-            if len(values) != 5:  # type: ignore
+            if len(values) != 3:  # type: ignore
                 parser.error(f"{option_string} requires exactly three strings")
             # Retrieve the current list or create a new one if it's None
             current_list = getattr(namespace, self.dest, None) or []
@@ -183,13 +184,11 @@ def main():
         "-kg",
         "--knowledge-graph",
         type=str,
-        nargs=5,
+        nargs=3,
         action=KgAction,
         metavar=(
-            "ENTITY_INDEX",
-            "RELATION_INDEX",
-            "ENTITY_PREFIXES",
-            "RELATION_PREFIXES",
+            "DATA_DIR",
+            "INDEX_DIR",
             "KG_NAME"
         ),
         help="Add knowledge graph to the generation process"
@@ -234,4 +233,6 @@ def main():
     # set default device to auto if not set
     # (different from underlying library which sets a single gpu as default)
     args.device = args.device or "auto"
+    # increase recursion limit
+    sys.setrecursionlimit(10000)
     SPARQLGenerationCli(args).run()

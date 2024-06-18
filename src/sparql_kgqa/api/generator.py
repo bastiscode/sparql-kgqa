@@ -1,5 +1,6 @@
 from typing import Any, Iterator
 import re
+import os
 
 import torch
 from torch import nn
@@ -44,7 +45,7 @@ _BASE_URL = ""
 _NAME_TO_ZIP = {}
 
 Const = str | tuple[str, str, bool]
-ContIndex = continuations.ContinuationIndex
+ContIndex = continuations.MmapContinuationIndex
 
 
 class SPARQLGenerator(TextProcessor):
@@ -436,36 +437,54 @@ class SPARQLGenerator(TextProcessor):
 
     def set_indices(
         self,
-        entity_index: str | ContIndex,  # type: ignore
-        property_index: str | ContIndex,  # type: ignore
-        entity_prefixes: str | dict[str, str],
-        property_prefixes: str | dict[str, str],
-        kg: str
+        kg: str,
+        entities: tuple[str, str] | None = None,
+        properties: tuple[str, str] | None = None,
+        entity_indices: tuple[ContIndex, dict[str, str]] | None = None,
+        property_indices: tuple[ContIndex, dict[str, str]] | None = None,
     ) -> None:
         if kg in self._entity_indices:
             raise ValueError(f"knowledge graph {kg} already set")
 
         vocab = self.tokenizer.get_vocab()
-        if isinstance(entity_index, str):
+
+        if entity_indices is not None:
+            entity_index, entity_prefixes = entity_indices
+        elif entities is not None:
+            data, index = entities
             entity_index = ContIndex.load_with_continuations(
-                entity_index,
-                vocab
+                os.path.join(data, "index.tsv"),
+                index,
+                vocab,
+                common_suffix=self.cfg["inference"].get(
+                    "entity_suffix",
+                    "</kge>"
+                )
+            )
+            entity_prefixes = load_prefixes(
+                os.path.join(data, "prefixes.tsv")
             )
         else:
-            entity_index = entity_index.clone_with_continuations(vocab)
+            raise ValueError("entities must be provided")
 
-        if isinstance(property_index, str):
+        if property_indices is not None:
+            property_index, property_prefixes = property_indices
+        elif properties is not None:
+            data, index = properties
             property_index = ContIndex.load_with_continuations(
-                property_index,
-                vocab
+                os.path.join(data, "index.tsv"),
+                index,
+                vocab,
+                common_suffix=self.cfg["inference"].get(
+                    "property_suffix",
+                    "</kgp>"
+                )
+            )
+            property_prefixes = load_prefixes(
+                os.path.join(data, "prefixes.tsv")
             )
         else:
-            property_index = property_index.clone_with_continuations(vocab)
-
-        if isinstance(entity_prefixes, str):
-            entity_prefixes = load_prefixes(entity_prefixes)
-        if isinstance(property_prefixes, str):
-            property_prefixes = load_prefixes(property_prefixes)
+            raise ValueError("properties must be provided")
 
         self._entity_indices[kg] = entity_index
         self._property_indices[kg] = property_index
