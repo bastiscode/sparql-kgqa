@@ -1,4 +1,5 @@
 import re
+import os
 import pprint
 import uuid
 import collections
@@ -48,6 +49,56 @@ class KgIndex:
                 for i, long in enumerate(self.prefixes.values())
             )
         )
+
+    @staticmethod
+    def load(dir: str, progress: bool = False) -> "KgIndex":
+        index_path = os.path.join(dir, "index.tsv")
+        redirects_path = os.path.join(dir, "redirects.tsv")
+        prefixes_path = os.path.join(dir, "prefixes.tsv")
+
+        num_lines, _ = text.file_size(index_path)
+        with open(index_path, "r", encoding="utf8") as f:
+            index = {}
+            for line in tqdm(
+                f,
+                total=num_lines,
+                desc="loading kg index",
+                disable=not progress,
+                leave=False
+            ):
+                split = line.split("\t")
+                assert len(split) >= 2
+                short = split[0].strip()
+                obj_names = [n.strip() for n in split[1:]]
+                assert short not in index, \
+                    f"duplicate id {short}"
+                index[short] = obj_names
+
+        redirect = {}
+        if os.path.exists(redirects_path):
+            num_lines, _ = text.file_size(redirects_path)
+            with open(redirects_path, "r", encoding="utf8") as f:
+                for line in tqdm(
+                    f,
+                    total=num_lines,
+                    desc="loading kg redirects",
+                    disable=not progress,
+                    leave=False
+                ):
+                    split = line.split("\t")
+                    assert len(split) >= 2
+                    short = split[0].strip()
+                    for redir in split[1:]:
+                        redir = redir.strip()
+                        assert redir not in redirect, \
+                            f"duplicate redirect {redir}, should not happen"
+                        redirect[redir] = short
+
+        prefixes = {}
+        if os.path.exists(prefixes_path):
+            prefixes = load_prefixes(prefixes_path)
+
+        return KgIndex(index, redirect, prefixes)
 
     def normalize_key(
         self,
@@ -109,57 +160,6 @@ def load_prefixes(path: str) -> dict[str, str]:
                 f"duplicate prefix {short}"
             prefixes[short] = full
         return prefixes
-
-
-def load_kg_index(
-    index_path: str,
-    redirects_path: str | None = None,
-    prefixes_path: str | None = None,
-    progress: bool = False
-) -> KgIndex:
-    num_lines, _ = text.file_size(index_path)
-    with open(index_path, "r", encoding="utf8") as f:
-        index = {}
-        for line in tqdm(
-            f,
-            total=num_lines,
-            desc="loading kg index",
-            disable=not progress,
-            leave=False
-        ):
-            split = line.split("\t")
-            assert len(split) >= 2
-            short = split[0].strip()
-            obj_names = [n.strip() for n in split[1:]]
-            assert short not in index, \
-                f"duplicate id {short}"
-            index[short] = obj_names
-
-    redirect = {}
-    if redirects_path is not None:
-        num_lines, _ = text.file_size(redirects_path)
-        with open(redirects_path, "r", encoding="utf8") as f:
-            for line in tqdm(
-                f,
-                total=num_lines,
-                desc="loading kg redirects",
-                disable=not progress,
-                leave=False
-            ):
-                split = line.split("\t")
-                assert len(split) >= 2
-                short = split[0].strip()
-                for redir in split[1:]:
-                    redir = redir.strip()
-                    assert redir not in redirect, \
-                        f"duplicate redirect {redir}, should not happen"
-                    redirect[redir] = short
-
-    prefixes = {}
-    if prefixes_path is not None:
-        prefixes = load_prefixes(prefixes_path)
-
-    return KgIndex(index, redirect, prefixes)
 
 
 def load_inverse_index(path: str) -> dict[str, list[str]]:
@@ -454,8 +454,8 @@ def postprocess_sparql_query(
 class SelectRecord:
     def __init__(
         self,
-        value: str | None,
-        data_type: str | None,
+        value: str,
+        data_type: str,
         label: str | None = None
     ):
         self.value = value
@@ -463,7 +463,7 @@ class SelectRecord:
         self.label = label
 
     def __repr__(self) -> str:
-        return self.label or self.value or ""
+        return self.label or self.value
 
 
 AskResult = bool
@@ -473,7 +473,7 @@ class SelectResult:
     def __init__(
         self,
         vars: list[str],
-        results: list[dict[str, SelectRecord]]
+        results: list[dict[str, SelectRecord | None]]
     ):
         self.vars = vars
         self.results = results
@@ -490,19 +490,32 @@ class SelectResult:
 
 def ask_to_select(
     sparql: str,
-    parser: grammar.LR1Parser
-) -> str:
+    parser: grammar.LR1Parser,
+    var: str | None = None
+) -> str | None:
     parse = parser.parse(sparql, skip_empty=False, collapse_single=False)
 
     sub_parse = _find_with_name(parse, "QueryType")
     assert sub_parse is not None
 
     ask_query = sub_parse["children"][0]
-    assert ask_query["name"] == "AskQuery"
+    if ask_query["name"] != "AskQuery":
+        return None
 
     # we have an ask query
     # find the first var or iri
-    ask_var = _find_with_name(sub_parse, "Var", skip={"SubSelect"})
+    if var is not None:
+        ask_var = next(
+            filter(
+                lambda p: p["children"][0]["value"] == var,
+                _find_all_with_name(sub_parse, "Var", skip={"SubSelect"})
+            ),
+            None
+        )
+        assert ask_var is not None, "could not find specified var"
+    else:
+        ask_var = _find_with_name(sub_parse, "Var", skip={"SubSelect"})
+
     if ask_var is not None:
         var = ask_var["children"][0]["value"]
         # ask query has a var, convert to select
@@ -528,7 +541,7 @@ def ask_to_select(
     # generate unique var name with uuid
     var = f"?{uuid.uuid4().hex}"
     iri = _find_with_name(sub_parse, "iri", skip={"SubSelect"})
-    assert iri is not None
+    assert iri is not None, "could not find an iri in ask query"
 
     child = iri["children"][0]
     if child["name"] == "PrefixedName":
@@ -615,7 +628,7 @@ def query_qlever(
         result = {}
         for var in vars:
             if binding is None or var not in binding:
-                result[var] = SelectRecord(None, None)
+                result[var] = None
                 continue
             value = binding[var]
             result[var] = SelectRecord(
@@ -624,34 +637,6 @@ def query_qlever(
             )
         results.append(result)
     return SelectResult(vars, results)
-
-
-def format_qlever_result(
-    result: SelectResult | AskResult,
-    max_column_width: int = 80,
-) -> str:
-    if isinstance(result, AskResult):
-        return "yes" if result else "no"
-
-    if len(result) == 0:
-        return "no results"
-
-    if len(result.vars) == 0:
-        return "no bindings"
-
-    data = []
-    for record in result.results:
-        data.append([
-            str(record[var]) if var in record else "-"
-            for var in result.vars
-        ])
-
-    return generate_table(
-        headers=[result.vars],
-        data=data,
-        alignments=["left"] * len(result.vars),
-        max_column_width=max_column_width,
-    )
 
 
 def query_entities(
@@ -671,7 +656,7 @@ def query_entities(
             return {(f"{result}",)}
         return set(
             tuple(
-                r[var].value or "" if var in r else ""
+                "" if r[var] is None else r[var].value  # type: ignore
                 for var in result.vars
             )
             for r in result.results
@@ -932,3 +917,110 @@ def replace_entities_and_properties(
             sparqls.append(_parse_to_string(parse))
 
     return sparqls, incomplete
+
+
+_PREFIX_KG_PATTERN = re.compile(r"<kg(e|p) kg='(.*?)'>$")
+
+
+def autocomplete_prefix(
+    prefix: str,
+    parser: grammar.LR1Parser,
+    entities: dict[str, dict[str, str]],
+    properties: dict[str, dict[str, str]],
+    prefixes: dict[str, str],
+    qlever_endpoint: str | None = None
+) -> list[str] | None:
+    """
+    Autocomplete the SPARQL query prefix,
+    run it against Qlever and return the entities or
+    properties that can come next.
+    Assumes that the prefix is a valid SPARQL query prefix.
+
+    E.g. for "SELECT ?x WHERE { wd:Q5 <kgp kg='wikidata'>"
+    the function would return ["wdt:P31", "wdt:P21", ...].
+    """
+    match = _PREFIX_KG_PATTERN.search(prefix)
+    if match is None:
+        return None
+
+    prefix = prefix[:match.start()]
+    obj_type = match.group(1)
+    kg = match.group(2)
+
+    if obj_type == "p":
+        var = uuid.uuid4().hex
+        obj_var = uuid.uuid4().hex
+        prefix += f" ?{var} ?{obj_var} ."
+    else:
+        var = uuid.uuid4().hex
+        prefix += f" ?{var} ."
+
+    print(parser.lex(prefix))
+    # keep track of brackets in the following stack
+    brackets = []
+    for (token, _) in parser.lex(prefix):
+        if token == "{" or token == "(":
+            brackets.append(token)
+        elif token == "}" or token == ")":
+            if len(brackets) == 0:
+                raise RuntimeError("unbalanced brackets")
+            last = brackets.pop()
+            if token == "}" and last != "{":
+                raise RuntimeError("unbalanced brackets")
+            elif token == ")" and last != "(":
+                raise RuntimeError("unbalanced brackets")
+
+    # apply brackets in reverse order
+    for bracket in reversed(brackets):
+        if bracket == "{":
+            prefix += " }"
+        else:
+            prefix += " )"
+
+    select = ask_to_select(prefix, parser, f"?{var}")
+    if select is not None:
+        prefix = select
+    else:
+        # query is not an ask query, replace
+        # the selected vars with our own
+        parse = parser.parse(prefix, skip_empty=False, collapse_single=False)
+        sel_clause = _find_with_name(parse, "SelectClause", skip={"SubSelect"})
+        assert sel_clause is not None, "could not find select clause"
+        sel_clause["children"] = [
+            {
+                'name': 'SELECT',
+                'value': 'SELECT',
+            },
+            {
+                'name': "DISTINCT",
+                'value': "DISTINCT"
+            },
+            {
+                'name': 'Var',
+                'value': f"?{var}"
+            }
+        ]
+        prefix = _parse_to_string(parse)
+
+    prefix = fix_prefixes(
+        prefix,
+        parser,
+        prefixes
+    )
+    return []
+    result = query_qlever(
+        prefix,
+        parser,
+        kg,
+        qlever_endpoint
+    )
+    assert isinstance(result, SelectResult)
+    result = []
+    for r in result.results:
+        if r[var] is not None:
+            result.append(r[var].value)
+    return [
+        r[var].value  # type: ignore
+        for r in result.results
+        if r[var] is not None
+    ]
