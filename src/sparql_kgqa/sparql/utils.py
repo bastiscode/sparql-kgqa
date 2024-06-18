@@ -36,16 +36,14 @@ class KgIndex:
         }
         self.short_key_pattern = re.compile(
             "|".join(
-                rf"{re.escape(short)}\w+"
+                rf"({re.escape(short)})\w+"
                 for short in self.prefixes
             )
         )
         self.long_key_pattern = re.compile(
             "|".join(
-                rf"<(?P<long{i}>"
-                + re.escape(long)
-                + rf")(?P<long{i}_>\w+)>"
-                for i, long in enumerate(self.prefixes.values())
+                rf"{re.escape(long)}\w+"
+                for long in self.prefixes.values()
             )
         )
 
@@ -67,11 +65,11 @@ class KgIndex:
             ):
                 split = line.split("\t")
                 assert len(split) >= 2
-                short = split[0].strip()
+                obj = split[0].strip()
                 obj_names = [n.strip() for n in split[1:]]
-                assert short not in index, \
-                    f"duplicate id {short}"
-                index[short] = obj_names
+                assert obj not in index, \
+                    f"duplicate id {obj}"
+                index[obj] = obj_names
 
         redirect = {}
         if os.path.exists(redirects_path):
@@ -86,12 +84,12 @@ class KgIndex:
                 ):
                     split = line.split("\t")
                     assert len(split) >= 2
-                    short = split[0].strip()
+                    obj = split[0].strip()
                     for redir in split[1:]:
                         redir = redir.strip()
                         assert redir not in redirect, \
                             f"duplicate redirect {redir}, should not happen"
-                        redirect[redir] = short
+                        redirect[redir] = obj
 
         prefixes = {}
         if os.path.exists(prefixes_path):
@@ -103,19 +101,14 @@ class KgIndex:
         self,
         key: str
     ) -> str | None:
-        match = self.long_key_pattern.fullmatch(key)
-        if match is not None:
-            # translate long key to short key
-            d = match.groupdict()
-            for k, v in d.items():
-                if k.endswith("_") or v is None:
-                    continue
-
-                key = self.reverse_prefixes[v]
-                key = key + d[k + "_"]
-            return key
-
         match = self.short_key_pattern.fullmatch(key)
+        if match is not None:
+            # translate short key to long key
+            short = match.group(1)
+            long = self.prefixes[short]
+            return long + key[len(short):]
+
+        match = self.long_key_pattern.fullmatch(key)
         if match is not None:
             return key
 
