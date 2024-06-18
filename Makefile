@@ -82,14 +82,14 @@ indices:
 	@echo "Creating wikidata continuation indices"
 	@tu.create_continuation_index \
 	--input-file data/kg-index/wikidata-properties-index.tsv \
-	--output-file data/art-index/wikidata-properties.bin \
+	--output-dir data/art-index/wikidata-properties \
 	--common-suffix $(PROP_SUFFIX)
 	@tu.create_continuation_index \
 	--input-file data/kg-index/wikidata-entities-index.tsv \
-	--output-file data/art-index/wikidata-entities.bin \
+	--output-dir data/art-index/wikidata-entities \
 	--common-suffix $(ENT_SUFFIX)
 	@tu.create_continuation_index \
 	--input-file data/kg-index/wikidata-entities-index.small.tsv \
-	--output-file data/art-index/wikidata-entities.small.bin \
+	--output-dir data/art-index/wikidata-entities-small \
 	--common-suffix $(ENT_SUFFIX)
 
