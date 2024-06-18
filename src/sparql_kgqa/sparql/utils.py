@@ -6,12 +6,11 @@ import collections
 import copy
 import requests
 from importlib import resources
-from typing import Iterator
+from typing import Any, Iterator
 
 from tqdm import tqdm
 
 from text_utils import text, grammar
-from text_utils.api.table import generate_table
 
 QLEVER_API = "https://qlever.cs.uni-freiburg.de/api"
 QLEVER_URLS = {
@@ -491,7 +490,8 @@ class SelectResult:
 def ask_to_select(
     sparql: str,
     parser: grammar.LR1Parser,
-    var: str | None = None
+    var: str | None = None,
+    distinct: bool = False
 ) -> str | None:
     parse = parser.parse(sparql, skip_empty=False, collapse_single=False)
 
@@ -521,18 +521,22 @@ def ask_to_select(
         # ask query has a var, convert to select
         ask_query["name"] = "SelectQuery"
         # replace ASK terminal with SelectClause
+        sel_clause: list[dict[str, Any]] = [{
+            'name': 'SELECT',
+            'value': 'SELECT',
+        }]
+        if distinct:
+            sel_clause.append({
+                'name': 'DISTINCT',
+                'value': 'DISTINCT'
+            })
+        sel_clause.append({
+            'name': 'Var',
+            'value': var
+        })
         ask_query["children"][0] = {
             'name': 'SelectClause',
-            'children': [
-                {
-                    'name': 'SELECT',
-                    'value': 'SELECT',
-                },
-                {
-                    'name': 'Var',
-                    'value': var
-                }
-            ],
+            'children': sel_clause
         }
         return _parse_to_string(parse)
 
@@ -591,14 +595,10 @@ def query_qlever(
     kg: str,
     qlever_endpoint: str | None
 ) -> SelectResult | AskResult:
-    parse = parser.parse(sparql_query, skip_empty=False, collapse_single=False)
-    query_type = _find_with_name(parse, "QueryType")
-    assert query_type is not None
-    query_type = query_type["children"][0]["name"]
-    if query_type == "AskQuery":
-        sparql_query = ask_to_select(sparql_query, parser)
-    elif query_type != "SelectQuery":
-        raise ValueError(f"unsupported query type {query_type}")
+    # ask_to_select return None if sparql is not an ask query
+    select_query = ask_to_select(sparql_query, parser)
+
+    sparql_query = select_query or sparql_query
 
     if qlever_endpoint is None:
         assert kg in QLEVER_URLS, \
@@ -619,7 +619,7 @@ def query_qlever(
             f"status code {response.status_code}:\n{msg}"
         )
 
-    if query_type == "AskQuery":
+    if select_query is not None:
         return AskResult(len(json["results"]["bindings"]) > 0)
 
     vars = json["head"]["vars"]
@@ -955,7 +955,6 @@ def autocomplete_prefix(
         var = uuid.uuid4().hex
         prefix += f" ?{var} ."
 
-    print(parser.lex(prefix))
     # keep track of brackets in the following stack
     brackets = []
     for (token, _) in parser.lex(prefix):
@@ -977,7 +976,7 @@ def autocomplete_prefix(
         else:
             prefix += " )"
 
-    select = ask_to_select(prefix, parser, f"?{var}")
+    select = ask_to_select(prefix, parser, var=f"?{var}", distinct=True)
     if select is not None:
         prefix = select
     else:
@@ -1007,7 +1006,6 @@ def autocomplete_prefix(
         parser,
         prefixes
     )
-    return []
     result = query_qlever(
         prefix,
         parser,
@@ -1015,12 +1013,12 @@ def autocomplete_prefix(
         qlever_endpoint
     )
     assert isinstance(result, SelectResult)
-    result = []
+    next = []
     for r in result.results:
-        if r[var] is not None:
-            result.append(r[var].value)
-    return [
-        r[var].value  # type: ignore
-        for r in result.results
-        if r[var] is not None
-    ]
+        record = r[var]
+        if record is None:
+            continue
+        elif record.data_type != "uri":
+            continue
+        next.append(record.value)
+    return next

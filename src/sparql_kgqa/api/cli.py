@@ -40,8 +40,18 @@ class SPARQLGenerationCli(TextProcessingCli):
             force_exact=self.args.force_exact
         )
 
-        for kg in self.args.knowledge_graph or []:
-            gen.set_indices(*kg)
+        for (
+            ent_data,
+            ent_index,
+            prop_data,
+            prop_idx,
+            kg
+        ) in self.args.knowledge_graph or []:
+            gen.set_indices(
+                kg,
+                entities=(ent_data, ent_index),
+                properties=(prop_data, prop_idx),
+            )
 
         return gen
 
@@ -171,8 +181,8 @@ def main():
 
     class KgAction(argparse.Action):
         def __call__(self, parser, namespace, values, option_string=None):
-            if len(values) != 3:  # type: ignore
-                parser.error(f"{option_string} requires exactly three strings")
+            if len(values) != 5:  # type: ignore
+                parser.error(f"{option_string} requires exactly five strings")
             # Retrieve the current list or create a new one if it's None
             current_list = getattr(namespace, self.dest, None) or []
             # Append the tuple of three strings
@@ -184,11 +194,13 @@ def main():
         "-kg",
         "--knowledge-graph",
         type=str,
-        nargs=3,
+        nargs=5,
         action=KgAction,
         metavar=(
-            "DATA_DIR",
-            "INDEX_DIR",
+            "ENT_DATA_DIR",
+            "ENT_INDEX_DIR",
+            "PROP_DATA_DIR",
+            "PROP_INDEX_DIR",
             "KG_NAME"
         ),
         help="Add knowledge graph to the generation process"
