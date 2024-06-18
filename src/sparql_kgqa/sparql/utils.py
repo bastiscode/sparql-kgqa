@@ -720,10 +720,13 @@ def fix_prefixes(
     >>> parser = grammar.LR1Parser(*_load_sparql_grammar([]))
     >>> prefixes = {"test:": "http://test.com/"}
     >>> s = "PREFIX bla: <unrelated> SELECT ?x WHERE { ?x \
-    <http://test.com/prop> ?y }"
+    <http://test.de/prop> ?y }"
     >>> fix_prefixes(s, parser, prefixes)
-    'SELECT ?x WHERE { ?x <http://test.com/prop> ?y }'
+    'SELECT ?x WHERE { ?x <http://test.de/prop> ?y }'
     >>> s = "SELECT ?x WHERE { ?x test:prop ?y }"
+    >>> fix_prefixes(s, parser, prefixes)
+    'PREFIX test: <http://test.com/> SELECT ?x WHERE { ?x test:prop ?y }'
+    >>> s = "SELECT ?x WHERE { ?x <http://test.com/prop> ?y }"
     >>> fix_prefixes(s, parser, prefixes)
     'PREFIX test: <http://test.com/> SELECT ?x WHERE { ?x test:prop ?y }'
     """
@@ -742,6 +745,15 @@ def fix_prefixes(
         exist[short] = long
 
     seen = set()
+    for iri in _find_all_with_name(parse, "IRIREF"):
+        value = iri["value"]
+        val = value[1:-1]
+        for short, long in prefixes.items():
+            if val.startswith(long):
+                iri["value"] = short + val[len(long):]
+                seen.add(short)
+                break
+
     for prefix_name in _find_all_with_name(parse, "PNAME_LN"):
         val = prefix_name["value"]
         val = val[:val.find(":") + 1]

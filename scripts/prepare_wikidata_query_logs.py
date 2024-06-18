@@ -81,7 +81,7 @@ def prepare_file(
                     parser,
                     prefixes
                 )
-            except Exception as e:
+            except Exception:
                 num_invalid += 1
                 continue
 
