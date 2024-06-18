@@ -6,7 +6,7 @@ seed: env(SEED:22)
 model: file(models/env(MODEL).yaml)
 
 train:
-  peft: file(peft/env(PEFT:none).yaml)
+  peft: file(peft/env(LORA).yaml)
   compile: env(COMPILE:false)
   gradient_checkpointing: env(GRADIENT_CHECKPOINTING:false)
   mixed_precision: env(MIXED_PRECISION:null)
