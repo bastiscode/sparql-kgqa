@@ -66,7 +66,3 @@ indices:
 	--input-file $(WD_ENT)/index.tsv \
 	--output-dir data/art-index/wikidata-entities \
 	--common-suffix $(ENT_SUFFIX)
-	@tu.create_continuation_index \
-	--input-file $(WD_ENT)-small/index.tsv \
-	--output-dir data/art-index/wikidata-entities-small \
-	--common-suffix $(ENT_SUFFIX)
