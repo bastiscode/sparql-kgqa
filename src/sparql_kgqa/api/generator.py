@@ -184,7 +184,8 @@ class SPARQLGenerator(TextProcessor):
         decoded_token_ids = []
         last_output = []
 
-        kgs = "|".join(re.escape(kg) for kg in self._entity_indices)
+        kgs = list(self._entity_indices)
+        kgs = "|".join(re.escape(kg) for kg in kgs)
         START_PATTERN = re.compile(f"<(kg(?:e|p)) kg='({kgs})'>$")
         END_PATTERN = re.compile("</kg(?:e|p)>$")
 
@@ -195,6 +196,8 @@ class SPARQLGenerator(TextProcessor):
 
             if token_ids[-1] == self._eos_token_id:
                 return True
+            elif len(self._entity_indices) == 0:
+                return False
 
             decoded = self.tokenizer.de_tokenize(
                 token_ids[len(initial_token_ids) + len(decoded_token_ids):]
