@@ -421,7 +421,7 @@ def postprocess_sparql_query(
         value = kg_match.group(2)
         if value not in kg_entities:
             continue
-        entity["value"] = kg_entities[value]
+        entity["value"] = "<" + kg_entities[value] + ">"
 
     for prop in _find_all_with_name(parse, "KGP"):
         val = prop["value"]
@@ -434,7 +434,7 @@ def postprocess_sparql_query(
         value = kg_match.group(2)
         if value not in kg_properties:
             continue
-        prop["value"] = kg_properties[value]
+        prop["value"] = "<" + kg_properties[value] + ">"
 
     sparql = _parse_to_string(parse)
     sparql = fix_prefixes(sparql, parser, prefixes)
