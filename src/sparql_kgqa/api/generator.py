@@ -189,7 +189,7 @@ class SPARQLGenerator(TextProcessor):
 
         kgs = list(self._entity_indices)
         kgs = "|".join(re.escape(kg) for kg in kgs)
-        START_PATTERN = re.compile(f"<(kg(?:e|p)) kg='({kgs})'>")
+        START_PATTERN = re.compile(f"<kg(e|p) kg='({kgs})'>")
         END_PATTERN = re.compile("</kg(?:e|p)>")
 
         index: tuple[str, str] | None = None
@@ -262,8 +262,8 @@ class SPARQLGenerator(TextProcessor):
                 assert isinstance(constraint, ContinuationConstraint)
                 value = constraint.get_value()
                 assert value is not None
-                kg = index[1]
-                if index[0] == "kge":
+                obj_type, kg = index
+                if obj_type == "e":
                     if kg not in entities:
                         entities[kg] = {}
                     entities[kg][name] = value
@@ -285,16 +285,15 @@ class SPARQLGenerator(TextProcessor):
             else:
                 match = START_PATTERN.search(last_decoded)
                 if match is not None:
+                    obj_type = match.group(1)
                     kg = match.group(2)
+                    index = (obj_type, kg)
                     initial_prefix = last_decoded[match.end():]
-                    if match.group(1) == "kge":
-                        index = self._entity_indices[kg]
-                    else:
-                        index = self._property_indices[kg]
 
                     try:
                         constraint = ContinuationConstraint(
-                            index,
+                            self._entity_indices[kg] if obj_type == "e"
+                            else self._property_indices[kg],
                             initial_prefix.encode()
                         )
                     except Exception:
