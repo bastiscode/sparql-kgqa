@@ -184,6 +184,9 @@ class SPARQLGenerator(TextProcessor):
         decoded_token_ids = []
         last_output = []
 
+        def length() -> int:
+            return len(initial_token_ids) + len(decoded_token_ids)
+
         kgs = list(self._entity_indices)
         kgs = "|".join(re.escape(kg) for kg in kgs)
         START_PATTERN = re.compile(f"<(kg(?:e|p)) kg='({kgs})'>")
@@ -200,7 +203,7 @@ class SPARQLGenerator(TextProcessor):
                 return False
 
             decoded = self.tokenizer.de_tokenize(
-                token_ids[len(initial_token_ids) + len(decoded_token_ids):]
+                token_ids[length():]
             )
             pattern = START_PATTERN if index is None else END_PATTERN
             return pattern.search(decoded) is not None
@@ -234,14 +237,15 @@ class SPARQLGenerator(TextProcessor):
                 for cache in info["kv_cache"]
             )
 
-        initial_length = len(initial_token_ids)
         constraint = None
         is_exact = self._exact or self._force_exact
+        pfx = self.tokenizer.num_prefix_tokens()
+        sfx = self.tokenizer.num_suffix_tokens()
 
         while (
-            (len(decoded_token_ids) == 0
-             or decoded_token_ids[-1] != self._eos_token_id)
-            and initial_length + len(decoded_token_ids) < self.max_length
+            (len(last_output) == 0
+             or last_output[-1] != self._eos_token_id)
+            and length() + len(last_output) < self.max_length
         ):
             last_decoded = self.tokenizer.de_tokenize(last_output)
             if index is not None:
@@ -267,10 +271,15 @@ class SPARQLGenerator(TextProcessor):
                 match = START_PATTERN.search(last_decoded)
                 if match is not None:
                     index = (match.group(1), match.group(2))
-                    if not is_exact:
+                    if not is_exact and match.end() < len(last_decoded):
                         last_output = self.tokenizer.tokenize(
                             last_decoded[:match.end()]
                         ).token_ids
+                        last_output = last_output[
+                            pfx:len(last_output)-sfx
+                        ]
+                    else:
+                        assert match.end() == len(last_decoded)
 
             decoded_token_ids.extend(last_output)
             last_output = []
@@ -303,7 +312,6 @@ class SPARQLGenerator(TextProcessor):
                 constraint = self._sparql_constraint
                 constraint.reset(decoded_string.encode())
 
-            i = 0
             for output, const in self._partial_inference(
                 decode_fn,
                 initial_token_ids + decoded_token_ids,
@@ -315,7 +323,6 @@ class SPARQLGenerator(TextProcessor):
                 yield decoded_token_ids + output
                 last_output = output
                 constraint = const
-                i += 1
 
     def _partial_inference(
         self,
