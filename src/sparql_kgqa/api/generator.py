@@ -182,6 +182,7 @@ class SPARQLGenerator(TextProcessor):
         properties: dict[str, dict[str, str]]
     ) -> Iterator[Any]:
         decoded_token_ids = []
+        last_output = []
 
         kgs = list(self._entity_indices)
         kgs = "|".join(re.escape(kg) for kg in kgs)
@@ -241,11 +242,11 @@ class SPARQLGenerator(TextProcessor):
              or decoded_token_ids[-1] != self._eos_token_id)
             and initial_length + len(decoded_token_ids) < self.max_length
         ):
-            decoded = self.tokenizer.de_tokenize(decoded_token_ids)
+            last_decoded = self.tokenizer.de_tokenize(last_output)
             if index is not None:
-                match = END_PATTERN.search(decoded)
+                match = END_PATTERN.search(last_decoded)
                 assert match is not None
-                name = decoded[:match.start()]
+                name = last_decoded[:match.start()]
                 assert isinstance(constraint, ContinuationConstraint)
                 value = constraint.get_value()
                 assert value is not None
@@ -262,12 +263,12 @@ class SPARQLGenerator(TextProcessor):
                 index = None
 
             else:
-                match = START_PATTERN.search(decoded)
+                match = START_PATTERN.search(last_decoded)
                 if match is not None:
                     index = (match.group(1), match.group(2))
                     if not self._exact or self._force_exact:
-                        decoded_token_ids = self.tokenizer.tokenize(
-                            decoded[:match.end()]
+                        last_output = self.tokenizer.tokenize(
+                            last_decoded[:match.end()]
                         ).token_ids
 
             def beam_stop_fn(beam: Beam) -> bool:
@@ -299,6 +300,7 @@ class SPARQLGenerator(TextProcessor):
                 constraint.reset(decoded_string.encode())
 
             i = 0
+            decoded_token_ids.extend(last_output)
             last_output = []
             for output, const in self._partial_inference(
                 decode_fn,
@@ -312,8 +314,6 @@ class SPARQLGenerator(TextProcessor):
                 last_output = output
                 constraint = const
                 i += 1
-
-            decoded_token_ids.extend(last_output)
 
     def _partial_inference(
         self,
