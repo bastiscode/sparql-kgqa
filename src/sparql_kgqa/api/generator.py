@@ -192,7 +192,7 @@ class SPARQLGenerator(TextProcessor):
         START_PATTERN = re.compile(f"<kg(e|p) kg='({kgs})'>")
         END_PATTERN = re.compile("</kg(?:e|p)>")
 
-        index: tuple[str, str] | None = None
+        index: tuple[str, str, str] | None = None
 
         def sparql_stop_fn(token_ids: list[int]) -> bool:
             nonlocal index
@@ -260,17 +260,18 @@ class SPARQLGenerator(TextProcessor):
                 assert match is not None
                 name = last_decoded[:match.start()]
                 assert isinstance(constraint, ContinuationConstraint)
-                value = constraint.get_value()
-                assert value is not None
-                obj_type, kg = index
+                obj_id = constraint.get_value()
+                assert obj_id is not None
+                obj_type, kg, initial_prefix = index
+                name = initial_prefix + name
                 if obj_type == "e":
                     if kg not in entities:
                         entities[kg] = {}
-                    entities[kg][name] = value
+                    entities[kg][name] = obj_id
                 else:
                     if kg not in properties:
                         properties[kg] = {}
-                    properties[kg][name] = value
+                    properties[kg][name] = obj_id
 
                 index = None
                 if self._disable_sparql_constraint:
@@ -287,8 +288,8 @@ class SPARQLGenerator(TextProcessor):
                 if match is not None:
                     obj_type = match.group(1)
                     kg = match.group(2)
-                    index = (obj_type, kg)
                     initial_prefix = last_decoded[match.end():]
+                    index = (obj_type, kg, initial_prefix)
 
                     try:
                         constraint = ContinuationConstraint(
