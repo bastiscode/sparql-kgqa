@@ -236,6 +236,7 @@ class SPARQLGenerator(TextProcessor):
 
         initial_length = len(initial_token_ids)
         constraint = None
+        is_exact = self._exact or self._force_exact
 
         while (
             (len(decoded_token_ids) == 0
@@ -266,10 +267,13 @@ class SPARQLGenerator(TextProcessor):
                 match = START_PATTERN.search(last_decoded)
                 if match is not None:
                     index = (match.group(1), match.group(2))
-                    if not self._exact or self._force_exact:
+                    if not is_exact:
                         last_output = self.tokenizer.tokenize(
                             last_decoded[:match.end()]
                         ).token_ids
+
+            decoded_token_ids.extend(last_output)
+            last_output = []
 
             def beam_stop_fn(beam: Beam) -> bool:
                 return sparql_stop_fn(beam.token_ids)
@@ -300,8 +304,6 @@ class SPARQLGenerator(TextProcessor):
                 constraint.reset(decoded_string.encode())
 
             i = 0
-            decoded_token_ids.extend(last_output)
-            last_output = []
             for output, const in self._partial_inference(
                 decode_fn,
                 initial_token_ids + decoded_token_ids,
