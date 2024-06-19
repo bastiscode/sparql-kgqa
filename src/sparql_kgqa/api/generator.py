@@ -268,7 +268,7 @@ class SPARQLGenerator(TextProcessor):
                     if not self._exact or self._force_exact:
                         decoded_token_ids = self.tokenizer.tokenize(
                             decoded[:match.end()]
-                        )
+                        ).token_ids
 
             def beam_stop_fn(beam: Beam) -> bool:
                 return sparql_stop_fn(beam.token_ids)
