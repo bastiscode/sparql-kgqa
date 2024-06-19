@@ -208,6 +208,12 @@ class SPARQLGenerator(TextProcessor):
             pattern = START_PATTERN if index is None else END_PATTERN
             return pattern.search(decoded) is not None
 
+        def beam_stop_fn(beam: Beam) -> bool:
+            return sparql_stop_fn(beam.token_ids)
+
+        def token_stop_fn(token_ids: torch.Tensor, _: int) -> bool:
+            return sparql_stop_fn(token_ids.tolist())
+
         # decode fn gets in token ids and additional kwargs,
         # and return logits over next tokens and additional info
         def decode_fn(
@@ -237,15 +243,16 @@ class SPARQLGenerator(TextProcessor):
                 for cache in info["kv_cache"]
             )
 
-        constraint = None
-        is_exact = self._exact or self._force_exact
-        pfx = self.tokenizer.num_prefix_tokens()
-        sfx = self.tokenizer.num_suffix_tokens()
+        if self._disable_sparql_constraint:
+            constraint = None
+        else:
+            self._sparql_constraint.reset()
+            constraint = self._sparql_constraint
 
         while (
-            (len(last_output) == 0
-             or last_output[-1] != self._eos_token_id)
-            and length() + len(last_output) < self.max_length
+            (len(decoded_token_ids) == 0
+             or decoded_token_ids[-1] != self._eos_token_id)
+            and length() < self.max_length
         ):
             last_decoded = self.tokenizer.de_tokenize(last_output)
             if index is not None:
@@ -266,29 +273,35 @@ class SPARQLGenerator(TextProcessor):
                     properties[kg][name] = value
 
                 index = None
+                if self._disable_sparql_constraint:
+                    constraint = None
+                else:
+                    decoded_string = self.tokenizer.de_tokenize(
+                        decoded_token_ids
+                    )
+                    constraint = self._sparql_constraint
+                    constraint.reset(decoded_string.encode())
 
             else:
                 match = START_PATTERN.search(last_decoded)
                 if match is not None:
-                    index = (match.group(1), match.group(2))
-                    if not is_exact and match.end() < len(last_decoded):
-                        last_output = self.tokenizer.tokenize(
-                            last_decoded[:match.end()]
-                        ).token_ids
-                        last_output = last_output[
-                            pfx:len(last_output)-sfx
-                        ]
+                    kg = match.group(2)
+                    initial_prefix = last_decoded[match.end():]
+                    if match.group(1) == "kge":
+                        index = self._entity_indices[kg]
                     else:
-                        assert match.end() == len(last_decoded)
+                        index = self._property_indices[kg]
 
-            decoded_token_ids.extend(last_output)
-            last_output = []
-
-            def beam_stop_fn(beam: Beam) -> bool:
-                return sparql_stop_fn(beam.token_ids)
-
-            def token_stop_fn(token_ids: torch.Tensor, _: int) -> bool:
-                return sparql_stop_fn(token_ids.tolist())
+                    try:
+                        constraint = ContinuationConstraint(
+                            index,
+                            initial_prefix.encode()
+                        )
+                    except Exception:
+                        # initial prefix no valid prefix
+                        # should only happen with non exact
+                        # SPARQL constraint
+                        break
 
             if self._beam_width > 1 and index is not None:
                 stop_fn = beam_stop_fn
@@ -297,21 +310,7 @@ class SPARQLGenerator(TextProcessor):
                 beam_width = 1
                 stop_fn = token_stop_fn
 
-            if index is not None and index[0] == "kge":
-                constraint = ContinuationConstraint(
-                    self._entity_indices[index[1]]
-                )
-            elif index is not None and index[0] == "kgp":
-                constraint = ContinuationConstraint(
-                    self._property_indices[index[1]]
-                )
-            elif self._disable_sparql_constraint:
-                constraint = None
-            else:
-                decoded_string = self.tokenizer.de_tokenize(decoded_token_ids)
-                constraint = self._sparql_constraint
-                constraint.reset(decoded_string.encode())
-
+            last_output = []
             for output, const in self._partial_inference(
                 decode_fn,
                 initial_token_ids + decoded_token_ids,
@@ -323,6 +322,8 @@ class SPARQLGenerator(TextProcessor):
                 yield decoded_token_ids + output
                 last_output = output
                 constraint = const
+
+            decoded_token_ids.extend(last_output)
 
     def _partial_inference(
         self,
