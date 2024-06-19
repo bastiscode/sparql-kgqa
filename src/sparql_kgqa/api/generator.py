@@ -182,12 +182,11 @@ class SPARQLGenerator(TextProcessor):
         properties: dict[str, dict[str, str]]
     ) -> Iterator[Any]:
         decoded_token_ids = []
-        last_output = []
 
         kgs = list(self._entity_indices)
         kgs = "|".join(re.escape(kg) for kg in kgs)
-        START_PATTERN = re.compile(f"<(kg(?:e|p)) kg='({kgs})'>$")
-        END_PATTERN = re.compile("</kg(?:e|p)>$")
+        START_PATTERN = re.compile(f"<(kg(?:e|p)) kg='({kgs})'>")
+        END_PATTERN = re.compile("</kg(?:e|p)>")
 
         index: tuple[str, str] | None = None
 
@@ -242,11 +241,11 @@ class SPARQLGenerator(TextProcessor):
              or decoded_token_ids[-1] != self._eos_token_id)
             and initial_length + len(decoded_token_ids) < self.max_length
         ):
-            last_string = self.tokenizer.de_tokenize(last_output)
+            decoded = self.tokenizer.de_tokenize(decoded_token_ids)
             if index is not None:
-                match = END_PATTERN.search(last_string)
+                match = END_PATTERN.search(decoded)
                 assert match is not None
-                name = last_string[:match.start()]
+                name = decoded[:match.start()]
                 assert isinstance(constraint, ContinuationConstraint)
                 value = constraint.get_value()
                 assert value is not None
@@ -263,9 +262,13 @@ class SPARQLGenerator(TextProcessor):
                 index = None
 
             else:
-                match = START_PATTERN.search(last_string)
+                match = START_PATTERN.search(decoded)
                 if match is not None:
                     index = (match.group(1), match.group(2))
+                    if not self._exact or self._force_exact:
+                        decoded_token_ids = self.tokenizer.tokenize(
+                            decoded[:match.end()]
+                        )
 
             def beam_stop_fn(beam: Beam) -> bool:
                 return sparql_stop_fn(beam.token_ids)
