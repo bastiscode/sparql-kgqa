@@ -111,8 +111,7 @@ class SPARQLGenerator(TextProcessor):
 
         # continuations are the postprocessed tokens from the vocab
         # (already sorted by token id)
-        self._initial_continuations = self.tokenizer.get_continuations(True)
-        self._continuations = self.tokenizer.get_continuations(False)
+        self._continuations = self.tokenizer.get_continuations(initial=False)
         self._sampling_strategy = "greedy"
         self._beam_width = 1
         self._temp = 1.0
@@ -491,7 +490,7 @@ class SPARQLGenerator(TextProcessor):
             property_index = ContIndex.load_with_continuations(
                 os.path.join(data, "index.tsv"),
                 index,
-                vocab,
+                self._continuations,
                 common_suffix=self.cfg["inference"].get(
                     "property_suffix",
                     "</kgp>"
@@ -512,7 +511,7 @@ class SPARQLGenerator(TextProcessor):
         kgs = list(self._entity_indices)
         self._sparql_constraint = load_sparql_constraint(
             kgs,
-            vocab,
+            self._continuations,
             self._exact or self._force_exact
         )
         self._sparql_parser = load_sparql_parser(kgs)
