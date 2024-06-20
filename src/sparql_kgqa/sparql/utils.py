@@ -949,6 +949,7 @@ def autocomplete_prefix(
         prefix += f" ?{var} ."
 
     # keep track of brackets in the following stack
+    has_iri = False
     brackets = []
     for (token, _) in parser.lex(prefix):
         if token == "{" or token == "(":
@@ -961,6 +962,13 @@ def autocomplete_prefix(
                 raise RuntimeError("unbalanced brackets")
             elif token == ")" and last != "(":
                 raise RuntimeError("unbalanced brackets")
+        elif token in ["IRIREF", "PNAME_LN", "PNAME_NS", "KGE", "KGP"]:
+            has_iri = True
+
+    if not has_iri:
+        # means we have a prefix but with only vars,
+        # which is not useful for autocomplete
+        return None
 
     # apply brackets in reverse order
     for bracket in reversed(brackets):

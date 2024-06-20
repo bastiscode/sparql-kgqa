@@ -103,13 +103,16 @@ class SPARQLGenerator(TextProcessor):
 
         # some options for inference
         self._eos_token = self.cfg["inference"]["eos"]
-        self._eos_token_id = self.tokenizer.special_token_to_id(
+        self._eos_token_id = self.tokenizer.token_to_id(
             self._eos_token
         )
+        assert self._eos_token_id is not None, \
+            f"token {self._eos_token} not in tokenizer"
 
-        # continuations are the tokens from the vocab
+        # continuations are the postprocessed tokens from the vocab
         # (already sorted by token id)
-        self._continuations = self.tokenizer.get_vocab()
+        self._initial_continuations = self.tokenizer.get_continuations(True)
+        self._continuations = self.tokenizer.get_continuations(False)
         self._sampling_strategy = "greedy"
         self._beam_width = 1
         self._temp = 1.0
@@ -123,7 +126,7 @@ class SPARQLGenerator(TextProcessor):
         self._force_exact = False
         self._sparql_constraint = load_sparql_constraint(
             [],
-            self.tokenizer.get_vocab(),
+            self._continuations,
             self._exact or self._force_exact
         )
         self._disable_sparql_constraint = False
@@ -462,8 +465,6 @@ class SPARQLGenerator(TextProcessor):
         if kg in self._entity_indices:
             raise ValueError(f"knowledge graph {kg} already set")
 
-        vocab = self.tokenizer.get_vocab()
-
         if entity_indices is not None:
             entity_index, entity_prefixes = entity_indices
         elif entities is not None:
@@ -471,7 +472,7 @@ class SPARQLGenerator(TextProcessor):
             entity_index = ContIndex.load_with_continuations(
                 os.path.join(data, "index.tsv"),
                 index,
-                vocab,
+                self._continuations,
                 common_suffix=self.cfg["inference"].get(
                     "entity_suffix",
                     "</kge>"
