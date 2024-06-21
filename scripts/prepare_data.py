@@ -15,7 +15,7 @@ from sparql_kgqa.sparql.utils import (
     fix_prefixes,
     replace_vars_and_special_tokens,
     preprocess_natural_language_query,
-    replace_entities_and_properties
+    replace_iris
 )
 
 
@@ -286,7 +286,7 @@ def prepare(args: argparse.Namespace):
                 )
 
                 try:
-                    sparqls, inc = replace_entities_and_properties(
+                    sparqls, inc = replace_iris(
                         sample.sparql,
                         parser,
                         ent_indices,

@@ -16,7 +16,7 @@ from sparql_kgqa.sparql.utils import (
     fix_prefixes,
     load_sparql_parser,
     replace_vars_and_special_tokens,
-    replace_entities_and_properties
+    replace_iris
 )
 
 
@@ -90,7 +90,7 @@ def prepare_file(
                 args.version
             )
 
-            sparqls_natural, inc = replace_entities_and_properties(
+            sparqls_natural, inc = replace_iris(
                 sparql,
                 parser,
                 ent_indices,

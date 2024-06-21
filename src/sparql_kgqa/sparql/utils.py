@@ -312,34 +312,28 @@ def prettify(
     return s
 
 
-def _find_with_name(
+def _find(
     parse: dict,
-    name: str,
-    skip: set | None = None
+    name: str | set[str],
+    skip: set[str] | None = None
 ) -> dict | None:
-    if skip is not None and parse["name"] in skip:
-        return None
-    if parse["name"] == name:
-        return parse
-    for child in parse.get("children", []):
-        t = _find_with_name(child, name)
-        if t is not None:
-            return t
-    return None
+    return next(_find_all(parse, name, skip), None)
 
 
-def _find_all_with_name(
+def _find_all(
     parse: dict,
-    name: str,
-    skip: set | None = None
+    name: str | set[str],
+    skip: set[str] | None = None
 ) -> Iterator[dict]:
     if skip is not None and parse["name"] in skip:
         return
-    if parse["name"] == name:
+    elif isinstance(name, str) and parse["name"] == name:
         yield parse
-        return
-    for child in parse.get("children", []):
-        yield from _find_all_with_name(child, name)
+    elif isinstance(name, set) and parse["name"] in name:
+        yield parse
+    else:
+        for child in parse.get("children", []):
+            yield from _find_all(child, name, skip)
 
 
 _CLEAN_PATTERN = re.compile(r"\s+", flags=re.MULTILINE)
@@ -352,32 +346,25 @@ def clean(s: str) -> str:
 def preprocess_natural_language_query(
     query: str,
     kgs: list[str],
-    info: str | None,
-    examples: list[tuple[str, str]] | None
+    info: str | None = None,
+    examples: list[tuple[str, str]] | None = None
 ) -> str:
     if len(kgs) == 0:
-        kgs = ["None specified"]
+        kg_str = "None"
+    else:
+        kg_str = "\n".join(kgs)
 
     if examples is None or len(examples) == 0:
-        example_list = ""
+        example_str = "None"
     else:
-        example_list = "\n"
-
-        for i, (query, sparql) in enumerate(examples):
-            if len(examples) > 1:
-                example_list += f"{i+1}. "
-            example_list += f"Example:\n{clean(query)}\n{clean(sparql)}"
-            if i < len(examples) - 1:
-                example_list += "\n\n"
-
-        example_list += "\n"
+        example_str = "\n" + "\n\n".join(
+            f"{i+1}. Example:\n{clean(query)}\n{clean(sparql)}"
+            for i, (query, sparql) in enumerate(examples)
+        ) + "\n"
 
     if info is None or info.strip() == "":
-        info = ""
-    else:
-        info = f"\nAdditional information / guidance:\n{info}\n"
+        info = "None"
 
-    kg_list = "\n".join(kgs)
     return f"""\
 Task:
 SPARQL query generation over the specified knowledge graphs given a natural \
@@ -385,11 +372,17 @@ language query, optional additional information / guidance, and optional \
 examples of query and SPARQL pairs.
 
 Knowledge graphs:
-{kg_list}
+{kg_str}
 
 Query:
 {query}
-{info}{example_list}
+
+Additional information / guidance:
+{info}
+
+Examples:
+{example_str}
+
 SPARQL:
 """
 
@@ -397,20 +390,22 @@ SPARQL:
 _KG_PATTERN = re.compile("^<kg(?:e|p) kg='(\\w*)'>(.*?)</kg(?:e|p)>$")
 
 
-def postprocess_sparql_query(
+def replace_entities_and_properties(
     sparql: str,
     parser: grammar.LR1Parser,
     entities: dict[str, dict[str, str]],
     properties: dict[str, dict[str, str]],
-    prefixes: dict[str, str],
-    pretty: bool = False,
 ) -> str:
     try:
-        parse = parser.parse(sparql, skip_empty=True, collapse_single=True)
+        parse = parser.parse(
+            sparql,
+            skip_empty=True,
+            collapse_single=True
+        )
     except RuntimeError:
         return sparql
 
-    for entity in _find_all_with_name(parse, "KGE"):
+    for entity in _find_all(parse, "KGE"):
         val = entity["value"]
         kg_match = _KG_PATTERN.search(val)
         assert kg_match is not None
@@ -423,7 +418,7 @@ def postprocess_sparql_query(
             continue
         entity["value"] = "<" + kg_entities[value] + ">"
 
-    for prop in _find_all_with_name(parse, "KGP"):
+    for prop in _find_all(parse, "KGP"):
         val = prop["value"]
         kg_match = _KG_PATTERN.search(val)
         assert kg_match is not None
@@ -436,7 +431,23 @@ def postprocess_sparql_query(
             continue
         prop["value"] = "<" + kg_properties[value] + ">"
 
-    sparql = _parse_to_string(parse)
+    return _parse_to_string(parse)
+
+
+def postprocess_sparql_query(
+    sparql: str,
+    parser: grammar.LR1Parser,
+    entities: dict[str, dict[str, str]],
+    properties: dict[str, dict[str, str]],
+    prefixes: dict[str, str],
+    pretty: bool = False,
+) -> str:
+    sparql = replace_entities_and_properties(
+        sparql,
+        parser,
+        entities,
+        properties
+    )
     sparql = fix_prefixes(sparql, parser, prefixes)
     if pretty:
         sparql = prettify(sparql, parser)
@@ -488,7 +499,7 @@ def ask_to_select(
 ) -> str | None:
     parse = parser.parse(sparql, skip_empty=False, collapse_single=False)
 
-    sub_parse = _find_with_name(parse, "QueryType")
+    sub_parse = _find(parse, "QueryType")
     assert sub_parse is not None
 
     ask_query = sub_parse["children"][0]
@@ -501,13 +512,13 @@ def ask_to_select(
         ask_var = next(
             filter(
                 lambda p: p["children"][0]["value"] == var,
-                _find_all_with_name(sub_parse, "Var", skip={"SubSelect"})
+                _find_all(sub_parse, "Var", skip={"SubSelect"})
             ),
             None
         )
         assert ask_var is not None, "could not find specified var"
     else:
-        ask_var = _find_with_name(sub_parse, "Var", skip={"SubSelect"})
+        ask_var = _find(sub_parse, "Var", skip={"SubSelect"})
 
     if ask_var is not None:
         var = ask_var["children"][0]["value"]
@@ -537,7 +548,7 @@ def ask_to_select(
     # and introduce own var
     # generate unique var name with uuid
     var = f"?{uuid.uuid4().hex}"
-    iri = _find_with_name(sub_parse, "iri", skip={"SubSelect"})
+    iri = _find(sub_parse, "iri", skip={"SubSelect"})
     assert iri is not None, "could not find an iri in ask query"
 
     child = iri["children"][0]
@@ -551,7 +562,7 @@ def ask_to_select(
         raise ValueError(f"unsupported iri format {iri}")
 
     where_clause = ask_query["children"][2]
-    group_graph_pattern = _find_with_name(
+    group_graph_pattern = _find(
         where_clause,
         "GroupGraphPattern",
         skip={"SubSelect"}
@@ -710,20 +721,20 @@ def fix_prefixes(
     """
     parse = parser.parse(sparql, skip_empty=False, collapse_single=True)
 
-    prologue = _find_with_name(parse, "Prologue")
+    prologue = _find(parse, "Prologue")
     assert prologue is not None
 
-    base_decls = list(_find_all_with_name(prologue, "BaseDecl"))
+    base_decls = list(_find_all(prologue, "BaseDecl"))
 
     exist = {}
-    for prefix_decl in _find_all_with_name(prologue, "PrefixDecl"):
+    for prefix_decl in _find_all(prologue, "PrefixDecl"):
         assert len(prefix_decl["children"]) == 3
         short = prefix_decl["children"][1]["value"]
         long = prefix_decl["children"][2]["value"][1:-1]
         exist[short] = long
 
     seen = set()
-    for iri in _find_all_with_name(parse, "IRIREF"):
+    for iri in _find_all(parse, "IRIREF"):
         value = iri["value"]
         val = value[1:-1]
         for short, long in prefixes.items():
@@ -732,7 +743,7 @@ def fix_prefixes(
                 seen.add(short)
                 break
 
-    for prefix_name in _find_all_with_name(parse, "PNAME_LN"):
+    for prefix_name in _find_all(parse, "PNAME_LN"):
         val = prefix_name["value"]
         val = val[:val.find(":") + 1]
         seen.add(val)
@@ -779,17 +790,17 @@ def replace_vars_and_special_tokens(
         return sparql
 
     parse = parser.parse(sparql, skip_empty=True, collapse_single=True)
-    for var in _find_all_with_name(parse, "VAR1"):
+    for var in _find_all(parse, "VAR1"):
         var["value"] = f"<bov>{var['value'][1:]}<eov>"
 
-    for var in _find_all_with_name(parse, "VAR2"):
+    for var in _find_all(parse, "VAR2"):
         var["value"] = f"<bov>{var['value'][1:]}<eov>"
 
     # replace brackets {, and } with <bob> and <eob>
-    for bracket in _find_all_with_name(parse, "{"):
+    for bracket in _find_all(parse, "{"):
         bracket["value"] = "<bob>"
 
-    for bracket in _find_all_with_name(parse, "}"):
+    for bracket in _find_all(parse, "}"):
         bracket["value"] = "<eob>"
 
     return _parse_to_string(parse)
@@ -809,7 +820,7 @@ def format_prop(prop: str, version: str, kg: str) -> str:
         return f"<bop>{prop}<eop>"
 
 
-def replace_entities_and_properties(
+def replace_iris(
     sparql: str,
     parser: grammar.LR1Parser,
     entity_indices: dict[str, KgIndex],
@@ -873,7 +884,7 @@ def replace_entities_and_properties(
         empty = True
         ident = False
         incomplete = False
-        for obj in _find_all_with_name(parse, "iri"):
+        for obj in _find_all(parse, "iri"):
             child = obj["children"][0]
             if child["name"] == "PrefixedName":
                 val = child["children"][0]["value"]
@@ -912,7 +923,7 @@ def replace_entities_and_properties(
     return sparqls, incomplete
 
 
-_PREFIX_KG_PATTERN = re.compile(r"<kg(e|p) kg='(.*?)'>$")
+_KG_PREFIX_PATTERN = re.compile(r"<kg(?:e|p) kg='(.*?)'>")
 
 
 def autocomplete_prefix(
@@ -932,50 +943,81 @@ def autocomplete_prefix(
     E.g. for "SELECT ?x WHERE { wd:Q5 <kgp kg='wikidata'>"
     the function would return ["wdt:P31", "wdt:P21", ...].
     """
-    match = _PREFIX_KG_PATTERN.search(prefix)
-    if match is None:
+    matches = list(_KG_PREFIX_PATTERN.finditer(prefix))
+    if len(matches) == 0 or matches[-1].end() != len(prefix):
         return None
 
+    match = matches[-1]
     prefix = prefix[:match.start()]
-    obj_type = match.group(1)
-    kg = match.group(2)
+    kg = match.group(1)
 
-    if obj_type == "p":
-        var = uuid.uuid4().hex
-        obj_var = uuid.uuid4().hex
-        prefix += f" ?{var} ?{obj_var} ."
-    else:
-        var = uuid.uuid4().hex
-        prefix += f" ?{var} ."
+    parse = parser.prefix_parse(
+        prefix.encode(),
+        skip_empty=False,
+        collapse_single=True
+    )
 
-    # keep track of brackets in the following stack
-    has_iri = False
-    brackets = []
-    for (token, _) in parser.lex(prefix):
-        if token == "{" or token == "(":
-            brackets.append(token)
-        elif token == "}" or token == ")":
-            if len(brackets) == 0:
-                raise RuntimeError("unbalanced brackets")
-            last = brackets.pop()
-            if token == "}" and last != "{":
-                raise RuntimeError("unbalanced brackets")
-            elif token == ")" and last != "(":
-                raise RuntimeError("unbalanced brackets")
-        elif token in ["IRIREF", "PNAME_LN", "PNAME_NS", "KGE", "KGP"]:
-            has_iri = True
-
-    if not has_iri:
-        # means we have a prefix but with only vars,
-        # which is not useful for autocomplete
+    # determine current position in the query:
+    # subject, predicate or object
+    triple_blocks = list(_find_all(
+        parse,
+        "TriplesSameSubjectPath",
+    ))
+    if len(triple_blocks) == 0:
+        # without triples the knowledge graph can not be
+        # constrained
         return None
 
-    # apply brackets in reverse order
-    for bracket in reversed(brackets):
-        if bracket == "{":
-            prefix += " }"
-        else:
-            prefix += " )"
+    last_triple = triple_blocks[-1]
+    # the last triple block
+    assert len(last_triple["children"]) == 2
+    first, second = last_triple["children"]
+    if second["name"] != "PropertyListPathNotEmpty":
+        return None
+
+    var = uuid.uuid4().hex
+    assert len(second["children"]) == 3
+    if _parse_to_string(second["children"][1]) != "":
+        # subject can always be any iri
+        return None
+
+    elif _parse_to_string(second["children"][0]) != "":
+        # object
+        second["children"][1] = {"name": "VAR1", "value": f"?{var}"}
+
+    elif _parse_to_string(first) != "":
+        # property
+        second["children"][0] = {"name": "VAR1", "value": f"?{var}"}
+        obj_var = uuid.uuid4().hex
+        second["children"][1] = {"name": "VAR1", "value": f"?{obj_var}"}
+
+    else:
+        # unexpected case
+        return None
+
+    if _find(
+        parse,
+        {
+            "PNAME_LN",
+            "IRIREF",
+            "KGE",
+            "KGP"
+        },
+        skip={"SubSelect"}
+    ) is None:
+        # means we have a prefix but with only vars,
+        # which is not useful for autocomplete since only
+        # iris constrain the knowledge graph
+        return None
+
+    # fix all future brackets
+    for item in _find_all(
+        parse,
+        {"{", "}", "(", ")", "."},
+    ):
+        item["value"] = item["name"]
+
+    prefix = _parse_to_string(parse)
 
     select = ask_to_select(prefix, parser, var=f"?{var}", distinct=True)
     if select is not None:
@@ -984,7 +1026,7 @@ def autocomplete_prefix(
         # query is not an ask query, replace
         # the selected vars with our own
         parse = parser.parse(prefix, skip_empty=False, collapse_single=False)
-        sel_clause = _find_with_name(parse, "SelectClause", skip={"SubSelect"})
+        sel_clause = _find(parse, "SelectClause", skip={"SubSelect"})
         assert sel_clause is not None, "could not find select clause"
         sel_clause["children"] = [
             {
@@ -1002,9 +1044,11 @@ def autocomplete_prefix(
         ]
         prefix = _parse_to_string(parse)
 
-    prefix = fix_prefixes(
+    prefix = postprocess_sparql_query(
         prefix,
         parser,
+        entities,
+        properties,
         prefixes
     )
     result = query_qlever(
@@ -1014,12 +1058,12 @@ def autocomplete_prefix(
         qlever_endpoint
     )
     assert isinstance(result, SelectResult)
-    next = []
+    uris = []
     for r in result.results:
         record = r[var]
         if record is None:
             continue
         elif record.data_type != "uri":
             continue
-        next.append(record.value)
-    return next
+        uris.append(record.value)
+    return uris
