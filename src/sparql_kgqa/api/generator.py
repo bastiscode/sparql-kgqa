@@ -33,6 +33,7 @@ from sparql_kgqa.model import (
     peft_model_from_config
 )
 from sparql_kgqa.sparql.utils import (
+    subgraph_constraint,
     general_prefixes,
     load_prefixes,
     load_sparql_constraint,
@@ -129,6 +130,7 @@ class SPARQLGenerator(TextProcessor):
             self._exact or self._force_exact
         )
         self._disable_sparql_constraint = False
+        self._disable_subgraph_constraint = False
         self._sparql_parser = load_sparql_parser([])
 
         self.model = self.model.compile(
@@ -293,11 +295,41 @@ class SPARQLGenerator(TextProcessor):
                     initial_prefix = last_decoded[match.end():]
                     index = (obj_type, kg, initial_prefix)
 
+                    if obj_type == "e":
+                        kg_index = self._entity_indices[kg]
+                    else:
+                        kg_index = self._property_indices[kg]
+
+                    decoded_string = self.tokenizer.de_tokenize(
+                        decoded_token_ids
+                    )
+                    *_, last = START_PATTERN.finditer(decoded_string)
+                    if last is not None:
+                        decoded_string = decoded_string[:last.end()]
+
+                    values = None
+                    if not self._disable_subgraph_constraint:
+                        try:
+                            values = subgraph_constraint(
+                                decoded_string,
+                                self._sparql_parser,
+                                entities,
+                                properties,
+                                self._prefixes,
+                                limit=8193
+                            )
+                        except Exception:
+                            # keep none values, which means
+                            # no subgraph constraint
+                            pass
+
+                    if values is not None and 0 < len(values) <= 8192:
+                        kg_index = kg_index.sub_index_by_values(values)
+
                     try:
                         constraint = ContinuationConstraint(
-                            self._entity_indices[kg] if obj_type == "e"
-                            else self._property_indices[kg],
-                            initial_prefix.encode()
+                            kg_index,
+                            initial_prefix.encode(),
                         )
                     except Exception:
                         # initial prefix no valid prefix
@@ -527,6 +559,7 @@ class SPARQLGenerator(TextProcessor):
         use_cache: bool = False,
         full_outputs: bool = False,
         disable_sparql_constraint: bool = False,
+        disable_subgraph_constraint: bool = False,
         force_exact: bool = False
     ) -> None:
         assert sampling_strategy in ["greedy", "top_k", "top_p"]
@@ -539,6 +572,7 @@ class SPARQLGenerator(TextProcessor):
         self._use_cache = use_cache
         self._full_outputs = full_outputs
         self._disable_sparql_constraint = disable_sparql_constraint
+        self._disable_subgraph_constraint = disable_subgraph_constraint
         self._force_exact = force_exact
 
     def generate(

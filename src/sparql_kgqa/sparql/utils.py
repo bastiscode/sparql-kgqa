@@ -926,13 +926,14 @@ def replace_iris(
 _KG_PREFIX_PATTERN = re.compile(r"<kg(?:e|p) kg='(.*?)'>")
 
 
-def autocomplete_prefix(
+def subgraph_constraint(
     prefix: str,
     parser: grammar.LR1Parser,
     entities: dict[str, dict[str, str]],
     properties: dict[str, dict[str, str]],
     prefixes: dict[str, str],
-    qlever_endpoint: str | None = None
+    qlever_endpoint: str | None = None,
+    limit: int | None = None
 ) -> list[str] | None:
     """
     Autocomplete the SPARQL query prefix,
@@ -1042,6 +1043,28 @@ def autocomplete_prefix(
                 'value': f"?{var}"
             }
         ]
+        prefix = _parse_to_string(parse)
+
+    if limit is not None:
+        # find solution modifier and add limit clause
+        parse = parser.parse(
+            prefix,
+            skip_empty=False,
+            collapse_single=False
+        )
+        limit_clause = _find(
+            parse,
+            "LimitOffsetClausesOptional",
+            skip={"SubSelect"}
+        )
+        assert limit_clause is not None, \
+            "could not find limit clause"
+        assert "children" not in limit_clause, \
+            "limit clause should be empty"
+        limit_clause["children"] = [{
+            "name": "LimitClause",
+            "value": f"LIMIT {limit}"
+        }]
         prefix = _parse_to_string(parse)
 
     prefix = postprocess_sparql_query(

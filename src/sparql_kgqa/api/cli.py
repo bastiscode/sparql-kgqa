@@ -4,6 +4,7 @@ import random
 import argparse
 from typing import Iterable, Iterator
 
+import torch
 from tqdm import tqdm
 
 from text_utils.api.cli import TextProcessingCli
@@ -37,6 +38,7 @@ class SPARQLGenerationCli(TextProcessingCli):
             use_cache=self.args.kv_cache,
             full_outputs=self.args.full_outputs,
             disable_sparql_constraint=self.args.no_sparql_constraint,
+            disable_subgraph_constraint=self.args.no_subgraph_constraint,
             force_exact=self.args.force_exact
         )
 
@@ -224,6 +226,11 @@ def main():
         help="Whether to remove SPARQL grammar constraint"
     )
     parser.add_argument(
+        "--no-subgraph-constraint",
+        action="store_true",
+        help="Whether to remove SPARQL subgraph constraint"
+    )
+    parser.add_argument(
         "--pretty",
         action="store_true",
         help="Whether to pretty format SPARQL during postprocessing"
@@ -231,7 +238,7 @@ def main():
     parser.add_argument(
         "--force-exact",
         action="store_true",
-        help="Whether to force using a exact SPARQL constraint"
+        help="Whether to force using an exact terminal-level SPARQL constraint"
     )
     parser.add_argument(
         "--seed",
@@ -242,6 +249,8 @@ def main():
     args = parser.parse_args()
     if args.seed is not None:
         random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
     # set default device to auto if not set
     # (different from underlying library which sets a single gpu as default)
     args.device = args.device or "auto"
