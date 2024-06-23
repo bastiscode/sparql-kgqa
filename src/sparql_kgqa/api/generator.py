@@ -616,11 +616,14 @@ class SPARQLGenerator(TextProcessor):
             yield sparql
 
         if postprocess:
-            yield postprocess_sparql_query(
-                sparql,
-                self._sparql_parser,
-                entities,
-                properties,
-                self._prefixes,
-                pretty
-            )
+            try:
+                yield postprocess_sparql_query(
+                    sparql,
+                    self._sparql_parser,
+                    entities,
+                    properties,
+                    self._prefixes,
+                    pretty
+                )
+            except Exception:
+                yield sparql
