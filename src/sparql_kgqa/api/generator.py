@@ -1,6 +1,7 @@
 from typing import Any, Iterator
 import re
 import os
+import copy
 
 import torch
 from torch import nn
@@ -177,6 +178,225 @@ class SPARQLGenerator(TextProcessor):
             s += template.get("end", "")
 
         return data.InferenceData(text, {})
+
+    @torch.inference_mode()
+    def _live_inference(
+        self,
+        batch: data.InferenceBatch
+    ) -> Iterator[list[Beam]]:
+        kgs = list(self._entity_indices)
+        kgs = "|".join(re.escape(kg) for kg in kgs)
+        START_PATTERN = re.compile(f"<kg(e|p) kg='({kgs})'>")
+        END_PATTERN = re.compile("</kg(?:e|p)>")
+
+        # decode fn gets in token ids and additional kwargs,
+        # and return logits over next tokens and additional info
+        def decode_fn(
+            token_ids: torch.Tensor,
+            **kwargs: Any
+        ) -> tuple[torch.Tensor, dict[str, Any]]:
+            assert isinstance(self.model, PretrainedDecoder)
+            dec, cache = self.model.decode(
+                token_ids,
+                kwargs["lengths"],
+                kwargs.get("kv_cache", None),
+                self._use_cache
+            )
+            return dec, {"kv_cache": cache}
+
+        def kwargs_update_fn(
+            kwargs: dict[str, Any],
+            info: dict[str, Any],
+            mask: torch.Tensor
+        ) -> None:
+            kv_cache = info.get("kv_cache", None)
+            if kv_cache is None:
+                return
+
+            kwargs["kv_cache"] = tuple(
+                tuple(c[mask.to(c.device)] for c in cache)
+                for cache in info["kv_cache"]
+            )
+
+        self._sparql_constraint.reset()
+
+        beams = []
+        for token_ids in batch.token_ids():
+            beam = Beam(
+                token_ids,
+                [0.0] * len(token_ids),
+                {
+                    "index": None,
+                    "initial_length": len(token_ids),
+                    "start_at": len(token_ids),
+                    "constraint": None if self._disable_sparql_constraint
+                    else self._sparql_constraint.clone(),
+                    "entities": {},
+                    "properties": {}
+                }
+            )
+            beams.append(beam)
+
+        def stop_fn(beam: Beam) -> bool:
+            return beam.token_ids[-1] == self._eos_token_id
+
+        def update_fn(beam: Beam, token_id: int, log_p: float) -> Beam | None:
+            beam = Beam.from_beam(beam, token_id, log_p)
+            if stop_fn(beam):
+                # do not update anything if beam will be stopped anyway
+                return beam
+
+            # copy entities and properties between beams
+            beam.info["entites"] = copy.deepcopy(beam.info["entities"])
+            beam.info["properties"] = copy.deepcopy(beam.info["properties"])
+
+            const = beam.info["constraint"]
+            if const is not None:
+                if const.is_invalid():
+                    # return None if constraint is invalid
+                    return None
+
+                # clone constraint and update it
+                const = const.clone()
+                const.next(token_id)
+                beam.info["constraint"] = const
+
+            entities = beam.info["entities"]
+            properties = beam.info["properties"]
+            index = beam.info["index"]
+
+            last_decoded = self.tokenizer.de_tokenize(
+                beam.token_ids[beam.info["start_at"]:]
+            )
+            if index is not None:
+                match = END_PATTERN.search(last_decoded)
+                if match is None:
+                    return beam
+
+                name = last_decoded[:match.start()]
+                assert isinstance(const, ContinuationConstraint)
+                obj_id = const.get_value()
+                assert obj_id is not None
+                obj_type, kg, initial_prefix = index
+                name = initial_prefix + name
+                if obj_type == "e":
+                    if kg not in entities:
+                        entities[kg] = {}
+                    entities[kg][name] = obj_id
+                else:
+                    if kg not in properties:
+                        properties[kg] = {}
+                    properties[kg][name] = obj_id
+
+                if self._disable_sparql_constraint:
+                    beam.info["constraint"] = None
+                else:
+                    decoded_string = self.tokenizer.de_tokenize(
+                        beam.token_ids[beam.info["initial_length"]:]
+                    )
+                    beam.info["constraint"] = self._sparql_constraint.clone()
+                    beam.info["constraint"].reset(decoded_string.encode())
+
+                beam.info["index"] = None
+                beam.info["start_at"] = len(beam.token_ids)
+
+                return beam
+
+            match = START_PATTERN.search(last_decoded)
+            if match is None or len(self._entity_indices) == 0:
+                # no start pattern found or no indices set
+                return beam
+
+            obj_type = match.group(1)
+            kg = match.group(2)
+            initial_prefix = last_decoded[match.end():]
+            beam.info["index"] = (obj_type, kg, initial_prefix)
+            beam.info["start_at"] = len(beam.token_ids)
+
+            if obj_type == "e":
+                kg_index = self._entity_indices[kg]
+            else:
+                kg_index = self._property_indices[kg]
+
+            decoded_string = self.tokenizer.de_tokenize(
+                beam.token_ids[beam.info["initial_length"]:]
+            )
+            *_, last = START_PATTERN.finditer(decoded_string)
+            decoded_string = decoded_string[:last.end()]
+
+            values = None
+            if not self._disable_subgraph_constraint:
+                try:
+                    values = subgraph_constraint(
+                        decoded_string,
+                        self._sparql_parser,
+                        entities,
+                        properties,
+                        self._prefixes,
+                        limit=8193
+                    )
+                except Exception:
+                    # keep none values, which means
+                    # no subgraph constraint
+                    pass
+
+            if values is not None and 0 < len(values) <= 8192:
+                kg_index = kg_index.sub_index_by_values(values)
+
+            try:
+                beam.info["constraint"] = ContinuationConstraint(
+                    kg_index,
+                    initial_prefix.encode(),
+                )
+            except Exception:
+                # initial prefix no valid prefix for kg index
+                # should only happen with non exact
+                # SPARQL constraint
+                return None
+
+            return beam
+
+        logit_fns = [
+            inference_utils.constraint_logit_fn(
+                lambda beam: beam.info.get("constraint", None),  # type: ignore
+                self._eos_token_id
+            )
+        ]
+
+        if self._sampling_strategy == "greedy":
+            sample_fn = inference_utils.beam_greedy()
+        elif self._sampling_strategy == "top_k":
+            assert self._top_k >= self._beam_width, \
+                "top k must be greater than or equal to beam width"
+            logit_fns.append(inference_utils.top_k_masking(self._top_k))
+            sample_fn = inference_utils.beam_sample()
+        else:
+            logit_fns.append(inference_utils.nucleus_masking(self._top_p))
+            sample_fn = inference_utils.beam_sample()
+
+        if self._sampling_strategy != "greedy" and self._temp != 1.0:
+            logit_fns.append(inference_utils.temperature_scaling(
+                self._temp
+            ))
+
+        for output in beam_search(
+            decode_fn=decode_fn,
+            initial=beams,
+            pad_token_id=self.tokenizer.pad_token_id(),
+            max_length=self.max_length,
+            stop_fn=stop_fn,  # type: ignore
+            device=self.devices[0],
+            normalize_by_length=True,
+            alpha=1.0,
+            beam_width=self._beam_width,
+            sample_fn=sample_fn,
+            candidate_fn=update_fn,
+            logit_fns=logit_fns,
+            kwargs_update_fn=kwargs_update_fn,
+            return_full=self._full_outputs,
+            yield_intermediate=True
+        ):
+            yield [beams[0] for beams in output]
 
     @torch.inference_mode()
     def _iterative_inference(
@@ -368,7 +588,6 @@ class SPARQLGenerator(TextProcessor):
         beam_width: int = 1,
         kwargs_update_fn: MaskUpdateFn | None = None,
     ) -> Iterator[tuple[list[int], Constraint | None]]:
-        initial_length = len(initial_token_ids)
         logit_fns = []
 
         if beam_width > 1:
@@ -385,20 +604,21 @@ class SPARQLGenerator(TextProcessor):
                     self._eos_token_id
                 ))
 
-                def _update_beam(beam: Beam, token_id: int, log_p: float):
+                def _update_beam(
+                    beam: Beam,
+                    token_id: int,
+                    log_p: float
+                ) -> Beam | None:
                     beam = Beam.from_beam(beam, token_id, log_p)
-                    beam.info["constraint"] = beam.info["constraint"].clone()
+                    const = beam.info["constraint"]
+                    if const.is_invalid():
+                        return None
+
+                    beam.info["constraint"] = const.clone()
                     if token_id == self._eos_token_id:
                         return beam
 
-                    const = beam.info["constraint"]
-                    if isinstance(const, ContinuationConstraint):
-                        decoded = self.tokenizer.de_tokenize(
-                            beam.token_ids[initial_length:]
-                        )
-                        const.reset(decoded.encode())
-                    else:
-                        beam.info["constraint"].next(token_id)
+                    beam.info["constraint"].next(token_id)
                     return beam
 
                 candidate_fn = _update_beam
@@ -590,40 +810,53 @@ class SPARQLGenerator(TextProcessor):
             1,
         ))
 
-        initial_token_ids = batch.token_ids()[0]
-        item = batch.items()[0]
+        # initial_token_ids = batch.token_ids()[0]
+        # item = batch.items()[0]
 
-        if not self._full_outputs:
-            input_text_len = len(self.tokenizer.de_tokenize(
-                item.tokenization.token_ids
-            ))
-        else:
-            input_text_len = 0
+        # if not self._full_outputs:
+        #     input_text_len = len(self.tokenizer.de_tokenize(
+        #         item.tokenization.token_ids
+        #     ))
+        # else:
+        #     input_text_len = 0
 
         yield input.text
 
-        entities = {}
-        properties = {}
-        sparql = ""
-        for output in self._iterative_inference(
-            initial_token_ids,
-            entities,
-            properties
-        ):
-            sparql = self.tokenizer.de_tokenize(
-                item.tokenization.token_ids + output
-            )[input_text_len:]
-            yield sparql
+        # entities = {}
+        # properties = {}
+        # sparql = ""
+        # for output in self._iterative_inference(
+        #     initial_token_ids,
+        #     entities,
+        #     properties
+        # ):
+        #     sparql = self.tokenizer.de_tokenize(
+        #         item.tokenization.token_ids + output
+        #     )[input_text_len:]
+        #     yield sparql
 
-        if postprocess:
-            try:
-                yield postprocess_sparql_query(
-                    sparql,
-                    self._sparql_parser,
-                    entities,
-                    properties,
-                    self._prefixes,
-                    pretty
-                )
-            except Exception:
-                yield sparql
+        best: Beam | None = None
+        for output in self._live_inference(batch):
+            best = output[0]
+            yield self.tokenizer.de_tokenize(best.token_ids)
+
+        if not postprocess:
+            return
+
+        if best is None:
+            # should not happen
+            yield input.text
+            return
+
+        sparql = self.tokenizer.de_tokenize(best.token_ids)
+        try:
+            yield postprocess_sparql_query(
+                sparql,
+                self._sparql_parser,
+                best.info["entities"],
+                best.info["properties"],
+                self._prefixes,
+                pretty
+            )
+        except Exception:
+            yield sparql
