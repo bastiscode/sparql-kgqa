@@ -835,11 +835,11 @@ def replace_iris(
     parse = parser.parse(sparql, skip_empty=True, collapse_single=False)
     org_parse = copy.deepcopy(parse)
 
-    entity_replacements = {
+    ent_off = {
         kg: collections.Counter()
         for kg in entity_indices
     }
-    property_replacements = {
+    prop_off = {
         kg: collections.Counter()
         for kg in property_indices
     }
@@ -847,7 +847,8 @@ def replace_iris(
     def _replace_obj(
         obj: str,
         indices: dict[str, KgIndex],
-        replacements: dict[str, collections.Counter],
+        offsets: dict[str, collections.Counter],
+        replacements: set[tuple[str, str]],
         is_ent: bool
     ) -> str | None:
         nkeys = {}
@@ -868,9 +869,9 @@ def replace_iris(
             if objs is None:
                 continue
 
-            idx = replacements[kg][key]
+            idx = offsets[kg][key]
             if idx < len(objs):
-                replacements[kg][key] += 1
+                replacements.add((kg, key))
                 if is_ent:
                     return format_ent(objs[idx], version, kg)
                 else:
@@ -883,6 +884,8 @@ def replace_iris(
         empty = True
         ident = False
         incomplete = False
+        ent_rep = set()
+        prop_rep = set()
         for obj in _find_all(parse, "iri"):
             child = obj["children"][0]
             if child["name"] == "PrefixedName":
@@ -893,12 +896,17 @@ def replace_iris(
 
             empty = False
 
-            rep = _replace_obj(val, entity_indices, entity_replacements, True)
+            rep = _replace_obj(val, entity_indices, ent_off, ent_rep, True)
             # if rep is unchanged, this means that the val is not supported
             # by any of the entity indices
             if rep == val:
-                rep = _replace_obj(val, property_indices,
-                                   property_replacements, False)
+                rep = _replace_obj(
+                    val,
+                    property_indices,
+                    prop_off,
+                    prop_rep,
+                    False
+                )
 
             if rep is not None:
                 obj["value"] = rep
@@ -906,6 +914,12 @@ def replace_iris(
                     ident = True
             else:
                 incomplete = True
+
+        for (kg, rep) in ent_rep:
+            ent_off[kg][rep] += 1
+
+        for (kg, rep) in prop_rep:
+            prop_off[kg][rep] += 1
 
         return parse, incomplete, empty or ident
 
