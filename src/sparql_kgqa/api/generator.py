@@ -1,4 +1,4 @@
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
 import re
 import os
 import copy
@@ -15,17 +15,10 @@ from text_utils.api.utils import (
 )
 from text_utils.inference import (
     utils as inference_utils,
-    search,
     beam_search
 )
-from text_utils.inference.utils import (
-    Beam,
-    BeamStopFn,
-    DecodeFn,
-    MaskUpdateFn,
-    StopFn
-)
-from text_utils.constraints import Constraint, ContinuationConstraint
+from text_utils.inference.utils import Beam
+from text_utils.constraints import ContinuationConstraint
 
 from sparql_kgqa.model import (
     Model,
@@ -48,6 +41,7 @@ _NAME_TO_ZIP = {}
 
 Const = str | tuple[str, str, bool]
 ContIndex = continuations.MmapContinuationIndex
+Examples = list[tuple[str, str]]
 
 
 class SPARQLGenerator(TextProcessor):
@@ -154,7 +148,7 @@ class SPARQLGenerator(TextProcessor):
         self,
         text: str,
         info: str | None = None,
-        examples: list[tuple[str, str]] | None = None,
+        examples: Examples | None = None,
         preprocessed: bool = False
     ) -> data.InferenceData:
         if not preprocessed:
@@ -229,8 +223,10 @@ class SPARQLGenerator(TextProcessor):
                     "index": None,
                     "initial_length": len(token_ids),
                     "start_at": len(token_ids),
-                    "constraint": None if self._disable_sparql_constraint
+                    "sparql_const": None
+                    if self._disable_sparql_constraint
                     else self._sparql_constraint.clone(),
+                    "index_const": None,
                     "entities": {},
                     "properties": {}
                 }
@@ -250,16 +246,18 @@ class SPARQLGenerator(TextProcessor):
             beam.info["entites"] = copy.deepcopy(beam.info["entities"])
             beam.info["properties"] = copy.deepcopy(beam.info["properties"])
 
-            const = beam.info["constraint"]
-            if const is not None:
-                if const.is_invalid():
+            for const_name in ["index_const", "sparql_const"]:
+                const = beam.info[const_name]
+                if const is None:
+                    continue
+                elif const.is_invalid():
                     # return None if constraint is invalid
                     return None
 
                 # clone constraint and update it
                 const = const.clone()
                 const.next(token_id)
-                beam.info["constraint"] = const
+                beam.info[const_name] = const
 
             entities = beam.info["entities"]
             properties = beam.info["properties"]
@@ -274,10 +272,12 @@ class SPARQLGenerator(TextProcessor):
                     return beam
 
                 name = last_decoded[:match.start()]
+
+                const = beam.info["index_const"]
                 assert isinstance(const, ContinuationConstraint)
                 obj_id = const.get_value()
-                assert obj_id is not None
                 obj_type, kg, initial_prefix = index
+                assert obj_id is not None
                 name = initial_prefix + name
                 if obj_type == "e":
                     if kg not in entities:
@@ -288,16 +288,8 @@ class SPARQLGenerator(TextProcessor):
                         properties[kg] = {}
                     properties[kg][name] = obj_id
 
-                if self._disable_sparql_constraint:
-                    beam.info["constraint"] = None
-                else:
-                    decoded_string = self.tokenizer.de_tokenize(
-                        beam.token_ids[beam.info["initial_length"]:]
-                    )
-                    beam.info["constraint"] = self._sparql_constraint.clone()
-                    beam.info["constraint"].reset(decoded_string.encode())
-
                 beam.info["index"] = None
+                beam.info["index_const"] = None
                 beam.info["start_at"] = len(beam.token_ids)
 
                 return beam
@@ -344,7 +336,7 @@ class SPARQLGenerator(TextProcessor):
                 kg_index = kg_index.sub_index_by_values(values)
 
             try:
-                beam.info["constraint"] = ContinuationConstraint(
+                beam.info["index_const"] = ContinuationConstraint(
                     kg_index,
                     initial_prefix.encode(),
                 )
@@ -397,313 +389,6 @@ class SPARQLGenerator(TextProcessor):
             yield_intermediate=True
         ):
             yield [beams[0] for beams in output]
-
-    @torch.inference_mode()
-    def _iterative_inference(
-        self,
-        initial_token_ids: list[int],
-        entities: dict[str, dict[str, str]],
-        properties: dict[str, dict[str, str]]
-    ) -> Iterator[Any]:
-        decoded_token_ids = []
-        last_output = []
-
-        def length() -> int:
-            return len(initial_token_ids) + len(decoded_token_ids)
-
-        kgs = list(self._entity_indices)
-        kgs = "|".join(re.escape(kg) for kg in kgs)
-        START_PATTERN = re.compile(f"<kg(e|p) kg='({kgs})'>")
-        END_PATTERN = re.compile("</kg(?:e|p)>")
-
-        index: tuple[str, str, str] | None = None
-
-        def sparql_stop_fn(token_ids: list[int]) -> bool:
-            nonlocal index
-
-            if token_ids[-1] == self._eos_token_id:
-                return True
-            elif len(self._entity_indices) == 0:
-                return False
-
-            decoded = self.tokenizer.de_tokenize(
-                token_ids[length():]
-            )
-            pattern = START_PATTERN if index is None else END_PATTERN
-            return pattern.search(decoded) is not None
-
-        def beam_stop_fn(beam: Beam) -> bool:
-            return sparql_stop_fn(beam.token_ids)
-
-        def token_stop_fn(token_ids: torch.Tensor, _: int) -> bool:
-            return sparql_stop_fn(token_ids.tolist())
-
-        # decode fn gets in token ids and additional kwargs,
-        # and return logits over next tokens and additional info
-        def decode_fn(
-            token_ids: torch.Tensor,
-            **kwargs: Any
-        ) -> tuple[torch.Tensor, dict[str, Any]]:
-            assert isinstance(self.model, PretrainedDecoder)
-            dec, cache = self.model.decode(
-                token_ids,
-                kwargs["lengths"],
-                kwargs.get("kv_cache", None),
-                self._use_cache
-            )
-            return dec, {"kv_cache": cache}
-
-        def kwargs_update_fn(
-            kwargs: dict[str, Any],
-            info: dict[str, Any],
-            mask: torch.Tensor
-        ) -> None:
-            kv_cache = info.get("kv_cache", None)
-            if kv_cache is None:
-                return
-
-            kwargs["kv_cache"] = tuple(
-                tuple(c[mask.to(c.device)] for c in cache)
-                for cache in info["kv_cache"]
-            )
-
-        if self._disable_sparql_constraint:
-            constraint = None
-        else:
-            self._sparql_constraint.reset()
-            constraint = self._sparql_constraint
-
-        while (
-            (len(decoded_token_ids) == 0
-             or decoded_token_ids[-1] != self._eos_token_id)
-            and length() < self.max_length
-        ):
-            last_decoded = self.tokenizer.de_tokenize(last_output)
-            if index is not None:
-                match = END_PATTERN.search(last_decoded)
-                assert match is not None
-                name = last_decoded[:match.start()]
-                assert isinstance(constraint, ContinuationConstraint)
-                obj_id = constraint.get_value()
-                assert obj_id is not None
-                obj_type, kg, initial_prefix = index
-                name = initial_prefix + name
-                if obj_type == "e":
-                    if kg not in entities:
-                        entities[kg] = {}
-                    entities[kg][name] = obj_id
-                else:
-                    if kg not in properties:
-                        properties[kg] = {}
-                    properties[kg][name] = obj_id
-
-                index = None
-                if self._disable_sparql_constraint:
-                    constraint = None
-                else:
-                    decoded_string = self.tokenizer.de_tokenize(
-                        decoded_token_ids
-                    )
-                    constraint = self._sparql_constraint
-                    constraint.reset(decoded_string.encode())
-
-            else:
-                match = START_PATTERN.search(last_decoded)
-                if match is not None:
-                    obj_type = match.group(1)
-                    kg = match.group(2)
-                    initial_prefix = last_decoded[match.end():]
-                    index = (obj_type, kg, initial_prefix)
-
-                    if obj_type == "e":
-                        kg_index = self._entity_indices[kg]
-                    else:
-                        kg_index = self._property_indices[kg]
-
-                    decoded_string = self.tokenizer.de_tokenize(
-                        decoded_token_ids
-                    )
-                    *_, last = START_PATTERN.finditer(decoded_string)
-                    if last is not None:
-                        decoded_string = decoded_string[:last.end()]
-
-                    values = None
-                    if not self._disable_subgraph_constraint:
-                        try:
-                            values = subgraph_constraint(
-                                decoded_string,
-                                self._sparql_parser,
-                                entities,
-                                properties,
-                                self._prefixes,
-                                limit=8193
-                            )
-                        except Exception:
-                            # keep none values, which means
-                            # no subgraph constraint
-                            pass
-
-                    if values is not None and 0 < len(values) <= 8192:
-                        kg_index = kg_index.sub_index_by_values(values)
-
-                    try:
-                        constraint = ContinuationConstraint(
-                            kg_index,
-                            initial_prefix.encode(),
-                        )
-                    except Exception:
-                        # initial prefix no valid prefix
-                        # should only happen with non exact
-                        # SPARQL constraint
-                        break
-
-            if self._beam_width > 1 and index is not None:
-                stop_fn = beam_stop_fn
-                beam_width = self._beam_width
-            else:
-                beam_width = 1
-                stop_fn = token_stop_fn
-
-            last_output = []
-            for output, const in self._partial_inference(
-                decode_fn,
-                initial_token_ids + decoded_token_ids,
-                constraint,
-                stop_fn,  # type: ignore
-                beam_width,
-                kwargs_update_fn,
-            ):
-                yield decoded_token_ids + output
-                last_output = output
-                constraint = const
-
-            decoded_token_ids.extend(last_output)
-
-    def _partial_inference(
-        self,
-        decode_fn: DecodeFn,
-        initial_token_ids: list[int],
-        constraint: Constraint | None,
-        stop_fn: BeamStopFn | StopFn,
-        beam_width: int = 1,
-        kwargs_update_fn: MaskUpdateFn | None = None,
-    ) -> Iterator[tuple[list[int], Constraint | None]]:
-        logit_fns = []
-
-        if beam_width > 1:
-            beam = Beam(
-                initial_token_ids,
-                [0.0] * len(initial_token_ids),
-                {"constraint": constraint}
-            )
-
-            # add constrain logit fn if any of the beams have a constraint
-            if constraint is not None:
-                logit_fns.append(inference_utils.constraint_logit_fn(
-                    lambda beam: beam.info["constraint"],  # type: ignore
-                    self._eos_token_id
-                ))
-
-                def _update_beam(
-                    beam: Beam,
-                    token_id: int,
-                    log_p: float
-                ) -> Beam | None:
-                    beam = Beam.from_beam(beam, token_id, log_p)
-                    const = beam.info["constraint"]
-                    if const.is_invalid():
-                        return None
-
-                    beam.info["constraint"] = const.clone()
-                    if token_id == self._eos_token_id:
-                        return beam
-
-                    beam.info["constraint"].next(token_id)
-                    return beam
-
-                candidate_fn = _update_beam
-            else:
-                candidate_fn = inference_utils.default_beam_candidate_fn()
-
-            if self._sampling_strategy == "greedy":
-                sample_fn = inference_utils.beam_greedy()
-            elif self._sampling_strategy == "top_k":
-                assert self._top_k >= self._beam_width, \
-                    "top k must be greater than or equal to beam width"
-                logit_fns.append(inference_utils.top_k_masking(self._top_k))
-                sample_fn = inference_utils.beam_sample()
-            else:
-                logit_fns.append(inference_utils.nucleus_masking(self._top_p))
-                sample_fn = inference_utils.beam_sample()
-
-            if self._sampling_strategy != "greedy" and self._temp != 1.0:
-                logit_fns.append(inference_utils.temperature_scaling(
-                    self._temp
-                ))
-
-            for beams in beam_search(
-                decode_fn=decode_fn,
-                initial=[beam],
-                pad_token_id=self.tokenizer.pad_token_id(),
-                max_length=self.max_length,
-                stop_fn=stop_fn,  # type: ignore
-                device=self.devices[0],
-                normalize_by_length=True,
-                alpha=1.0,
-                beam_width=beam_width,
-                sample_fn=sample_fn,
-                candidate_fn=candidate_fn,
-                logit_fns=logit_fns,
-                kwargs_update_fn=kwargs_update_fn,
-                yield_intermediate=True
-            ):
-                best = beams[0][0]
-                yield (best.token_ids, best.info["constraint"])
-            return
-
-        if constraint is not None:
-            logit_fns.append(inference_utils.constraint_logit_fn(
-                lambda _: constraint,  # type: ignore
-                self._eos_token_id
-            ))
-
-        if self._sampling_strategy == "greedy":
-            sample_fn = inference_utils.greedy()
-        elif self._sampling_strategy == "top_k":
-            logit_fns.append(inference_utils.top_k_masking(self._top_k))
-            sample_fn = inference_utils.sample()
-        else:
-            logit_fns.append(inference_utils.nucleus_masking(self._top_p))
-            sample_fn = inference_utils.sample()
-
-        if self._sampling_strategy != "greedy" and self._temp != 1.0:
-            logit_fns.append(inference_utils.temperature_scaling(
-                self._temp
-            ))
-
-        # if there are constraints we need to update them
-        # after sampling a token
-        if constraint is not None:
-            sample_fn = inference_utils.constraint_sample_fn(
-                lambda _: constraint,  # type: ignore
-                sample_fn,
-                self._eos_token_id
-            )
-
-        yield from (
-            (output[0], constraint) for output in search(
-                decode_fn=decode_fn,
-                initial_token_ids=[initial_token_ids],
-                pad_token_id=self.tokenizer.pad_token_id(),
-                max_length=self.max_length,
-                sample_fn=sample_fn,
-                logit_fns=logit_fns,
-                stop_fn=stop_fn,  # type: ignore
-                device=self.devices[0],
-                kwargs_update_fn=kwargs_update_fn,
-                yield_intermediate=True
-            )
-        )
 
     def set_indices(
         self,
@@ -795,45 +480,89 @@ class SPARQLGenerator(TextProcessor):
         self._disable_subgraph_constraint = disable_subgraph_constraint
         self._force_exact = force_exact
 
+    def _process_results(
+        self,
+        items: list[data.InferenceItem],
+        outputs: list[Any]
+    ) -> data.InferenceData:
+        assert len(items) == 1 and len(outputs) == 1
+        return data.InferenceData(
+            self.tokenizer.de_tokenize(outputs[0]),
+            items[0].data.info
+        )
+
     def generate(
+        self,
+        inputs: Iterable[tuple[str, str | None, Examples | None, bool]],
+        batch_size: int = 16,
+        batch_max_tokens: int | None = None,
+        sort: bool = True,
+        num_threads: int | None = None,
+        show_progress: bool = False,
+        postprocess: bool = True,
+        pretty: bool = False
+    ) -> Iterable[str]:
+        def inference_fn(
+            batch: data.InferenceBatch
+        ) -> list[Beam]:
+            *_, last = self._live_inference(batch)
+            return last
+
+        def postprocessing_fn(
+            items: list[data.InferenceItem],
+            outputs: list[Beam],
+        ) -> data.InferenceData:
+            assert len(items) == 1 and len(outputs) == 1
+            output = outputs[0]
+            sparql = self.tokenizer.de_tokenize(output.token_ids)
+            if postprocess:
+                try:
+                    sparql = postprocess_sparql_query(
+                        sparql,
+                        self._sparql_parser,
+                        output.info["entities"],
+                        output.info["properties"],
+                        self._prefixes,
+                        pretty
+                    )
+                except Exception:
+                    pass
+            return data.InferenceData(
+                sparql,
+                items[0].data.info
+            )
+
+        yield from (
+            output.text for output in self._process(
+                (self._prepare_input(*input) for input in inputs),
+                inference_fn,
+                postprocessing_fn,
+                "Generating SPARQL queries",
+                batch_size,
+                batch_max_tokens,
+                sort,
+                num_threads,
+                show_progress=show_progress
+            )
+        )
+
+    def generate_live(
         self,
         query: str,
         info: str | None = None,
-        examples: list[tuple[str, str]] | None = None,
+        examples: Examples | None = None,
         preprocessed: bool = False,
         postprocess: bool = True,
         pretty: bool = False
     ) -> Iterator[str]:
         input = self._prepare_input(query, info, examples, preprocessed)
-        batch = next(self._get_loader(
+        batch = next(data.InferenceLoader.from_iterator(
             iter([input]),
-            1,
+            self.cfg["inference"]["tokenizer"],
+            self.cfg["inference"].get("window", {"type": "full"}),
         ))
 
-        # initial_token_ids = batch.token_ids()[0]
-        # item = batch.items()[0]
-
-        # if not self._full_outputs:
-        #     input_text_len = len(self.tokenizer.de_tokenize(
-        #         item.tokenization.token_ids
-        #     ))
-        # else:
-        #     input_text_len = 0
-
         yield input.text
-
-        # entities = {}
-        # properties = {}
-        # sparql = ""
-        # for output in self._iterative_inference(
-        #     initial_token_ids,
-        #     entities,
-        #     properties
-        # ):
-        #     sparql = self.tokenizer.de_tokenize(
-        #         item.tokenization.token_ids + output
-        #     )[input_text_len:]
-        #     yield sparql
 
         best: Beam | None = None
         for output in self._live_inference(batch):

@@ -73,29 +73,27 @@ class SPARQLGenerationCli(TextProcessingCli):
         else:
             examples = []
 
-        for item in tqdm(
-            iter,
-            desc="Generating SPARQL",
-            disable=not self.args.progress or self.args.process
-        ):
-            if self.args.input_format == "jsonl":
-                item = json.loads(item)
-
-            sampled = random.sample(
-                examples,
-                min(len(examples), self.args.num_examples)
-            )
-
-            *_, final = processor.generate(
-                item,
-                info=self.args.info,
-                examples=sampled,
-                preprocessed=self.args.preprocessed,
-                postprocess=not self.args.no_postprocessing,
-                pretty=self.args.pretty
-            )
-
-            yield final
+        yield from processor.generate(
+            (
+                (
+                    json.loads(item) if self.args.input_format == "jsonl"
+                    else item,
+                    self.args.info,
+                    random.sample(
+                        examples,
+                        min(len(examples), self.args.num_examples)
+                    ),
+                    self.args.preprocessed,
+                )
+                for item in iter
+            ),
+            batch_size=self.args.batch_size,
+            batch_max_tokens=self.args.batch_max_tokens,
+            sort=not self.args.unsorted,
+            show_progress=self.args.progress,
+            postprocess=not self.args.no_postprocessing,
+            pretty=self.args.pretty
+        )
 
 
 def main():

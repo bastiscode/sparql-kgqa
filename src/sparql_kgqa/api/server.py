@@ -116,7 +116,7 @@ class SPARQLGenerationServer(TextProcessingServer):
                     )
 
                     start = time.perf_counter()
-                    for text in gen.generate(
+                    for text in gen.generate_live(
                         text,
                         info,
                         pretty=True

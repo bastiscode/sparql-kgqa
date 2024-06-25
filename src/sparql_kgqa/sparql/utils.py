@@ -1,4 +1,5 @@
 import re
+import mmap
 import os
 import pprint
 import uuid
@@ -10,7 +11,7 @@ from typing import Any, Iterator
 
 from tqdm import tqdm
 
-from text_utils import text, grammar
+from text_utils import grammar
 
 QLEVER_API = "https://qlever.cs.uni-freiburg.de/api"
 QLEVER_URLS = {
@@ -23,11 +24,14 @@ QLEVER_URLS = {
 class KgIndex:
     def __init__(
         self,
-        index: dict[str, list[str]],
+        index: dict[str, tuple[int, int]],
+        index_file: str,
         redirect: dict[str, str] | None = None,
         prefixes: dict[str, str] | None = None
     ):
         self.index = index
+        self.index_file = open(index_file, "r+b")
+        self.index_mmap = mmap.mmap(self.index_file.fileno(), 0)
         self.redirect = redirect or {}
         self.prefixes = prefixes or {}
         self.reverse_prefixes = {
@@ -53,40 +57,35 @@ class KgIndex:
         redirects_path = os.path.join(dir, "redirects.tsv")
         prefixes_path = os.path.join(dir, "prefixes.tsv")
 
-        num_lines, _ = text.file_size(index_path)
         with open(index_path, "r", encoding="utf8") as f:
             index = {}
+            offset = 0
             for line in tqdm(
                 f,
-                total=num_lines,
                 desc="loading kg index",
                 disable=not progress,
                 leave=False
             ):
+                line_length = len(line.encode())
                 split = line.split("\t")
                 assert len(split) >= 2
                 obj = split[0].strip()
-                obj_names = [n.strip() for n in split[1:]]
-                assert obj not in index, \
-                    f"duplicate id {obj}"
-                index[obj] = obj_names
+                index[obj] = (offset, line_length)
+                offset += line_length
 
         redirect = {}
         if os.path.exists(redirects_path):
-            num_lines, _ = text.file_size(redirects_path)
             with open(redirects_path, "r", encoding="utf8") as f:
                 for line in tqdm(
                     f,
-                    total=num_lines,
                     desc="loading kg redirects",
                     disable=not progress,
                     leave=False
                 ):
-                    split = line.split("\t")
+                    split = line.rstrip("\r\n").split("\t")
                     assert len(split) >= 2
-                    obj = split[0].strip()
+                    obj = split[0]
                     for redir in split[1:]:
-                        redir = redir.strip()
                         assert redir not in redirect, \
                             f"duplicate redirect {redir}, should not happen"
                         redirect[redir] = obj
@@ -95,7 +94,7 @@ class KgIndex:
         if os.path.exists(prefixes_path):
             prefixes = load_prefixes(prefixes_path)
 
-        return KgIndex(index, redirect, prefixes)
+        return KgIndex(index, index_path, redirect, prefixes)
 
     def normalize_key(
         self,
@@ -123,7 +122,10 @@ class KgIndex:
             key = self.redirect[key]
 
         if key in self.index:
-            return self.index[key]
+            offset, length = self.index[key]
+            line = self.index_mmap[offset:offset + length].decode()
+            values = line.rstrip("\r\n").split("\t")[1:]
+            return values
 
         return default
 
@@ -132,11 +134,9 @@ def load_examples(path: str) -> list[tuple[str, str]]:
     with open(path, "r", encoding="utf8") as f:
         examples = []
         for line in f:
-            split = line.split("\t")
+            split = line.rstrip("\r\n").split("\t")
             assert len(split) == 2
-            query = split[0].strip()
-            sparql = split[1].strip()
-            examples.append((query, sparql))
+            examples.append(tuple(split))
         return examples
 
 
@@ -144,10 +144,9 @@ def load_prefixes(path: str) -> dict[str, str]:
     with open(path, "r", encoding="utf8") as f:
         prefixes = {}
         for line in f:
-            split = line.split("\t")
+            split = line.rstrip("\r\n").split("\t")
             assert len(split) == 2
-            short = split[0].strip()
-            full = split[1].strip()
+            short, full = split
             assert short not in prefixes, \
                 f"duplicate prefix {short}"
             prefixes[short] = full

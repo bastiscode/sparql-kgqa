@@ -266,13 +266,18 @@ def prepare(args: argparse.Namespace):
             args.output,
             f"{split}_sparql.raw.txt"
         )
+        examples = os.path.join(
+            args.output,
+            f"{split}_examples.tsv"
+        )
         incomplete = 0
         invalid = 0
         total = 0
         with open(input, "w") as inf, \
                 open(input_raw, "w") as inrf, \
                 open(target, "w") as tf, \
-                open(target_raw, "w") as trf:
+                open(target_raw, "w") as trf, \
+                open(examples, "w") as ef:
             for sample in tqdm(
                 samples,
                 desc=f"processing and writing {split} samples",
@@ -318,6 +323,8 @@ def prepare(args: argparse.Namespace):
                     parser,
                     args.version
                 )
+
+                ef.write(f"{clean(sample.question)}\t{sparqls[0]}\n")
 
                 for sparql in sparqls:
                     sparql = fix_prefixes(
