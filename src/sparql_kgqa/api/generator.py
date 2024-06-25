@@ -526,7 +526,7 @@ class SPARQLGenerator(TextProcessor):
                         output.info["entities"],
                         output.info["properties"],
                         self._prefixes,
-                        pretty
+                        pretty and not self._full_outputs
                     )
                 except Exception:
                     pass
@@ -588,7 +588,7 @@ class SPARQLGenerator(TextProcessor):
                 best.info["entities"],
                 best.info["properties"],
                 self._prefixes,
-                pretty
+                pretty and not self._full_outputs
             )
         except Exception:
             yield sparql
