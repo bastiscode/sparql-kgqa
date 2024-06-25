@@ -356,10 +356,10 @@ def preprocess_natural_language_query(
     if examples is None or len(examples) == 0:
         example_str = "None"
     else:
-        example_str = "\n" + "\n\n".join(
+        example_str = "\n\n".join(
             f"{i+1}. Example:\n{clean(query)}\n{clean(sparql)}"
             for i, (query, sparql) in enumerate(examples)
-        ) + "\n"
+        )
 
     if info is None or info.strip() == "":
         info = "None"

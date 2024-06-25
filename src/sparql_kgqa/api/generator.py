@@ -276,8 +276,8 @@ class SPARQLGenerator(TextProcessor):
                 const = beam.info["index_const"]
                 assert isinstance(const, ContinuationConstraint)
                 obj_id = const.get_value()
-                obj_type, kg, initial_prefix = index
                 assert obj_id is not None
+                obj_type, kg, initial_prefix = index
                 name = initial_prefix + name
                 if obj_type == "e":
                     if kg not in entities:
@@ -350,7 +350,10 @@ class SPARQLGenerator(TextProcessor):
 
         logit_fns = [
             inference_utils.constraint_logit_fn(
-                lambda beam: beam.info.get("constraint", None),  # type: ignore
+                lambda beam: (
+                    beam.info["index_const"] or beam.info["sparql_const"]
+                    if isinstance(beam, Beam) else None
+                ),
                 self._eos_token_id
             )
         ]
