@@ -1,0 +1,10 @@
+type: lora
+lora_alpha: env(LORA_ALPHA:8)
+r: env(LORA_R:8)
+lora_dropout: env(LORA_DROPOUT:0.1)
+fan_in_fan_out: true
+target_modules:
+  - attn.c_attn
+  - attn.c_proj
+  - mlp.c_fc
+  - mlp.c_proj

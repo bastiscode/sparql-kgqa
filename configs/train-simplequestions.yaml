@@ -82,5 +82,6 @@ val:
 inference:
   tokenizer: file(tokenizers/env(MODEL).yaml)
   eos: file(tokenizers/env(MODEL)-eos.yaml)
+  max_length: env(MAX_LENGTH:512)
   window:
     type: full

@@ -74,7 +74,7 @@ class SPARQLGenerator(TextProcessor):
 
     @property
     def max_length(self) -> int:
-        cfg_max_length = self.cfg["train"]["data"].get("max_length", 512)
+        cfg_max_length = self.cfg["inference"].get("max_length", 512)
         return min(
             self._max_length or cfg_max_length,
             cfg_max_length
