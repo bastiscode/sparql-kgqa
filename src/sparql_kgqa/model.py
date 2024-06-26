@@ -9,6 +9,7 @@ from copy import deepcopy
 import torch
 from torch import nn
 from torch.distributed.fsdp.wrap import (
+    _or_policy,
     lambda_auto_wrap_policy,
     transformer_auto_wrap_policy
 )
@@ -217,6 +218,7 @@ class PretrainedDecoder(Model):
             raise RuntimeError(f"unkown model type {type(self.model)}")
 
     def get_sharding_policy(self) -> ShardingPolicy | None:
+        policies = []
         if isinstance(self.model, PeftModel):
             def find_peft_modules(
                 m: nn.Module,
@@ -235,17 +237,17 @@ class PretrainedDecoder(Model):
 
             peft_modules = find_peft_modules(self, set())
 
-            return functools.partial(
+            policies.append(functools.partial(
                 lambda_auto_wrap_policy,
                 lambda_fn=lambda m: m in peft_modules
-            )
-        else:
-            return functools.partial(
-                transformer_auto_wrap_policy,
-                transformer_layer_cls={
-                    self.layer_cls
-                }  # type: ignore
-            )
+            ))
+        policies.append(functools.partial(
+            transformer_auto_wrap_policy,
+            transformer_layer_cls={
+                self.layer_cls
+            }  # type: ignore
+        ))
+        return functools.partial(_or_policy, policies=policies)
 
     def enable_gradient_checkpointing(self) -> None:
         assert isinstance(self.model, PreTrainedModel)
