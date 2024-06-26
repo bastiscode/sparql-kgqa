@@ -8,14 +8,14 @@ from copy import deepcopy
 
 import torch
 from torch import nn
-from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
-from torch.utils.hooks import RemovableHandle
-from peft import (
-    PeftModel,
-    LoraConfig,
-    IA3Config,
-    get_peft_model
+from torch.distributed.fsdp.wrap import (
+    lambda_auto_wrap_policy,
+    transformer_auto_wrap_policy
 )
+from torch.utils.hooks import RemovableHandle
+from peft.tuners.lora import LoraConfig
+from peft.peft_model import PeftModel
+from peft.mapping import get_peft_model
 from transformers import (
     AutoModelForCausalLM,
     PreTrainedModel,
@@ -217,12 +217,35 @@ class PretrainedDecoder(Model):
             raise RuntimeError(f"unkown model type {type(self.model)}")
 
     def get_sharding_policy(self) -> ShardingPolicy | None:
-        return functools.partial(
-            transformer_auto_wrap_policy,
-            transformer_layer_cls={
-                self.layer_cls
-            }  # type: ignore
-        )
+        if isinstance(self.model, PeftModel):
+            def find_peft_modules(
+                m: nn.Module,
+                peft_modules: set[nn.Module]
+            ) -> set[nn.Module]:
+                # if module has all trainable parameters and at least one
+                # parameter, we wrap it
+                if all(p.requires_grad for p in m.parameters()) and next(
+                    m.parameters(), None
+                ) is not None:
+                    peft_modules.add(m)
+                else:
+                    for module in m.children():
+                        find_peft_modules(module, peft_modules)
+                return peft_modules
+
+            peft_modules = find_peft_modules(self, set())
+
+            return functools.partial(
+                lambda_auto_wrap_policy,
+                lambda_fn=lambda m: m in peft_modules
+            )
+        else:
+            return functools.partial(
+                transformer_auto_wrap_policy,
+                transformer_layer_cls={
+                    self.layer_cls
+                }  # type: ignore
+            )
 
     def enable_gradient_checkpointing(self) -> None:
         assert isinstance(self.model, PreTrainedModel)
@@ -418,8 +441,6 @@ def peft_model_from_config(
     typ = peft.pop("type")
     if typ == "lora":
         peft_cfg = LoraConfig(**peft)
-    elif typ == "ia3":
-        peft_cfg = IA3Config(**peft)
     else:
         raise ValueError(f"unknown peft type: {typ}")
 

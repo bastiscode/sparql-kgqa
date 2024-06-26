@@ -32,9 +32,8 @@ train:
     type: adamw
     lr: env(LR:0.00005)
     weight_decay: env(WEIGHT_DECAY:0.01)
-    weight_decay_modules:
-      # for lora training
-      Linear: [lora_A.default.weight, lora_B.default.weight]
+    # for lora training
+    weight_decay_modules: all
     fused: env(FUSED:null)
     foreach: env(FOREACH:null)
   lr_scheduler:

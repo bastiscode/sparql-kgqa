@@ -1,13 +1,13 @@
 import os
-from typing import Dict, Any, Tuple
+from typing import Any
 
 import torch
-from torch import nn
 
 from text_utils.api.trainer import ShardingPolicy, Trainer
 from text_utils import data
 
 from sparql_kgqa.model import (
+    Model,
     model_from_config,
     peft_model_from_config
 )
@@ -17,23 +17,30 @@ class TextGenerationTrainer(Trainer):
     @classmethod
     def _model_from_config(
         cls,
-        cfg: Dict[str, Any]
-    ) -> Tuple[nn.Module, ShardingPolicy | None]:
+        cfg: dict[str, Any]
+    ) -> Model:
         model = model_from_config(cfg["model"])
         if cfg.get("gradient_checkpointing", False):
             model.enable_gradient_checkpointing()
-        return model, model.get_sharding_policy()
+        return model
 
     @classmethod
-    def _prepare_peft(
+    def _prepare_peft(  # type: ignore
         cls,
-        model: nn.Module,
+        model: Model,
         cfg: dict[str, Any],
-    ) -> nn.Module:
+    ) -> Model:
         return peft_model_from_config(
-            model,  # type: ignore
+            model,
             cfg
         )
+
+    @classmethod
+    def _sharding_policy(  # type: ignore
+        cls,
+        model: Model
+    ) -> ShardingPolicy | None:
+        return model.get_sharding_policy()
 
     def _prepare_batch(self, batch: data.TrainBatch) -> tuple[
         dict[str, Any],
