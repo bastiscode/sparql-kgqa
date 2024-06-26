@@ -11,7 +11,9 @@ train:
   gradient_checkpointing: env(GRADIENT_CHECKPOINTING:false)
   mixed_precision: env(MIXED_PRECISION:null)
   clip_gradient_norm: env(CLIP_GRADIENT_NORM:1.0)
-  gradient_accumulation: env(GRADIENT_ACCUMULATION:1)
+  gradient_accumulation:
+    steps: env(GRADIENT_ACCUMULATION_STEPS:1)
+    reduction: env(GRADIENT_ACCUMULATION_REDUCTION:mean)
   num_epochs: env(NUM_EPOCHS:1)
   eval_interval: eval(1 / env(EVAL_N:4))
   log_interval: eval(1 / env(LOG_N:100))
@@ -51,7 +53,7 @@ train:
     prefetch_factor: env(PREFETCH_FACTOR:512)
     num_threads: eval(env(THREADS:None) or len(os.sched_getaffinity(0)) // 2)
     batch_limit: env(BATCH_LIMIT:8)
-    batch_limit_type: batch_size
+    batch_limit_type: env(BATCH_LIMIT_TYPE:batch_size)
     pipeline:
       preprocessing:
         type: global
