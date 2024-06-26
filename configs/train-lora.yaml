@@ -17,7 +17,6 @@ train:
   num_epochs: env(NUM_EPOCHS:1)
   eval_interval: eval(1 / env(EVAL_N:4))
   log_interval: eval(1 / env(LOG_N:100))
-  step_interval: eval(1 / env(STEP_N:100000))
   distributed:
     type: env(DIST_TYPE:DDP)
     strategy: env(DIST_SHARD:NO_SHARD)
@@ -41,6 +40,7 @@ train:
   lr_scheduler:
     type: cosine_with_warmup
     warmup_steps: env(WARMUP:0.05)
+    step_interval: eval(1 / env(STEP_N:100000))
   data:
     strategy: weighted
     shuffle: true
