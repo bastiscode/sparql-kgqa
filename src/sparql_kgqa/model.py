@@ -14,6 +14,7 @@ from torch.distributed.fsdp.wrap import (
     transformer_auto_wrap_policy
 )
 from torch.utils.hooks import RemovableHandle
+from peft.utils.other import fsdp_auto_wrap_policy
 from peft.tuners.lora import LoraConfig
 from peft.peft_model import PeftModel
 from peft.mapping import get_peft_model
@@ -224,18 +225,20 @@ class PretrainedDecoder(Model):
                 m: nn.Module,
                 peft_modules: set[nn.Module]
             ) -> set[nn.Module]:
-                # if module has all trainable parameters and at least one
-                # parameter, we wrap it
-                if all(p.requires_grad for p in m.parameters()) and next(
-                    m.parameters(), None
-                ) is not None:
+                # if module has no children, all parameters trainable
+                # and at least one parameter, we wrap it
+                if (
+                    next(m.children(), None) is None
+                    and all(p.requires_grad for p in m.parameters())
+                    and next(m.parameters(), None) is not None
+                ):
                     peft_modules.add(m)
                 else:
                     for module in m.children():
                         find_peft_modules(module, peft_modules)
                 return peft_modules
 
-            peft_modules = find_peft_modules(self, set())
+            peft_modules = find_peft_modules(self.model, set())
 
             policies.append(functools.partial(
                 lambda_auto_wrap_policy,
