@@ -596,7 +596,8 @@ def query_qlever(
     sparql_query: str,
     parser: grammar.LR1Parser,
     kg: str,
-    qlever_endpoint: str | None
+    qlever_endpoint: str | None,
+    timeout: float | tuple[float, float] | None = None
 ) -> SelectResult | AskResult:
     # ask_to_select return None if sparql is not an ask query
     select_query = ask_to_select(sparql_query, parser)
@@ -611,7 +612,8 @@ def query_qlever(
     response = requests.post(
         qlever_endpoint,
         headers={"Content-type": "application/sparql-query"},
-        data=sparql_query
+        data=sparql_query,
+        timeout=timeout
     )
     json = response.json()
 
@@ -654,7 +656,13 @@ def query_entities(
         qlever_endpoint = QLEVER_URLS[kg]
 
     try:
-        result = query_qlever(sparql, parser, kg, qlever_endpoint)
+        result = query_qlever(
+            sparql,
+            parser,
+            kg,
+            qlever_endpoint,
+            timeout=(5.0, 60.0)
+        )
         if isinstance(result, AskResult):
             return {(f"{result}",)}
         return set(
@@ -1091,7 +1099,8 @@ def subgraph_constraint(
         prefix,
         parser,
         kg,
-        qlever_endpoint
+        qlever_endpoint,
+        timeout=(3.0, 10.0)
     )
     assert isinstance(result, SelectResult)
     uris = []

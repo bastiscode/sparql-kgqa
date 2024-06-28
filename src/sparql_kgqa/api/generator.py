@@ -483,17 +483,6 @@ class SPARQLGenerator(TextProcessor):
         self._disable_subgraph_constraint = disable_subgraph_constraint
         self._force_exact = force_exact
 
-    def _process_results(
-        self,
-        items: list[data.InferenceItem],
-        outputs: list[Any]
-    ) -> data.InferenceData:
-        assert len(items) == 1 and len(outputs) == 1
-        return data.InferenceData(
-            self.tokenizer.de_tokenize(outputs[0]),
-            items[0].data.info
-        )
-
     def generate(
         self,
         inputs: Iterable[tuple[str, str | None, Examples | None, bool]],
