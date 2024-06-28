@@ -65,7 +65,7 @@ train:
               prefix: env(INPUT_PREFIX:"")
             - type: suffix
               part: input
-              prefix: env(INPUT_SUFFIX:"")
+              suffix: env(INPUT_SUFFIX:"")
             - type: suffix
               part: target
               suffix: env(EOS_TOKEN)

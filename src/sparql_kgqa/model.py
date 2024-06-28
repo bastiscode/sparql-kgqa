@@ -209,7 +209,6 @@ class PretrainedDecoder(Model):
                     torch_dtype=kwargs.pop("torch_dtype", "auto"),
                     **kwargs
                 )  # type: ignore
-                print(self.model)
             else:
                 self.model = GPT2LMHeadModel.from_pretrained(
                     model,
