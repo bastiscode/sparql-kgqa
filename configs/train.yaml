@@ -62,9 +62,15 @@ train:
           configs:
             - type: json_decode
               part: input
+            - type: prefix
+              part: input
+              prefix: env(INPUT_PREFIX:"")
+            - type: suffix
+              part: input
+              prefix: env(INPUT_SUFFIX:"")
             - type: suffix
               part: target
-              suffix: file(tokenizers/env(MODEL)-eos.yaml)
+              suffix: env(EOS_TOKEN)
       task:
         type: generation
         tokenizer: file(tokenizers/env(MODEL).yaml)
@@ -81,7 +87,8 @@ val:
 
 inference:
   tokenizer: file(tokenizers/env(MODEL).yaml)
-  eos: file(tokenizers/env(MODEL)-eos.yaml)
+  chat_template: file(chat_templates/env(CHAT_TEMPLATE:none).yaml)
+  eos: env(EOS_TOKEN)
   max_length: env(MAX_LENGTH:512)
   window:
     type: full
