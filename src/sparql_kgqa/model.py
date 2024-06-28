@@ -14,7 +14,6 @@ from torch.distributed.fsdp.wrap import (
     transformer_auto_wrap_policy
 )
 from torch.utils.hooks import RemovableHandle
-from peft.utils.other import fsdp_auto_wrap_policy
 from peft.tuners.lora import LoraConfig
 from peft.peft_model import PeftModel
 from peft.mapping import get_peft_model
@@ -24,7 +23,9 @@ from transformers import (
     LlamaForCausalLM,
     GPT2LMHeadModel,
     MistralForCausalLM,
-    MixtralForCausalLM
+    MixtralForCausalLM,
+    PhiForCausalLM,
+    Phi3ForCausalLM
 )
 from transformers.modeling_outputs import (
     BaseModelOutputWithPast,
@@ -36,10 +37,8 @@ from transformers.models.gpt2.modeling_gpt2 import GPT2Block
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 from transformers.models.mistral.modeling_mistral import MistralDecoderLayer
 from transformers.models.mixtral.modeling_mixtral import MixtralDecoderLayer
-from transformers.models.phi.modeling_phi import (
-    PhiForCausalLM,
-    PhiDecoderLayer
-)
+from transformers.models.phi.modeling_phi import PhiDecoderLayer
+from transformers.models.phi3.modeling_phi3 import Phi3DecoderLayer
 from transformers.utils import logging as hf_logging
 from braceexpand import braceexpand
 
@@ -121,7 +120,13 @@ PRETRAINED_DECODERS = [
     "mixtral-8x7b-instruct",
     "mixtral-8x22b",
     "mixtral-8x22b-4bit",
-    "phi-2"
+    "phi-2",
+    "phi-3-mini-4k",
+    "phi-3-mini-128k",
+    "phi-3-small-8k",
+    "phi-3-small-128k",
+    "phi-3-medium-4k",
+    "phi-3-medium-128k",
 ]
 
 
@@ -198,6 +203,13 @@ class PretrainedDecoder(Model):
                     torch_dtype=kwargs.pop("torch_dtype", "auto"),
                     **kwargs
                 )  # type: ignore
+            elif model.startswith("phi-3"):
+                self.model = Phi3ForCausalLM.from_pretrained(
+                    f"microsoft/{model.capitalize()}-instruct",
+                    torch_dtype=kwargs.pop("torch_dtype", "auto"),
+                    **kwargs
+                )  # type: ignore
+                print(self.model)
             else:
                 self.model = GPT2LMHeadModel.from_pretrained(
                     model,
@@ -213,6 +225,8 @@ class PretrainedDecoder(Model):
             self.layer_cls = MixtralDecoderLayer
         elif isinstance(self.model, PhiForCausalLM):
             self.layer_cls = PhiDecoderLayer
+        elif isinstance(self.model, Phi3ForCausalLM):
+            self.layer_cls = Phi3DecoderLayer
         elif isinstance(self.model, GPT2LMHeadModel):
             self.layer_cls = GPT2Block
         else:

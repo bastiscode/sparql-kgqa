@@ -162,14 +162,14 @@ class SPARQLGenerator(TextProcessor):
             assert info is None, \
                 "info must be None if text is already preprocessed"
 
-        if "chat_template" in self.cfg["inference"]:
-            template = self.cfg["inference"]["chat_template"]
-            s = template.get("start", "")
-            if "user" in template:
-                s += template["user"].replace("{text}", text)
+        chat_template = self.cfg["inference"].get("chat_template", None)
+        if chat_template is not None:
+            s = chat_template.get("start", "")
+            if "user" in chat_template:
+                s += chat_template["user"].replace("{text}", text)
             else:
                 s += text
-            s += template.get("end", "")
+            s += chat_template.get("end", "")
 
         return data.InferenceData(text, {})
 
