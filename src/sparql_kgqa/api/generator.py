@@ -390,7 +390,7 @@ class SPARQLGenerator(TextProcessor):
             candidate_fn=update_fn,
             logit_fns=logit_fns,
             kwargs_update_fn=kwargs_update_fn,
-            return_full=self._full_outputs,
+            return_full=True,
             yield_intermediate=True
         ):
             yield [beams[0] for beams in output]
@@ -508,7 +508,13 @@ class SPARQLGenerator(TextProcessor):
         ) -> data.InferenceData:
             assert len(items) == 1 and len(outputs) == 1
             output = outputs[0]
-            sparql = self.tokenizer.de_tokenize(output.token_ids)
+            init = output.info["initial_length"]
+            sparql = self.tokenizer.de_tokenize(output.token_ids[init:])
+            if self._full_outputs:
+                input = self.tokenizer.de_tokenize(output.token_ids[:init])
+            else:
+                input = ""
+
             if postprocess:
                 try:
                     sparql = postprocess_sparql_query(
@@ -517,12 +523,13 @@ class SPARQLGenerator(TextProcessor):
                         output.info["entities"],
                         output.info["properties"],
                         self._prefixes,
-                        pretty and not self._full_outputs
+                        pretty
                     )
                 except Exception:
                     pass
+
             return data.InferenceData(
-                sparql,
+                input + sparql,
                 items[0].data.info
             )
 
@@ -566,20 +573,23 @@ class SPARQLGenerator(TextProcessor):
         if not postprocess:
             return
 
-        if best is None:
-            # should not happen
-            yield input.text
-            return
+        assert best is not None, "should not happen"
 
-        sparql = self.tokenizer.de_tokenize(best.token_ids)
+        init = best.info["initial_length"]
+        sparql = self.tokenizer.de_tokenize(best.token_ids[init:])
+        if self._full_outputs:
+            input = self.tokenizer.de_tokenize(best.token_ids[:init])
+        else:
+            input = ""
+
         try:
-            yield postprocess_sparql_query(
+            yield input + postprocess_sparql_query(
                 sparql,
                 self._sparql_parser,
                 best.info["entities"],
                 best.info["properties"],
                 self._prefixes,
-                pretty and not self._full_outputs
+                pretty
             )
         except Exception:
-            yield sparql
+            yield input + sparql
