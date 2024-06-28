@@ -159,8 +159,9 @@ class SPARQLGenerator(TextProcessor):
                 examples
             )
         else:
-            assert info is None, \
-                "info must be None if text is already preprocessed"
+            assert info is None and examples is None, \
+                "info and examples must be None if text " \
+                "is already preprocessed"
 
         chat_template = self.cfg["inference"].get("chat_template", None)
         if chat_template is not None:
@@ -170,6 +171,7 @@ class SPARQLGenerator(TextProcessor):
             else:
                 s += text
             s += chat_template.get("end", "")
+            text = s
 
         return data.InferenceData(text, {})
 
