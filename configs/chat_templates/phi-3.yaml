@@ -1,2 +1,2 @@
-user: "<|user|>\n{text}<|end|>"
+user: "<|user|>\n{text}<|end|>\n"
 end: "<|assistant|>"
