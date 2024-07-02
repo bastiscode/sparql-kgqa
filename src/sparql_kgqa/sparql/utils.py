@@ -45,10 +45,10 @@ class KgIndex:
             ) + r")\w+"
         )
         self.long_key_pattern = re.compile(
-            r"<?(" + "|".join(
+            r"<?((:?" + "|".join(
                 re.escape(long)
                 for long in self.prefixes.values()
-            ) + r")\w+>?"
+            ) + r")\w+)>?"
         )
 
     @staticmethod
