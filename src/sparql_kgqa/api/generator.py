@@ -545,6 +545,8 @@ class SPARQLGenerator(TextProcessor):
                 batch_max_tokens,
                 sort,
                 num_threads,
+                progress_total=len(inputs)  # type: ignore
+                if hasattr(inputs, "__len__") else None,
                 show_progress=show_progress
             )
         )
