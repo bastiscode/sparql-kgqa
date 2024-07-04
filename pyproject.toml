@@ -20,7 +20,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "dtpu>=0.6.0",
+    "dtpu==0.6.0",
     "transformers>=4.42.0",
     "peft>=0.11",
     "flask_socketio>=5.3",

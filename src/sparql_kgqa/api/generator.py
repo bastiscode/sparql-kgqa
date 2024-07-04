@@ -495,7 +495,7 @@ class SPARQLGenerator(TextProcessor):
         show_progress: bool = False,
         postprocess: bool = True,
         pretty: bool = False
-    ) -> Iterable[str]:
+    ) -> Iterator[str]:
         def inference_fn(
             batch: data.InferenceBatch
         ) -> list[Beam]:
@@ -508,6 +508,8 @@ class SPARQLGenerator(TextProcessor):
         ) -> data.InferenceData:
             assert len(items) == 1 and len(outputs) == 1
             output = outputs[0]
+            item = items[0]
+
             init = output.info["initial_length"]
             sparql = self.tokenizer.de_tokenize(output.token_ids[init:])
             if self._full_outputs:
@@ -530,7 +532,7 @@ class SPARQLGenerator(TextProcessor):
 
             return data.InferenceData(
                 input + sparql,
-                items[0].data.info
+                item.data.info
             )
 
         yield from (

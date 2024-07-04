@@ -5,7 +5,6 @@ import argparse
 from typing import Iterable, Iterator
 
 import torch
-from tqdm import tqdm
 
 from text_utils.api.cli import TextProcessingCli
 from text_utils.api.processor import TextProcessor

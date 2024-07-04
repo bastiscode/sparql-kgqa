@@ -426,6 +426,22 @@ class PretrainedDecoder(Model):
                 self.model.lm_head,
                 devices[-1]
             )
+        elif isinstance(self.model, Phi3ForCausalLM):
+            _register_hook(
+                self.hooks,
+                self.model.model.embed_tokens,
+                devices[0]
+            )
+            _register_hook(
+                self.hooks,
+                self.model.model.norm,
+                devices[-1]
+            )
+            _register_hook(
+                self.hooks,
+                self.model.lm_head,
+                devices[-1]
+            )
         else:
             assert isinstance(self.model, GPT2LMHeadModel)
             _register_hook(
