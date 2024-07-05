@@ -745,7 +745,7 @@ def fix_prefixes(
         value = iri["value"]
         val = value[1:-1]
 
-        longest = next(iter(sorted(
+        longest: tuple[str, str] | None = next(iter(sorted(
             filter(
                 lambda pair: val.startswith(pair[1]),
                 prefixes.items()
@@ -758,6 +758,7 @@ def fix_prefixes(
 
         short, long = longest
         iri["value"] = short + val[len(long):]
+        seen.add(short)
 
     for prefix_name in _find_all(parse, "PNAME_LN"):
         val = prefix_name["value"]
