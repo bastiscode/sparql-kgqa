@@ -565,12 +565,19 @@ class SPARQLGenerator(TextProcessor):
             self.cfg["inference"].get("window", {"type": "full"}),
         ))
 
-        yield input.text
+        # tokenize and de_tokenize here to get rid of
+        # special tokens and start/end patterns
+        token_ids = self.tokenizer.tokenize(input.text).token_ids
+        yield self.tokenizer.de_tokenize(token_ids)
 
         best: Beam | None = None
         for output in self._live_inference(batch):
             best = output[0]
-            yield self.tokenizer.de_tokenize(best.token_ids)
+            if self._full_outputs:
+                init = 0
+            else:
+                init = best.info["initial_length"]
+            yield self.tokenizer.de_tokenize(best.token_ids[init:])
 
         if not postprocess:
             return
