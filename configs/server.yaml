@@ -14,7 +14,7 @@ knowledge_graphs:
   wikidata:
     entity:
       index: env(ENT_INDEX)
-      prefixes: env(ENT_PREFIXES)
+      data: env(ENT_DATA)
     property:
       index: env(PROP_INDEX)
-      prefixes: env(PROP_PREFIXES)
+      data: env(PROP_DATA)
