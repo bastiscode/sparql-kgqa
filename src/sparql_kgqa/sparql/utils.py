@@ -744,11 +744,20 @@ def fix_prefixes(
     for iri in _find_all(parse, "IRIREF"):
         value = iri["value"]
         val = value[1:-1]
-        for short, long in prefixes.items():
-            if val.startswith(long):
-                iri["value"] = short + val[len(long):]
-                seen.add(short)
-                break
+
+        longest = next(iter(sorted(
+            filter(
+                lambda pair: val.startswith(pair[1]),
+                prefixes.items()
+            ),
+            key=lambda pair: len(pair[1]),
+            reverse=True
+        )), None)
+        if longest is None:
+            continue
+
+        short, long = longest
+        iri["value"] = short + val[len(long):]
 
     for prefix_name in _find_all(parse, "PNAME_LN"):
         val = prefix_name["value"]
