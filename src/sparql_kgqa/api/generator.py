@@ -403,11 +403,11 @@ class SPARQLGenerator(TextProcessor):
         entity_indices: tuple[ContIndex, dict[str, str]] | None = None,
         property_indices: tuple[ContIndex, dict[str, str]] | None = None,
     ) -> None:
-        if kg in self._entity_indices:
-            raise ValueError(f"knowledge graph {kg} already set")
-
         if entity_indices is not None:
             entity_index, entity_prefixes = entity_indices
+            entity_index = entity_index.clone_with_continuations(
+                self._continuations
+            )
         elif entities is not None:
             data, index = entities
             entity_index = ContIndex.load_with_continuations(
@@ -427,6 +427,9 @@ class SPARQLGenerator(TextProcessor):
 
         if property_indices is not None:
             property_index, property_prefixes = property_indices
+            property_index = property_index.clone_with_continuations(
+                self._continuations
+            )
         elif properties is not None:
             data, index = properties
             property_index = ContIndex.load_with_continuations(
