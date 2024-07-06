@@ -127,6 +127,9 @@ class SPARQLGenerator(TextProcessor):
         self._disable_sparql_constraint = False
         self._disable_subgraph_constraint = False
         self._sparql_parser = load_sparql_parser([])
+        self._is_chat = self.cfg["inference"].get(
+            "chat_template", None
+        ) is not None
 
         self.model = self.model.compile(
             **self.cfg["inference"].get("compile", {})
@@ -548,7 +551,8 @@ class SPARQLGenerator(TextProcessor):
                 batch_max_tokens,
                 sort,
                 num_threads,
-                show_progress=show_progress
+                show_progress=show_progress,
+                ignore_special_tokens=self._is_chat
             )
         )
 
@@ -566,6 +570,7 @@ class SPARQLGenerator(TextProcessor):
             iter([input]),
             self.cfg["inference"]["tokenizer"],
             self.cfg["inference"].get("window", {"type": "full"}),
+            ignore_special_tokens=self._is_chat
         ))
 
         # tokenize and de_tokenize here to get rid of
