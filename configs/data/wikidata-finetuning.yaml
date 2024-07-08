@@ -1,4 +1,3 @@
-- file(datasets/simplequestions/train.yaml)
 - file(datasets/lcquad/train.yaml)
 - file(datasets/qald10/train.yaml)
 - file(datasets/qawiki/train.yaml)

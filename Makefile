@@ -4,8 +4,8 @@ WD_PROP=data/kg-index/wikidata-properties
 ENT_SUFFIX="</kge>"
 PROP_SUFFIX="</kgp>"
 
-.PHONY: all data querylogs indices
-all: data querylogs indices
+.PHONY: all data querylogs indices examples
+all: data querylogs indices examples
 
 data:
 	@echo "Preparing simple questions"
@@ -66,3 +66,19 @@ indices:
 	--input-file $(WD_ENT)/index.tsv \
 	--output-dir data/art-index/wikidata-entities \
 	--common-suffix $(ENT_SUFFIX)
+
+examples:
+	@echo "Creating example indices"
+	@mkdir -p data/example-index
+	@python scripts/prepare_examples.py \
+	data/wikidata-simplequestions/train_examples.tsv \
+	data/example-index/wikidata-simplequestions.bin \
+	--progress
+	@python scripts/prepare_examples.py \
+	data/wikidata-qa-wiki/train_examples.tsv \
+	data/wikidata-lcquad2/train_examples.tsv \
+	data/wikidata-qald10/train_examples.tsv \
+	data/wikidata-mcwq/train_examples.tsv \
+	data/example-index/wikidata.bin \
+	--progress
+

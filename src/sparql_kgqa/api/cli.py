@@ -12,7 +12,7 @@ from text_utils.api.processor import TextProcessor
 from sparql_kgqa import version
 from sparql_kgqa.api.generator import SPARQLGenerator
 from sparql_kgqa.api.server import SPARQLGenerationServer
-from sparql_kgqa.sparql.utils import load_examples
+from sparql_kgqa.sparql.utils import SimilarityIndex, load_examples, Examples
 
 
 class SPARQLGenerationCli(TextProcessingCli):
@@ -67,25 +67,35 @@ class SPARQLGenerationCli(TextProcessingCli):
         iter: Iterator[str]
     ) -> Iterator[str]:
         assert isinstance(processor, SPARQLGenerator)
-        if self.args.examples is not None:
+        if self.args.example_index is not None:
+            examples = SimilarityIndex.load(self.args.example_index)
+        elif self.args.examples is not None:
             examples = load_examples(self.args.examples)
         else:
             examples = []
 
-        yield from processor.generate(
-            (
-                (
-                    json.loads(item) if self.args.input_format == "jsonl"
-                    else item,
-                    self.args.info,
-                    random.sample(
-                        examples,
-                        min(len(examples), self.args.num_examples)
-                    ),
-                    self.args.preprocessed,
+        def get_examples(query: str) -> Examples:
+            if isinstance(examples, SimilarityIndex):
+                return examples.top_k(
+                    query,
+                    self.args.num_examples
+                )  # type: ignore
+            else:
+                return random.sample(
+                    examples,
+                    min(len(examples), self.args.num_examples)
                 )
-                for item in iter
-            ),
+
+        if self.args.input_format == "jsonl":
+            iter = (json.loads(item) for item in iter)
+
+        yield from processor.generate(
+            ((
+                item,
+                self.args.info,
+                get_examples(item),
+                self.args.preprocessed,
+            ) for item in iter),
             batch_size=self.args.batch_size,
             batch_max_tokens=self.args.batch_max_tokens,
             sort=not self.args.unsorted,
@@ -204,7 +214,14 @@ def main():
         ),
         help="Add knowledge graph to the generation process"
     )
-    parser.add_argument(
+    example_group = parser.add_mutually_exclusive_group()
+    example_group.add_argument(
+        "--example-index",
+        type=str,
+        default=None,
+        help="Path to example index file"
+    )
+    example_group.add_argument(
         "--examples",
         type=str,
         default=None,
@@ -214,8 +231,8 @@ def main():
         "--num-examples",
         type=int,
         default=3,
-        help="Number of examples to add to the generation process, randomly "
-        "selected if there are more examples than this number"
+        help="Number of examples to add to the generation process; top_k "
+        "for example index, randomly selected for examples file"
     )
     parser.add_argument(
         "--no-sparql-constraint",
