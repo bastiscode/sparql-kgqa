@@ -44,6 +44,7 @@ data:
 	--properties $(WD_PROP) \
 	--progress
 	@echo "Preparing OpenHermes2.5"
+	@mkdir -p data/open-hermes-2.5
 	@python scripts/prepare_openhermes.py data/open-hermes-2.5
 
 WD_QUERY_LOG_SOURCE=organic
