@@ -10,6 +10,8 @@ models:
   - path: env(EXPERIMENT)
     device: env(DEVICE:auto)
 
+example_index: env(EXAMPLE_INDEX:null)
+
 knowledge_graphs:
   wikidata:
     entity:

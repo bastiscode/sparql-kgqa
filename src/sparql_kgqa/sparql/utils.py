@@ -1,4 +1,5 @@
 import re
+import json
 import mmap
 import os
 import pprint
@@ -138,9 +139,8 @@ def load_examples(path: str) -> Examples:
     with open(path, "r", encoding="utf8") as f:
         examples = []
         for line in f:
-            split = line.rstrip("\r\n").split("\t")
-            assert len(split) == 2
-            examples.append(tuple(split))
+            data = json.loads(line.rstrip("\r\n"))
+            examples.append((data["query"], data["sparql"]))
         return examples
 
 

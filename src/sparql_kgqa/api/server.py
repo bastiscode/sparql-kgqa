@@ -49,13 +49,28 @@ class SPARQLGenerationServer(TextProcessingServer):
             )
             kgs[kg] = ((ent_index, ent_prefixes), (prop_index, prop_prefixes))
 
-        for text_processor in self.text_processors:
-            for kg, (entity_indices, property_indices) in kgs.items():
-                assert isinstance(text_processor, SPARQLGenerator)
-                text_processor.set_indices(
+        for text_processor, model_cfg in zip(
+            self.text_processors,
+            config["models"]
+        ):
+            assert isinstance(text_processor, SPARQLGenerator)
+            examples = model_cfg.get(
+                "examples",
+                config.get("examples", None)
+            )
+            example_index = model_cfg.get(
+                "example_index",
+                config.get("example_index", None)
+            )
+            text_processor.set_examples(
+                examples,
+                example_index
+            )
+            for kg, (entities, properties) in kgs.items():
+                text_processor.set_kg_indices(
                     kg,
-                    entity_indices=entity_indices,
-                    property_indices=property_indices
+                    entities,
+                    properties
                 )
 
         self.socketio = SocketIO(

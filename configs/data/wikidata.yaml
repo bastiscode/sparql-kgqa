@@ -2,3 +2,5 @@
 - file(datasets/qald10/train.yaml)
 - file(datasets/qawiki/train.yaml)
 - file(datasets/mcwq/train.yaml)
+- file(datasets/open-hermes-2.5/train.yaml)
+- file(datasets/query-logs/organic.yaml)

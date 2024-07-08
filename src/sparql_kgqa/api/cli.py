@@ -38,7 +38,8 @@ class SPARQLGenerationCli(TextProcessingCli):
             full_outputs=self.args.full_outputs,
             disable_sparql_constraint=self.args.no_sparql_constraint,
             disable_subgraph_constraint=self.args.no_subgraph_constraint,
-            force_exact=self.args.force_exact
+            force_exact=self.args.force_exact,
+            num_examples=self.args.num_examples
         )
 
         for (
@@ -48,11 +49,16 @@ class SPARQLGenerationCli(TextProcessingCli):
             prop_idx,
             kg
         ) in self.args.knowledge_graph or []:
-            gen.set_indices(
+            gen.set_kg_indices(
                 kg,
-                entities=(ent_data, ent_index),
-                properties=(prop_data, prop_idx),
+                (ent_data, ent_index),
+                (prop_data, prop_idx),
             )
+
+        if self.args.example_index is not None:
+            gen.set_examples(example_index=self.args.example_index)
+        elif self.args.examples is not None:
+            gen.set_examples(examples=self.args.examples)
 
         return gen
 
@@ -67,25 +73,6 @@ class SPARQLGenerationCli(TextProcessingCli):
         iter: Iterator[str]
     ) -> Iterator[str]:
         assert isinstance(processor, SPARQLGenerator)
-        if self.args.example_index is not None:
-            examples = SimilarityIndex.load(self.args.example_index)
-        elif self.args.examples is not None:
-            examples = load_examples(self.args.examples)
-        else:
-            examples = []
-
-        def get_examples(query: str) -> Examples:
-            if isinstance(examples, SimilarityIndex):
-                return examples.top_k(
-                    query,
-                    self.args.num_examples
-                )  # type: ignore
-            else:
-                return random.sample(
-                    examples,
-                    min(len(examples), self.args.num_examples)
-                )
-
         if self.args.input_format == "jsonl":
             iter = (json.loads(item) for item in iter)
 
@@ -93,7 +80,7 @@ class SPARQLGenerationCli(TextProcessingCli):
             ((
                 item,
                 self.args.info,
-                get_examples(item),
+                None,
                 self.args.preprocessed,
             ) for item in iter),
             batch_size=self.args.batch_size,

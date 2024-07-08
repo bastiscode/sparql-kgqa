@@ -26,6 +26,7 @@ dependencies = [
     "flask_socketio>=5.3",
     "braceexpand>=0.1.7",
     "sentence-transformers>=3.0.0",
+    "datasets>=2.20.0"
 ]
 
 [project.scripts]

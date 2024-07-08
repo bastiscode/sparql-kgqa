@@ -1,5 +1,6 @@
 from typing import Any, Iterable, Iterator
 import re
+import random
 import os
 import copy
 
@@ -27,6 +28,8 @@ from sparql_kgqa.model import (
     peft_model_from_config
 )
 from sparql_kgqa.sparql.utils import (
+    SimilarityIndex,
+    load_examples,
     subgraph_constraint,
     general_prefixes,
     load_prefixes,
@@ -130,6 +133,7 @@ class SPARQLGenerator(TextProcessor):
         self._is_chat = self.cfg["inference"].get(
             "chat_template", None
         ) is not None
+        self._prefixes = general_prefixes()
 
         self.model = self.model.compile(
             **self.cfg["inference"].get("compile", {})
@@ -137,7 +141,9 @@ class SPARQLGenerator(TextProcessor):
 
         self._entity_indices = {}
         self._property_indices = {}
-        self._prefixes = general_prefixes()
+        self._example_index: SimilarityIndex | None = None
+        self._examples: Examples | None = None
+        self._num_examples: int = 3
 
     def to(self, device: Device) -> "SPARQLGenerator":
         self.devices = get_devices(device)
@@ -155,6 +161,17 @@ class SPARQLGenerator(TextProcessor):
         preprocessed: bool = False
     ) -> data.InferenceData:
         if not preprocessed:
+            if examples is None and self._example_index is not None:
+                examples = self._example_index.top_k(
+                    text,
+                    self._num_examples
+                )  # type: ignore
+            elif examples is None and self._examples is not None:
+                examples = random.sample(
+                    self._examples,
+                    min(self._num_examples, len(self._examples))
+                )
+
             text = preprocess_natural_language_query(
                 text,
                 list(self._entity_indices),
@@ -178,7 +195,7 @@ class SPARQLGenerator(TextProcessor):
 
         return data.InferenceData(text, {})
 
-    @torch.inference_mode()
+    @ torch.inference_mode()
     def _live_inference(
         self,
         batch: data.InferenceBatch
@@ -318,7 +335,7 @@ class SPARQLGenerator(TextProcessor):
             decoded_string = self.tokenizer.de_tokenize(
                 beam.token_ids[beam.info["initial_length"]:]
             )
-            *_, last = START_PATTERN.finditer(decoded_string)
+            * _, last = START_PATTERN.finditer(decoded_string)
             decoded_string = decoded_string[:last.end()]
 
             values = None
@@ -398,24 +415,36 @@ class SPARQLGenerator(TextProcessor):
         ):
             yield [beams[0] for beams in output]
 
-    def set_indices(
+    def set_examples(
+        self,
+        examples: Examples | str | None = None,
+        example_index: SimilarityIndex | str | None = None
+    ) -> None:
+        if example_index is not None:
+            if isinstance(example_index, str):
+                example_index = SimilarityIndex.load(example_index)
+            self._example_index = example_index
+
+        elif examples is not None:
+            if isinstance(examples, str):
+                examples = load_examples(examples)
+            self._examples = examples
+
+        else:
+            raise ValueError("example_index or examples must be provided")
+
+    def set_kg_indices(
         self,
         kg: str,
-        entities: tuple[str, str] | None = None,
-        properties: tuple[str, str] | None = None,
-        entity_indices: tuple[ContIndex, dict[str, str]] | None = None,
-        property_indices: tuple[ContIndex, dict[str, str]] | None = None,
+        entities: tuple[str, str] | tuple[ContIndex, dict[str, str]],
+        properties: tuple[str, str] | tuple[ContIndex, dict[str, str]],
     ) -> None:
-        if entity_indices is not None:
-            entity_index, entity_prefixes = entity_indices
-            entity_index = entity_index.clone_with_continuations(
-                self._continuations
-            )
-        elif entities is not None:
-            data, index = entities
+        first, second = entities
+        if isinstance(first, str):
+            assert isinstance(second, str)
             entity_index = ContIndex.load_with_continuations(
-                os.path.join(data, "index.tsv"),
-                index,
+                os.path.join(first, "index.tsv"),
+                second,
                 self._continuations,
                 common_suffix=self.cfg["inference"].get(
                     "entity_suffix",
@@ -423,21 +452,21 @@ class SPARQLGenerator(TextProcessor):
                 )
             )
             entity_prefixes = load_prefixes(
-                os.path.join(data, "prefixes.tsv")
+                os.path.join(first, "prefixes.tsv")
             )
         else:
-            raise ValueError("entities must be provided")
-
-        if property_indices is not None:
-            property_index, property_prefixes = property_indices
-            property_index = property_index.clone_with_continuations(
+            assert isinstance(second, dict)
+            entity_index = first.clone_with_continuations(
                 self._continuations
             )
-        elif properties is not None:
-            data, index = properties
+            entity_prefixes = second
+
+        first, second = properties
+        if isinstance(first, str):
+            assert isinstance(second, str)
             property_index = ContIndex.load_with_continuations(
-                os.path.join(data, "index.tsv"),
-                index,
+                os.path.join(first, "index.tsv"),
+                second,
                 self._continuations,
                 common_suffix=self.cfg["inference"].get(
                     "property_suffix",
@@ -445,10 +474,14 @@ class SPARQLGenerator(TextProcessor):
                 )
             )
             property_prefixes = load_prefixes(
-                os.path.join(data, "prefixes.tsv")
+                os.path.join(first, "prefixes.tsv")
             )
         else:
-            raise ValueError("properties must be provided")
+            assert isinstance(second, dict)
+            property_index = first.clone_with_continuations(
+                self._continuations
+            )
+            property_prefixes = second
 
         self._entity_indices[kg] = entity_index
         self._property_indices[kg] = property_index
@@ -476,6 +509,7 @@ class SPARQLGenerator(TextProcessor):
         full_outputs: bool = False,
         disable_sparql_constraint: bool = False,
         disable_subgraph_constraint: bool = False,
+        num_examples: int = 3,
         force_exact: bool = False
     ) -> None:
         assert sampling_strategy in ["greedy", "top_k", "top_p"]
@@ -490,6 +524,7 @@ class SPARQLGenerator(TextProcessor):
         self._disable_sparql_constraint = disable_sparql_constraint
         self._disable_subgraph_constraint = disable_subgraph_constraint
         self._force_exact = force_exact
+        self._num_examples = num_examples
 
     def generate(
         self,

@@ -60,14 +60,12 @@ train:
         fn:
           type: chain
           configs:
+            - type: chat_decode
+              part: input
+              chat_template: file(chat_template/env(CHAT_TEMPLATE:none).yaml)
+              separator: env(SEPARATOR:"")
             - type: json_decode
-              part: input
-            - type: prefix
-              part: input
-              prefix: env(INPUT_PREFIX:"")
-            - type: suffix
-              part: input
-              suffix: env(INPUT_SUFFIX:"")
+              part: target
             - type: suffix
               part: target
               suffix: env(EOS_TOKEN)

@@ -61,7 +61,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-Sample = collections.namedtuple("Sample", ["question", "sparql"])
+Sample = collections.namedtuple("Sample", ["query", "sparql"])
 
 
 SPLIT_RENAME = {
@@ -83,7 +83,7 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
             assert split in {"train", "val", "test"}
             samples = []
             for item in items:
-                question = item["question"]
+                query = item["question"]
                 subj = item["answer"]["subject"]
                 obj = item["answer"]["object"]
                 prop = item["answer"]["predicate"]
@@ -104,7 +104,7 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
                     subj = "wd:" + subj
 
                 sparql = f"SELECT ?x WHERE {{ {subj} {prop} {obj} . }}"
-                samples.append(Sample(question, sparql))
+                samples.append(Sample(query, sparql))
             output[split] = samples
 
     elif args.qald_10 is not None:
@@ -116,7 +116,7 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
             samples = []
             for item in items:
                 sparql = item["query"]["sparql"]
-                questions = [
+                queries = [
                     q["string"]
                     for q in json.loads(item["question"])
                     if q["language"] == "en"
@@ -141,7 +141,7 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
                     _rep_prop,
                     sparql
                 )
-                for q in questions:
+                for q in queries:
                     samples.append(Sample(q, sparql))
 
             output[split] = samples
@@ -154,11 +154,11 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
             assert split in {"train", "val", "test"}
             samples = []
             for item in items:
-                questions = [item["question"]]
+                queries = [item["question"]]
                 sparql = item["sparql"]
                 for pq in item["paraphrased_question"]:
-                    questions.append(pq)
-                for q in questions:
+                    queries.append(pq)
+                for q in queries:
                     if q is None or q.strip() == "" or "{" in q or "}" in q:
                         continue
                     samples.append(Sample(q, sparql))
@@ -173,28 +173,28 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
         for data, split in [(train_data, "train"), (test_data, "test")]:
             samples = []
             for item in data:
-                question = item["questionWithBrackets"]
+                query = item["questionWithBrackets"]
                 # sub out brackets
-                question = re.sub(
+                query = re.sub(
                     r"\[(.+?)\]",
                     lambda m: m.group(1),
-                    question
+                    query
                 )
                 # repair some whitespace issues
                 # words followed by 's
-                question = re.sub(
+                query = re.sub(
                     r"(\w+)\s+('s)(?:\s+|$)",
                     lambda m: m.group(1) + m.group(2) + " ",
-                    question
+                    query
                 )
                 # punctuation with surrounding spaces
-                question = re.sub(
+                query = re.sub(
                     r"\s+([,.?!;])(?:\s+|$)",
                     lambda m: m.group(1) + " ",
-                    question
+                    query
                 )
                 sparql = item["sparql"]
-                samples.append(Sample(question, sparql))
+                samples.append(Sample(query, sparql))
             output[split] = samples
 
     elif args.qa_wiki is not None:
@@ -203,8 +203,8 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
         with open(args.qa_wiki, "r") as inf:
             for line in inf:
                 line = line.strip()
-                sparql, question = line.split("\t")
-                samples.append(Sample(question, sparql))
+                sparql, query = line.split("\t")
+                samples.append(Sample(query, sparql))
         output["train"] = samples
 
     else:
@@ -286,7 +286,7 @@ def prepare(args: argparse.Namespace):
             ):
                 # clean sparql in sample
                 sample = Sample(
-                    sample.question,
+                    sample.query,
                     clean(sample.sparql),
                 )
 
@@ -324,7 +324,10 @@ def prepare(args: argparse.Namespace):
                     args.version
                 )
 
-                ef.write(f"{clean(sample.question)}\t{sparqls[0]}\n")
+                ef.write(json.dumps({
+                    "query": sample.query,
+                    "sparql": raw_sparql
+                }) + "\n")
 
                 for sparql in sparqls:
                     sparql = fix_prefixes(
@@ -337,14 +340,18 @@ def prepare(args: argparse.Namespace):
                         parser,
                         args.version
                     )
-                    tf.write(sparql + "\n")
+                    tf.write(json.dumps(sparql) + "\n")
                     trf.write(raw_sparql + "\n")
-                    inf.write(format_query(
-                        sample.question,
-                        args.version,
-                        kg
-                    ) + "\n")
-                    inrf.write(json.dumps(sample.question) + "\n")
+                    inf.write(
+                        json.dumps([{
+                            "role": "user",
+                            "text": format_query(
+                                sample.query,
+                                args.version,
+                                kg
+                            )}]) + "\n"
+                    )
+                    inrf.write(json.dumps(sample.query) + "\n")
 
         print(
             f"Generated {total:,} SPARQL queries while "
