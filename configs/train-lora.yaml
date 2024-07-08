@@ -60,7 +60,7 @@ train:
           configs:
             - type: chat_decode
               part: input
-              chat_template: file(chat_template/env(CHAT_TEMPLATE:none).yaml)
+              chat_template: file(chat_templates/env(CHAT_TEMPLATE:none).yaml)
               separator: env(SEPARATOR:"")
             - type: json_decode
               part: target
