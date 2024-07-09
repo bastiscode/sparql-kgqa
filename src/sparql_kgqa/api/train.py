@@ -1,11 +1,13 @@
 import os
+import copy
 from typing import Any
 
 import torch
 
 from text_utils.api.trainer import ShardingPolicy, Trainer
-from text_utils import data
+from text_utils import data, tensorboard
 
+from sparql_kgqa.api.utils import InputOutputLogger
 from sparql_kgqa.model import (
     Model,
     model_from_config,
@@ -34,6 +36,19 @@ class TextGenerationTrainer(Trainer):
             model,
             cfg
         )
+
+    @classmethod
+    def _metric_from_config(
+        cls,
+        cfg: dict[str, Any],
+        prefix: str
+    ) -> tensorboard.TensorboardMetric:
+        cfg = copy.deepcopy(cfg)
+        metric_typ = cfg.pop("type", None)
+        if metric_typ == "input_output":
+            return InputOutputLogger(prefix)
+        else:
+            raise ValueError(f"unknown metric type {metric_typ}")
 
     @classmethod
     def _sharding_policy(  # type: ignore

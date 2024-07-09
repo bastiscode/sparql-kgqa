@@ -17,6 +17,8 @@ train:
   num_epochs: env(NUM_EPOCHS:1)
   eval_interval: eval(1 / env(EVAL_N:4))
   log_interval: eval(1 / env(LOG_N:100))
+  metrics:
+    - type: input_output
   distributed:
     type: env(DIST_TYPE:DDP)
     strategy: env(DIST_SHARD:NO_SHARD)
