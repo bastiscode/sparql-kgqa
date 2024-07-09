@@ -74,6 +74,7 @@ train:
       task:
         type: generation
         tokenizer: file(tokenizers/env(MODEL).yaml)
+        ignore_special_tokens: eval("env(CHAT_TEMPLATE:none)" != "none")
         mask_input: true
       postprocessing:
         type: global

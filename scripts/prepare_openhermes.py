@@ -42,6 +42,11 @@ def prepare(args: argparse.Namespace) -> None:
                         "role": "assistant",
                         "text": msg["value"]
                     })
+                elif msg["from"] == "system":
+                    chat.append({
+                        "role": "system",
+                        "text": msg["value"]
+                    })
                 else:
                     skip = True
                     break
