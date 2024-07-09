@@ -1,2 +1,2 @@
 type: pretrained_decoder
-model: llama-3-8b
+model: env(LLAMA3_MODEL:llama-3-8b)
