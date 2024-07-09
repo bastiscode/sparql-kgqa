@@ -186,8 +186,8 @@ class SPARQLGenerator(TextProcessor):
         chat_template = self.cfg["inference"].get("chat_template", None)
         if chat_template is not None:
             s = chat_template.get("start", "")
-            if "user" in chat_template:
-                s += chat_template["user"].replace("{text}", text)
+            if "user" in chat_template["roles"]:
+                s += chat_template["roles"]["user"].replace("{text}", text)
             else:
                 s += text
             s += chat_template.get("end", "")
