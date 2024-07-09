@@ -424,14 +424,16 @@ class SPARQLGenerator(TextProcessor):
             if isinstance(example_index, str):
                 example_index = SimilarityIndex.load(example_index)
             self._example_index = example_index
+            self._examples = None
 
         elif examples is not None:
             if isinstance(examples, str):
                 examples = load_examples(examples)
             self._examples = examples
+            self._example_index = None
 
         else:
-            raise ValueError("example_index or examples must be provided")
+            raise ValueError("either examples or example_index must be set")
 
     def set_kg_indices(
         self,

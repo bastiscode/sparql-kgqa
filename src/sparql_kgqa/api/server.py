@@ -62,10 +62,11 @@ class SPARQLGenerationServer(TextProcessingServer):
                 "example_index",
                 config.get("example_index", None)
             )
-            text_processor.set_examples(
-                examples,
-                example_index
-            )
+            if example_index is not None or examples is not None:
+                text_processor.set_examples(
+                    examples,
+                    example_index
+                )
             for kg, (entities, properties) in kgs.items():
                 text_processor.set_kg_indices(
                     kg,
