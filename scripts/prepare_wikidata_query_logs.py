@@ -102,7 +102,10 @@ def prepare_file(
 
             for sparql_natural in sparqls_natural:
                 files[source].write(sparql + "\n")
-                files[f"{source}_input"].write(get_prompt("wikidata") + "\n")
+                files[f"{source}_input"].write(json.dumps({
+                    "role": "user",
+                    "text": get_prompt("wikidata")
+                }) + "\n")
 
                 sparql_natural = fix_prefixes(
                     sparql_natural,
@@ -115,7 +118,9 @@ def prepare_file(
                     args.version
                 )
 
-                files[f"{source}_natural"].write(sparql_natural + "\n")
+                files[f"{source}_natural"].write(
+                    json.dumps(sparql_natural) + "\n"
+                )
                 files[f"{source}_raw"].write(sparql_raw + "\n")
 
     return num_total, num_duplicate, num_incomplete, num_invalid
