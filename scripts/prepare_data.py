@@ -222,8 +222,7 @@ def format_query(
         return f"Generate a SPARQL query over {kg.capitalize()} for " \
             f"the question \"{clean(query)}\""
 
-    query = preprocess_natural_language_query(query, [kg], None, None)
-    return json.dumps(query)
+    return preprocess_natural_language_query(query, [kg], None, None)
 
 
 def prepare(args: argparse.Namespace):

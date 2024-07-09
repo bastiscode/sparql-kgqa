@@ -21,7 +21,7 @@ from sparql_kgqa.sparql.utils import (
 
 
 def get_prompt(kg: str) -> str:
-    return json.dumps(f"""\
+    return f"""\
 Task:
 SPARQL query autocompletion over the specified knowledge graphs
 
@@ -29,7 +29,7 @@ Knowledge graphs:
 {kg}
 
 SPARQL:
-""")
+"""
 
 
 def prepare_file(
