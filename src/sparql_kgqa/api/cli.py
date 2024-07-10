@@ -38,8 +38,9 @@ class SPARQLGenerationCli(TextProcessingCli):
             full_outputs=self.args.full_outputs,
             disable_sparql_constraint=self.args.no_sparql_constraint,
             disable_subgraph_constraint=self.args.no_subgraph_constraint,
+            num_examples=self.args.num_examples,
+            system_message=self.args.system_message,
             force_exact=self.args.force_exact,
-            num_examples=self.args.num_examples
         )
 
         for (

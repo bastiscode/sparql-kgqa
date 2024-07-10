@@ -527,6 +527,7 @@ class SPARQLGenerator(TextProcessor):
         disable_sparql_constraint: bool = False,
         disable_subgraph_constraint: bool = False,
         num_examples: int = 3,
+        system_message: str | None = None,
         force_exact: bool = False
     ) -> None:
         assert sampling_strategy in ["greedy", "top_k", "top_p"]
@@ -542,6 +543,7 @@ class SPARQLGenerator(TextProcessor):
         self._disable_subgraph_constraint = disable_subgraph_constraint
         self._force_exact = force_exact
         self._num_examples = num_examples
+        self._system_message = system_message
 
     def generate(
         self,
