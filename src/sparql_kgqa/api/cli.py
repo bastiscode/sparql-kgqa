@@ -201,6 +201,13 @@ def main():
         ),
         help="Add knowledge graph to the generation process"
     )
+    parser.add_argument(
+        "--system-message",
+        type=str,
+        default=None,
+        help="System message to add to the generation process "
+        "(only works with chat models)"
+    )
     example_group = parser.add_mutually_exclusive_group()
     example_group.add_argument(
         "--example-index",

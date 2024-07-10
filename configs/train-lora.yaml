@@ -87,6 +87,7 @@ val:
 inference:
   tokenizer: file(tokenizers/env(MODEL).yaml)
   chat_template: file(chat_templates/env(CHAT_TEMPLATE:none).yaml)
+  system_message: env(SYSTEM_MESSAGE:null)
   eos: env(EOS_TOKEN)
   max_length: env(MAX_LENGTH:512)
   window:

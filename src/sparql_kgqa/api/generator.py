@@ -144,6 +144,10 @@ class SPARQLGenerator(TextProcessor):
         self._example_index: SimilarityIndex | None = None
         self._examples: Examples | None = None
         self._num_examples: int = 3
+        self._default_system_message: str | None = self.cfg["inference"].get(
+            "system_message", None
+        )
+        self._system_message: str | None = None
 
     def to(self, device: Device) -> "SPARQLGenerator":
         self.devices = get_devices(device)
@@ -185,11 +189,22 @@ class SPARQLGenerator(TextProcessor):
 
         chat_template = self.cfg["inference"].get("chat_template", None)
         if chat_template is not None:
+            assert "user" in chat_template["roles"], \
+                "chat template must have a user role"
+
             s = chat_template.get("start", "")
-            if "user" in chat_template["roles"]:
-                s += chat_template["roles"]["user"].replace("{text}", text)
-            else:
-                s += text
+
+            system_message = (
+                self._system_message or self._default_system_message
+            )
+            if system_message is not None:
+                assert "system" in chat_template["roles"], \
+                    "chat template must have a system role"
+                s += chat_template["roles"]["system"].replace(
+                    "{text}",
+                    system_message
+                )
+            s += chat_template["roles"]["user"].replace("{text}", text)
             s += chat_template.get("end", "")
             text = s
 

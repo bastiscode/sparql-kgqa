@@ -1,6 +1,6 @@
 import argparse
+import json
 import requests
-import re
 
 from sparql_kgqa.sparql.utils import QLEVER_URLS
 
@@ -8,52 +8,43 @@ from sparql_kgqa.sparql.utils import QLEVER_URLS
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--source",
+        "source",
         choices=["qlever"],
-        required=True
     )
     parser.add_argument(
-        "--input",
+        "out",
         type=str,
-        required=True
-    )
-    parser.add_argument(
-        "--target",
-        type=str,
-        required=True
     )
     return parser.parse_args()
-
-
-def download_html(url: str) -> str:
-    # download html from the given url
-    return requests.get(url).text
 
 
 def extract(args: argparse.Namespace):
     kg_samples = {}
     if args.source == "qlever":
-        sparql_pattern = re.compile(
-            r"examples.push\(`(.*?)`\)",
-            flags=re.DOTALL
-        )
-        question_pattern = re.compile(
-            r"<a onclick=\"example=1;.*?>\s*?<span .*?>(.*?)</span>\s*</a>",
-            flags=re.DOTALL
-        )
-        for kg, url in QLEVER_URLS.items():
+        for kg in QLEVER_URLS:
+            examples = requests.get(
+                f"https://qlever.cs.uni-freiburg.de/api/examples/{kg}"
+            ).text
             samples = []
-            html = download_html(url)
-            for sparql, question in zip(
-                sparql_pattern.finditer(html),
-                question_pattern.finditer(html)
-            ):
-                question = question.group(1).strip()
-                sparql = sparql.group(1).strip()
-                samples.append((question, sparql))
+            for line in examples.splitlines():
+                query, sparql = line.split("\t")
+                samples.append((query, sparql))
             kg_samples[kg] = samples
     else:
         raise ValueError(f"unknown source: {args.source}")
+
+    for kg, samples in kg_samples.items():
+        with open(f"{args.out}/{kg}_input.txt", "w") as inf, \
+            open(f"{args.out}/{kg}_sparql.txt", "w") as outf, \
+                open(f"{args.out}/{kg}_examples.tsv", "w") as exf:
+            for query, sparql in samples:
+                inf.write(
+                    json.dumps([{"role": "user", "text": query}]) + "\n"
+                )
+                outf.write(sparql + "\n")
+                exf.write(
+                    json.dumps({"query": query, "sparql": sparql}) + "\n"
+                )
 
 
 if __name__ == "__main__":
