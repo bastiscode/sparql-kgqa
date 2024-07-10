@@ -89,6 +89,6 @@ inference:
   chat_template: file(chat_templates/env(CHAT_TEMPLATE:none).yaml)
   system_message: env(SYSTEM_MESSAGE:null)
   eos: env(EOS_TOKEN)
-  max_length: env(MAX_LENGTH:512)
+  max_length: env(INFERENCE_LENGTH:512)
   window:
     type: full
