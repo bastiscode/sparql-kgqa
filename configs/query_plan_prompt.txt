@@ -1,0 +1,2 @@
+The SPARQL query should start with comments laying out a short high-level \
+query plan (maximum of 10 steps) to help with the query generation.

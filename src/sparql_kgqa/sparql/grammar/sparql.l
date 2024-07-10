@@ -161,4 +161,4 @@ ANON '[' {WS}* ']'
 ; {WS}+
 
 // comments (comment in to allow and ignore)
-// ; '#' [^\x0D\x0A]*
+; '#' [^\x0D\x0A]*

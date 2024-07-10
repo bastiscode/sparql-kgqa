@@ -349,7 +349,6 @@ def clean(s: str) -> str:
 def preprocess_natural_language_query(
     query: str,
     kgs: list[str],
-    info: str | None = None,
     examples: list[tuple[str, str]] | None = None
 ) -> str:
     if len(kgs) == 0:
@@ -365,23 +364,16 @@ def preprocess_natural_language_query(
             for i, (query, sparql) in enumerate(examples)
         )
 
-    if info is None or info.strip() == "":
-        info = "None"
-
     return f"""\
 Task:
 SPARQL query generation over the specified knowledge graphs given a natural \
-language query, optional additional information / guidance, and optional \
-examples of query and SPARQL pairs.
+language query and optional examples of query and SPARQL pairs.
 
 Knowledge graphs:
 {kg_str}
 
 Query:
 {query}
-
-Additional information / guidance:
-{info}
 
 Examples:
 {example_str}

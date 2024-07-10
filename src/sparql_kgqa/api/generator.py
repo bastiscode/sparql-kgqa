@@ -160,7 +160,6 @@ class SPARQLGenerator(TextProcessor):
     def _prepare_input(
         self,
         text: str,
-        info: str | None = None,
         examples: Examples | None = None,
         preprocessed: bool = False
     ) -> data.InferenceData:
@@ -179,13 +178,8 @@ class SPARQLGenerator(TextProcessor):
             text = preprocess_natural_language_query(
                 text,
                 list(self._entity_indices),
-                info,
                 examples
             )
-        else:
-            assert info is None and examples is None, \
-                "info and examples must be None if text " \
-                "is already preprocessed"
 
         chat_template = self.cfg["inference"].get("chat_template", None)
         if chat_template is not None:
@@ -547,7 +541,7 @@ class SPARQLGenerator(TextProcessor):
 
     def generate(
         self,
-        inputs: Iterable[tuple[str, str | None, Examples | None, bool]],
+        inputs: Iterable[tuple[str, Examples | None, bool]],
         batch_size: int = 16,
         batch_max_tokens: int | None = None,
         sort: bool = True,

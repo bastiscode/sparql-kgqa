@@ -12,7 +12,6 @@ from text_utils.api.processor import TextProcessor
 from sparql_kgqa import version
 from sparql_kgqa.api.generator import SPARQLGenerator
 from sparql_kgqa.api.server import SPARQLGenerationServer
-from sparql_kgqa.sparql.utils import SimilarityIndex, load_examples, Examples
 
 
 class SPARQLGenerationCli(TextProcessingCli):
@@ -80,7 +79,6 @@ class SPARQLGenerationCli(TextProcessingCli):
         yield from processor.generate(
             ((
                 item,
-                self.args.info,
                 None,
                 self.args.preprocessed,
             ) for item in iter),
@@ -158,12 +156,6 @@ def main():
         choices=["text", "jsonl"],
         default="text",
         help="Whether to format output as jsonl or text"
-    )
-    parser.add_argument(
-        "--info",
-        type=str,
-        default=None,
-        help="Additional information for SPARQL generation"
     )
     parser.add_argument(
         "--preprocessed",
