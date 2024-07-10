@@ -1,4 +1,5 @@
 import argparse
+import os
 import json
 import requests
 
@@ -34,14 +35,14 @@ def extract(args: argparse.Namespace):
         raise ValueError(f"unknown source: {args.source}")
 
     for kg, samples in kg_samples.items():
-        with open(f"{args.out}/{kg}_input.txt", "w") as inf, \
-            open(f"{args.out}/{kg}_sparql.txt", "w") as outf, \
-                open(f"{args.out}/{kg}_examples.tsv", "w") as exf:
+        with open(os.path.join(args.out, f"{kg}_input.txt"), "w") as inf, \
+                open(os.path.join(args.out, f"{kg}_sparql.txt"), "w") as of, \
+                open(os.path.join(args.out, f"{kg}_examples.tsv"), "w") as exf:
             for query, sparql in samples:
                 inf.write(
                     json.dumps([{"role": "user", "text": query}]) + "\n"
                 )
-                outf.write(sparql + "\n")
+                of.write(sparql + "\n")
                 exf.write(
                     json.dumps({"query": query, "sparql": sparql}) + "\n"
                 )
