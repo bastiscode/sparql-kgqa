@@ -325,7 +325,7 @@ def prepare(args: argparse.Namespace):
 
                 ef.write(json.dumps({
                     "query": sample.query,
-                    "sparql": raw_sparql
+                    "sparql": sparqls[0]
                 }) + "\n")
 
                 for sparql in sparqls:
