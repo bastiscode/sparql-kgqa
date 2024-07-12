@@ -607,13 +607,12 @@ class SPARQLGenerator(TextProcessor):
     def generate_live(
         self,
         query: str,
-        info: str | None = None,
         examples: Examples | None = None,
         preprocessed: bool = False,
         postprocess: bool = True,
         pretty: bool = False
     ) -> Iterator[str]:
-        input = self._prepare_input(query, info, examples, preprocessed)
+        input = self._prepare_input(query, examples, preprocessed)
         batch = next(data.InferenceLoader.from_iterator(
             iter([input]),
             self.cfg["inference"]["tokenizer"],
