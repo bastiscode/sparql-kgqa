@@ -204,7 +204,7 @@ class SPARQLGenerator(TextProcessor):
 
         return data.InferenceData(text, {})
 
-    @ torch.inference_mode()
+    @torch.inference_mode()
     def _live_inference(
         self,
         batch: data.InferenceBatch
@@ -420,6 +420,7 @@ class SPARQLGenerator(TextProcessor):
             logit_fns=logit_fns,
             kwargs_update_fn=kwargs_update_fn,
             return_full=True,
+            return_incomplete=True,
             yield_intermediate=True
         ):
             yield [beams[0] for beams in output]
