@@ -382,50 +382,45 @@ SPARQL:
 """
 
 
-_KG_PATTERN = re.compile("^<kg(?:e|p) kg='(\\w*)'>(.*?)</kg(?:e|p)>$")
+_KG_PATTERN = re.compile("<kg(e|p) kg='(\\w*)'>(.*?)</kg\\1>")
 
 
 def replace_entities_and_properties(
-    sparql: str,
+    sparql: str | dict,
     parser: grammar.LR1Parser,
     entities: dict[str, dict[str, str]],
     properties: dict[str, dict[str, str]],
 ) -> str:
-    try:
-        parse = parser.parse(
-            sparql,
-            skip_empty=True,
-            collapse_single=True
-        )
-    except RuntimeError:
-        return sparql
+    if isinstance(sparql, str):
+        try:
+            parse = parser.parse(
+                sparql,
+                skip_empty=True,
+                collapse_single=True
+            )
+        except RuntimeError:
+            return sparql
+    else:
+        parse = sparql
 
-    for entity in _find_all(parse, "KGE"):
-        val = entity["value"]
-        kg_match = _KG_PATTERN.search(val)
-        assert kg_match is not None
-        kg = kg_match.group(1)
-        if kg not in entities:
-            continue
-        kg_entities = entities[kg]
-        value = kg_match.group(2)
-        if value not in kg_entities:
-            continue
-        entity["value"] = "<" + kg_entities[value] + ">"
+    def _find_and_replace(name: str, objects: dict[str, dict[str, str]]):
+        for obj in _find_all(parse, name):
+            if "value" not in obj:
+                continue
+            kg_match = _KG_PATTERN.search(obj["value"])
+            if kg_match is None:
+                continue
+            kg = kg_match.group(2)
+            if kg not in objects:
+                continue
+            kg_objects = objects[kg]
+            value = kg_match.group(3)
+            if value not in kg_objects:
+                continue
+            obj["value"] = "<" + kg_objects[value] + ">"
 
-    for prop in _find_all(parse, "KGP"):
-        val = prop["value"]
-        kg_match = _KG_PATTERN.search(val)
-        assert kg_match is not None
-        kg = kg_match.group(1)
-        if kg not in properties:
-            continue
-        kg_properties = properties[kg]
-        value = kg_match.group(2)
-        if value not in kg_properties:
-            continue
-        prop["value"] = "<" + kg_properties[value] + ">"
-
+    _find_and_replace("KGE", entities)
+    _find_and_replace("KGP", properties)
     return _parse_to_string(parse)
 
 
@@ -1106,7 +1101,7 @@ def subgraph_constraint(
         parser,
         kg,
         qlever_endpoint,
-        timeout=(3.0, 10.0)
+        timeout=(1.0, 3.0)
     )
     assert isinstance(result, SelectResult)
     uris = []

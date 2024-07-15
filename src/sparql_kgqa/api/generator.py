@@ -30,6 +30,7 @@ from sparql_kgqa.model import (
 from sparql_kgqa.sparql.utils import (
     SimilarityIndex,
     load_examples,
+    replace_entities_and_properties,
     subgraph_constraint,
     general_prefixes,
     load_prefixes,
@@ -259,7 +260,8 @@ class SPARQLGenerator(TextProcessor):
                     else self._sparql_constraint.clone(),
                     "index_const": None,
                     "entities": {},
-                    "properties": {}
+                    "properties": {},
+                    "values": {}
                 }
             )
             beams.append(beam)
@@ -322,7 +324,6 @@ class SPARQLGenerator(TextProcessor):
                 beam.info["index"] = None
                 beam.info["index_const"] = None
                 beam.info["start_at"] = len(beam.token_ids)
-
                 return beam
 
             match = START_PATTERN.search(last_decoded)
@@ -341,30 +342,48 @@ class SPARQLGenerator(TextProcessor):
             else:
                 kg_index = self._property_indices[kg]
 
-            decoded_string = self.tokenizer.de_tokenize(
-                beam.token_ids[beam.info["initial_length"]:]
-            )
-            * _, last = START_PATTERN.finditer(decoded_string)
-            decoded_string = decoded_string[:last.end()]
-
-            values = None
             if not self._disable_subgraph_constraint:
+                full_decoded = self.tokenizer.de_tokenize(
+                    beam.token_ids[beam.info["initial_length"]:]
+                )
+                * _, last = START_PATTERN.finditer(full_decoded)
+
                 try:
-                    values = subgraph_constraint(
-                        decoded_string,
+                    full_parsed = self._sparql_parser.prefix_parse(
+                        full_decoded[:last.start()].encode(),
+                        skip_empty=True,
+                        collapse_single=True
+                    )
+                    full_replaced = replace_entities_and_properties(
+                        full_parsed,
                         self._sparql_parser,
                         entities,
-                        properties,
-                        self._prefixes,
-                        limit=8193
+                        properties
                     )
                 except Exception:
-                    # keep none values, which means
-                    # no subgraph constraint
-                    pass
+                    print(f"error replacing: {full_decoded[:last.start()]}")
+                    full_replaced = None
 
-            if values is not None and 0 < len(values) <= 8192:
-                kg_index = kg_index.sub_index_by_values(values)
+                values = beam.info["values"].get(full_replaced, None)
+                if values is None:
+                    try:
+                        values = subgraph_constraint(
+                            full_decoded[:last.end()],
+                            self._sparql_parser,
+                            entities,
+                            properties,
+                            self._prefixes,
+                            limit=8193
+                        )
+                    except Exception:
+                        # keep none values, which means
+                        # no subgraph constraint
+                        pass
+
+                if values is not None:
+                    beam.info["values"][full_replaced] = values
+                    if 0 < len(values) <= 8192:
+                        kg_index = kg_index.sub_index_by_values(values)
 
             try:
                 beam.info["index_const"] = ContinuationConstraint(
