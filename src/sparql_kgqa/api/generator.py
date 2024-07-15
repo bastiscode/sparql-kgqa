@@ -361,7 +361,6 @@ class SPARQLGenerator(TextProcessor):
                         properties
                     )
                 except Exception:
-                    print(f"error replacing: {full_decoded[:last.start()]}")
                     full_replaced = None
 
                 values = beam.info["values"].get(full_replaced, None)
