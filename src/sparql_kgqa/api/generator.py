@@ -30,6 +30,7 @@ from sparql_kgqa.model import (
 from sparql_kgqa.sparql.utils import (
     SimilarityIndex,
     load_examples,
+    prettify,
     replace_entities_and_properties,
     subgraph_constraint,
     general_prefixes,
@@ -645,25 +646,35 @@ class SPARQLGenerator(TextProcessor):
         yield [self.tokenizer.de_tokenize(token_ids)]
 
         last: list[Beam] | None = None
-        for output in self._live_inference(batch):
-            beams = output[0]
+        for sparql in self._live_inference(batch):
+            beams = sparql[0]
             last = beams
 
-            decoded = []
+            sparqls = []
             for beam in beams:
                 init = 0 if self._full_outputs else beam.info["initial_length"]
-                decoded.append(self.tokenizer.de_tokenize(
+                sparql_prefix = self.tokenizer.de_tokenize(
                     beam.token_ids[init:]
-                ))
+                )
+                try:
+                    sparql_prefix = prettify(
+                        sparql_prefix,
+                        self._sparql_parser,
+                        is_prefix=True
+                    )
+                except Exception:
+                    pass
 
-            yield decoded
+                sparqls.append(sparql_prefix)
+
+            yield sparqls
 
         if not postprocess:
             return
 
         assert last is not None, "should not happen"
 
-        decoded = []
+        sparqls = []
         for beam in last:
             init = beam.info["initial_length"]
             sparql = self.tokenizer.de_tokenize(beam.token_ids[init:])
@@ -673,7 +684,7 @@ class SPARQLGenerator(TextProcessor):
                 input = ""
 
             try:
-                output = input + postprocess_sparql_query(
+                sparql = input + postprocess_sparql_query(
                     sparql,
                     self._sparql_parser,
                     beam.info["entities"],
@@ -682,8 +693,8 @@ class SPARQLGenerator(TextProcessor):
                     pretty
                 )
             except Exception:
-                output = input + sparql
+                sparql = input + sparql
 
-            decoded.append(output)
+            sparqls.append(sparql)
 
-        yield decoded
+        yield sparqls

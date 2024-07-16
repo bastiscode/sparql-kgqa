@@ -244,9 +244,21 @@ def _parse_to_string(parse: dict) -> str:
 def prettify(
     sparql: str,
     parser: grammar.LR1Parser,
-    indent: int = 2
+    indent: int = 4,
+    is_prefix: bool = False
 ) -> str:
-    parse = parser.parse(sparql, skip_empty=True, collapse_single=False)
+    if is_prefix:
+        parse = parser.prefix_parse(
+            sparql.encode(),
+            skip_empty=True,
+            collapse_single=False
+        )
+    else:
+        parse = parser.parse(
+            sparql,
+            skip_empty=True,
+            collapse_single=False
+        )
 
     # some simple rules for pretty printing:
     # 1. new lines after prologue (PrologueDecl) and triple blocks
