@@ -2,7 +2,7 @@ import json
 import sys
 import random
 import argparse
-from typing import Iterable, Iterator
+from typing import Iterator
 
 import torch
 
@@ -62,23 +62,17 @@ class SPARQLGenerationCli(TextProcessingCli):
 
         return gen
 
-    def format_output(self, output: str) -> Iterable[str]:
-        if self.args.output_format == "jsonl":
-            return [json.dumps(output)]
-        return [output]
-
     def process_iter(
         self,
         processor: TextProcessor,
         iter: Iterator[str]
     ) -> Iterator[str]:
         assert isinstance(processor, SPARQLGenerator)
-        if self.args.input_format == "jsonl":
-            iter = (json.loads(item) for item in iter)
+        jsonl_in = self.args.input_format == "jsonl"
 
-        yield from processor.generate(
+        for output in processor.generate(
             ((
-                item,
+                json.loads(item) if jsonl_in else item,
                 None,
                 self.args.preprocessed,
             ) for item in iter),
@@ -87,8 +81,15 @@ class SPARQLGenerationCli(TextProcessingCli):
             sort=not self.args.unsorted,
             show_progress=self.args.progress,
             postprocess=not self.args.no_postprocessing,
-            pretty=self.args.pretty
-        )
+            pretty=self.args.pretty,
+            return_candidates=self.args.return_candidates,
+        ):
+            if self.args.output_format == "jsonl":
+                yield json.dumps(output)
+            elif isinstance(output, str):
+                yield output
+            else:
+                yield from output
 
 
 def main():
@@ -156,6 +157,12 @@ def main():
         choices=["text", "jsonl"],
         default="text",
         help="Whether to format output as jsonl or text"
+    )
+    parser.add_argument(
+        "--return-candidates",
+        action="store_true",
+        help="Whether to return full candidate outputs "
+        "(only best generated output by default)"
     )
     parser.add_argument(
         "--preprocessed",

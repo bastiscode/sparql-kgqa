@@ -566,60 +566,61 @@ class SPARQLGenerator(TextProcessor):
         num_threads: int | None = None,
         show_progress: bool = False,
         postprocess: bool = True,
-        pretty: bool = False
-    ) -> Iterator[str]:
+        pretty: bool = False,
+        return_candidates: bool = False
+    ) -> Iterator[str | list[str]]:
         def inference_fn(
             batch: data.InferenceBatch
-        ) -> list[Beam]:
+        ) -> list[list[Beam]]:
             *_, last = self._live_inference(batch)
-            return [beams[0] for beams in last]
+            return last
 
         def postprocessing_fn(
             items: list[data.InferenceItem],
-            outputs: list[Beam],
-        ) -> data.InferenceData:
+            outputs: list[list[Beam]],
+        ) -> str | list[str]:
             assert len(items) == 1 and len(outputs) == 1
-            output = outputs[0]
-            item = items[0]
+            processed = []
+            for output in outputs[0]:
+                init = output.info["initial_length"]
+                sparql = self.tokenizer.de_tokenize(output.token_ids[init:])
+                if self._full_outputs:
+                    input = self.tokenizer.de_tokenize(output.token_ids[:init])
+                else:
+                    input = ""
 
-            init = output.info["initial_length"]
-            sparql = self.tokenizer.de_tokenize(output.token_ids[init:])
-            if self._full_outputs:
-                input = self.tokenizer.de_tokenize(output.token_ids[:init])
-            else:
-                input = ""
+                if postprocess:
+                    try:
+                        sparql = postprocess_sparql_query(
+                            sparql,
+                            self._sparql_parser,
+                            output.info["entities"],
+                            output.info["properties"],
+                            self._prefixes,
+                            pretty
+                        )
+                    except Exception:
+                        pass
 
-            if postprocess:
-                try:
-                    sparql = postprocess_sparql_query(
-                        sparql,
-                        self._sparql_parser,
-                        output.info["entities"],
-                        output.info["properties"],
-                        self._prefixes,
-                        pretty
-                    )
-                except Exception:
-                    pass
+                if not return_candidates:
+                    # return top candidate only
+                    return input + sparql
 
-            return data.InferenceData(
-                input + sparql,
-                item.data.info
-            )
+                processed.append(input + sparql)
 
-        yield from (
-            output.text for output in self._process(
-                (self._prepare_input(*input) for input in inputs),
-                inference_fn,
-                postprocessing_fn,
-                "Generating SPARQL queries",
-                batch_size,
-                batch_max_tokens,
-                sort,
-                num_threads,
-                show_progress=show_progress,
-                ignore_special_tokens=self._is_chat
-            )
+            return processed
+
+        yield from self._process(
+            (self._prepare_input(*input) for input in inputs),
+            inference_fn,
+            postprocessing_fn,
+            "Generating SPARQL queries",
+            batch_size,
+            batch_max_tokens,
+            sort,
+            num_threads,
+            show_progress=show_progress,
+            ignore_special_tokens=self._is_chat
         )
 
     def generate_live(
