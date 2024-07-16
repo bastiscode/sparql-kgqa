@@ -209,7 +209,7 @@ class SPARQLGenerator(TextProcessor):
     def _live_inference(
         self,
         batch: data.InferenceBatch
-    ) -> Iterator[list[Beam]]:
+    ) -> Iterator[list[list[Beam]]]:
         kgs = list(self._entity_indices)
         kgs = "|".join(re.escape(kg) for kg in kgs)
         START_PATTERN = re.compile(f"<kg(e|p) kg='({kgs})'>")
@@ -423,7 +423,7 @@ class SPARQLGenerator(TextProcessor):
                 self._temp
             ))
 
-        for output in beam_search(
+        yield from beam_search(
             decode_fn=decode_fn,
             initial=beams,
             pad_token_id=self.tokenizer.pad_token_id(),
@@ -440,8 +440,7 @@ class SPARQLGenerator(TextProcessor):
             return_full=True,
             return_incomplete=True,
             yield_intermediate=True
-        ):
-            yield [beams[0] for beams in output]
+        )
 
     def set_examples(
         self,
@@ -573,7 +572,7 @@ class SPARQLGenerator(TextProcessor):
             batch: data.InferenceBatch
         ) -> list[Beam]:
             *_, last = self._live_inference(batch)
-            return last
+            return [beams[0] for beams in last]
 
         def postprocessing_fn(
             items: list[data.InferenceItem],
@@ -630,7 +629,7 @@ class SPARQLGenerator(TextProcessor):
         preprocessed: bool = False,
         postprocess: bool = True,
         pretty: bool = False
-    ) -> Iterator[str]:
+    ) -> Iterator[list[str]]:
         input = self._prepare_input(query, examples, preprocessed)
         batch = next(data.InferenceLoader.from_iterator(
             iter([input]),
@@ -642,37 +641,48 @@ class SPARQLGenerator(TextProcessor):
         # tokenize and de_tokenize here to get rid of
         # special tokens and start/end patterns
         token_ids = self.tokenizer.tokenize(input.text).token_ids
-        yield self.tokenizer.de_tokenize(token_ids)
+        yield [self.tokenizer.de_tokenize(token_ids)]
 
-        best: Beam | None = None
+        last: list[Beam] | None = None
         for output in self._live_inference(batch):
-            best = output[0]
-            if self._full_outputs:
-                init = 0
-            else:
-                init = best.info["initial_length"]
-            yield self.tokenizer.de_tokenize(best.token_ids[init:])
+            beams = output[0]
+            last = beams
+
+            decoded = []
+            for beam in beams:
+                init = 0 if self._full_outputs else beam.info["initial_length"]
+                decoded.append(self.tokenizer.de_tokenize(
+                    beam.token_ids[init:]
+                ))
+
+            yield decoded
 
         if not postprocess:
             return
 
-        assert best is not None, "should not happen"
+        assert last is not None, "should not happen"
 
-        init = best.info["initial_length"]
-        sparql = self.tokenizer.de_tokenize(best.token_ids[init:])
-        if self._full_outputs:
-            input = self.tokenizer.de_tokenize(best.token_ids[:init])
-        else:
-            input = ""
+        decoded = []
+        for beam in last:
+            init = beam.info["initial_length"]
+            sparql = self.tokenizer.de_tokenize(beam.token_ids[init:])
+            if self._full_outputs:
+                input = self.tokenizer.de_tokenize(beam.token_ids[:init])
+            else:
+                input = ""
 
-        try:
-            yield input + postprocess_sparql_query(
-                sparql,
-                self._sparql_parser,
-                best.info["entities"],
-                best.info["properties"],
-                self._prefixes,
-                pretty
-            )
-        except Exception:
-            yield input + sparql
+            try:
+                output = input + postprocess_sparql_query(
+                    sparql,
+                    self._sparql_parser,
+                    beam.info["entities"],
+                    beam.info["properties"],
+                    self._prefixes,
+                    pretty
+                )
+            except Exception:
+                output = input + sparql
+
+            decoded.append(output)
+
+        yield decoded

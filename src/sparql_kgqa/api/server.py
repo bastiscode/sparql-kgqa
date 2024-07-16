@@ -132,7 +132,7 @@ class SPARQLGenerationServer(TextProcessingServer):
                     )
 
                     start = time.perf_counter()
-                    for text in gen.generate_live(
+                    for outputs in gen.generate_live(
                         text,
                         info,
                         pretty=True
@@ -142,9 +142,12 @@ class SPARQLGenerationServer(TextProcessingServer):
                             return
 
                         send(J.dumps({
-                            "output": text,
+                            "output": outputs,
                             "runtime": {
-                                "b": len(text.encode()),
+                                "b": max(
+                                    len(output.encode())
+                                    for output in outputs
+                                ),
                                 "s": time.perf_counter() - start
                             }
                         }))
