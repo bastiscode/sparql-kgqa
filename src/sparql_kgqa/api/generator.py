@@ -656,14 +656,15 @@ class SPARQLGenerator(TextProcessor):
                 sparql_prefix = self.tokenizer.de_tokenize(
                     beam.token_ids[init:]
                 )
-                try:
-                    sparql_prefix = prettify(
-                        sparql_prefix,
-                        self._sparql_parser,
-                        is_prefix=True
-                    )
-                except Exception:
-                    pass
+                if pretty:
+                    try:
+                        sparql_prefix = prettify(
+                            sparql_prefix,
+                            self._sparql_parser,
+                            is_prefix=True
+                        )
+                    except Exception:
+                        pass
 
                 sparqls.append(sparql_prefix)
 

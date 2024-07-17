@@ -248,17 +248,19 @@ def prettify(
     is_prefix: bool = False
 ) -> str:
     if is_prefix:
-        parse = parser.prefix_parse(
+        parse, rest = parser.prefix_parse(
             sparql.encode(),
             skip_empty=True,
             collapse_single=False
         )
+        rest_str = bytes(rest).decode(errors="replace")
     else:
         parse = parser.parse(
             sparql,
             skip_empty=True,
             collapse_single=False
         )
+        rest_str = ""
 
     # some simple rules for pretty printing:
     # 1. new lines after prologue (PrologueDecl) and triple blocks
@@ -324,7 +326,7 @@ def prettify(
     newline = _pretty(parse)
     if newline:
         s = s.rstrip()
-    return s
+    return s + rest_str
 
 
 def _find(
@@ -986,7 +988,7 @@ def subgraph_constraint(
     prefix = prefix[:match.start()]
     kg = match.group(1)
 
-    parse = parser.prefix_parse(
+    parse, _ = parser.prefix_parse(
         prefix.encode(),
         skip_empty=False,
         collapse_single=True
