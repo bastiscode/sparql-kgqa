@@ -409,15 +409,15 @@ class SPARQLGenerator(TextProcessor):
         ]
 
         if self._sampling_strategy == "greedy":
-            sample_fn = inference_utils.beam_greedy()
+            sample_fn = inference_utils.greedy()
         elif self._sampling_strategy == "top_k":
             assert self._top_k >= self._beam_width, \
                 "top k must be greater than or equal to beam width"
             logit_fns.append(inference_utils.top_k_masking(self._top_k))
-            sample_fn = inference_utils.beam_sample()
+            sample_fn = inference_utils.sample()
         else:
             logit_fns.append(inference_utils.nucleus_masking(self._top_p))
-            sample_fn = inference_utils.beam_sample()
+            sample_fn = inference_utils.sample()
 
         if self._sampling_strategy != "greedy" and self._temp != 1.0:
             logit_fns.append(inference_utils.temperature_scaling(
@@ -646,8 +646,8 @@ class SPARQLGenerator(TextProcessor):
         yield [self.tokenizer.de_tokenize(token_ids)]
 
         last: list[Beam] | None = None
-        for sparql in self._live_inference(batch):
-            beams = sparql[0]
+        for output in self._live_inference(batch):
+            beams = output[0]
             last = beams
 
             sparqls = []

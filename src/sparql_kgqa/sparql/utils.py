@@ -326,7 +326,7 @@ def prettify(
     newline = _pretty(parse)
     if newline:
         s = s.rstrip()
-    return s + rest_str
+    return (s.strip() + " " + rest_str).strip()
 
 
 def _find(
