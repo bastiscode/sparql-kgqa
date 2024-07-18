@@ -262,7 +262,9 @@ class SPARQLGenerator(TextProcessor):
                     "index_const": None,
                     "entities": {},
                     "properties": {},
-                    "values": {}
+                    "values": {},
+                    "last_decoded": "",
+                    "seen": set()
                 }
             )
             beams.append(beam)
@@ -293,13 +295,19 @@ class SPARQLGenerator(TextProcessor):
                 const.next(token_id)
                 beam.info[const_name] = const
 
+            # skip index constraint if no indices are set
+            if len(self._entity_indices) == 0:
+                return beam
+
             entities = beam.info["entities"]
             properties = beam.info["properties"]
             index = beam.info["index"]
 
+            previous_decoded = beam.info["last_decoded"]
             last_decoded = self.tokenizer.de_tokenize(
                 beam.token_ids[beam.info["start_at"]:]
             )
+            beam.info["last_decoded"] = last_decoded
             if index is not None:
                 match = END_PATTERN.search(last_decoded)
                 if match is None:
@@ -311,6 +319,11 @@ class SPARQLGenerator(TextProcessor):
                 assert isinstance(const, ContinuationConstraint)
                 obj_id = const.get_value()
                 assert obj_id is not None
+                if (previous_decoded, obj_id) in beam.info["seen"]:
+                    return None
+
+                beam.info["seen"].add((previous_decoded, obj_id))
+
                 obj_type, kg, initial_prefix = index
                 name = initial_prefix + name
                 if obj_type == "e":
@@ -328,7 +341,7 @@ class SPARQLGenerator(TextProcessor):
                 return beam
 
             match = START_PATTERN.search(last_decoded)
-            if match is None or len(self._entity_indices) == 0:
+            if match is None:
                 # no start pattern found or no indices set
                 return beam
 
