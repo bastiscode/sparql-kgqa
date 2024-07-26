@@ -17,7 +17,7 @@ from text_utils import grammar
 
 QLEVER_API = "https://qlever.cs.uni-freiburg.de/api"
 QLEVER_URLS = {
-    "wikidata": f"{QLEVER_API}/wikidata",
+    "wikidata": f"{QLEVER_API}/wikidata-sebastian",
     "dbpedia": f"{QLEVER_API}/dbpedia",
     "freebase": f"{QLEVER_API}/freebase",
 }

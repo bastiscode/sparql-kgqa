@@ -31,6 +31,7 @@ dependencies = [
 
 [project.scripts]
 "sparql-kgqa" = "sparql_kgqa.api.cli:main"
+"sparql-kgqa-2" = "sparql_kgqa.api.cli2:main"
 
 [project.urls]
 Github = "https://github.com/bastiscode/sparql-kgqa"

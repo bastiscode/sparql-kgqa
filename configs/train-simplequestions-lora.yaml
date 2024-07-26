@@ -62,8 +62,7 @@ train:
           configs:
             - type: chat_decode
               part: input
-              chat_template: file(chat_templates/env(CHAT_TEMPLATE:none).yaml)
-              separator: env(SEPARATOR:"")
+              chat_template: file(chat_templates/env(MODEL).yaml)
             - type: json_decode
               part: target
             - type: suffix
@@ -72,7 +71,7 @@ train:
       task:
         type: generation
         tokenizer: file(tokenizers/env(MODEL).yaml)
-        ignore_special_tokens: eval("env(CHAT_TEMPLATE:none)" != "none")
+        ignore_special_tokens: true
         mask_input: true
       postprocessing:
         type: global
@@ -88,7 +87,7 @@ val:
 
 inference:
   tokenizer: file(tokenizers/env(MODEL).yaml)
-  chat_template: file(chat_templates/env(CHAT_TEMPLATE:none).yaml)
+  chat_template: file(chat_templates/env(MODEL).yaml)
   system_message: env(SYSTEM_MESSAGE:null)
   eos: env(EOS_TOKEN)
   max_length: env(INFERENCE_LENGTH:512)
