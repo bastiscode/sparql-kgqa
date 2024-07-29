@@ -6,6 +6,7 @@ import uuid
 import collections
 import copy
 import requests
+from collections import Counter
 from importlib import resources
 from typing import Any, Iterator
 
@@ -642,7 +643,7 @@ def query_entities(
     parser: grammar.LR1Parser,
     kg: str = "wikidata",
     qlever_endpoint: str | None = None
-) -> set[tuple[str, ...]] | None:
+) -> Counter | None:
     if qlever_endpoint is None:
         assert kg in QLEVER_URLS, \
             f"no QLever endpoint for knowledge graph {kg}"
@@ -657,14 +658,9 @@ def query_entities(
             timeout=(5.0, 60.0)
         )
         if isinstance(result, AskResult):
-            return {(f"{result}",)}
-        return set(
-            tuple(
-                "" if r[var] is None else r[var].value  # type: ignore
-                for var in result.vars
-            )
-            for r in result.results
-        )
+            return Counter({result: 1})
+        else:
+            return Counter((tuple(r) for r in result))
     except Exception:
         return None
 
@@ -685,9 +681,9 @@ def calc_f1(
         return None, False, True
     if len(pred_set) == 0 and len(target_set) == 0:
         return 1.0, False, False
-    tp = len(pred_set.intersection(target_set))
-    fp = len(pred_set.difference(target_set))
-    fn = len(target_set.difference(pred_set))
+    tp = (pred_set & target_set).total()
+    fp = (pred_set - target_set).total()
+    fn = (target_set - pred_set).total()
     # calculate precision, recall and f1
     if tp > 0:
         p = tp / (tp + fp)
