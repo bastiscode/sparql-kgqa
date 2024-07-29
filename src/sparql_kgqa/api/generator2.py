@@ -121,7 +121,7 @@ class SPARQLGenerator(TextProcessor):
         self._max_length = None
 
         # qgram index options
-        self._k = 16  # number of candidates to return
+        self._k = 5  # number of candidates to return
         self._delta: int | None = None  # maximum edit distance
         # maximum size where sub index is built
         self._max_candidates: int | None = 1024
@@ -426,7 +426,6 @@ class SPARQLGenerator(TextProcessor):
                 alts
             )
             prompt = self._chat_format(prompt)
-            LOGGER.debug(prompt)
             token_ids = self.tokenizer.tokenize(
                 prompt,
                 self._is_chat
@@ -437,6 +436,7 @@ class SPARQLGenerator(TextProcessor):
                 {
                     "beam": beam,
                     "idx": idx,
+                    "prompt": prompt,
                     "alternatives": alts,
                     "obj_type": obj_type,
                     "const": grammar.RegexConstraint(
@@ -458,6 +458,7 @@ class SPARQLGenerator(TextProcessor):
             selected = self.tokenizer.de_tokenize(
                 selection.token_ids[selection.info["initial_length"]:]
             )
+            LOGGER.debug(selection.info["prompt"] + selected)
             try:
                 selected = self._manager.parse_result(
                     selection.info["alternatives"],
@@ -557,7 +558,7 @@ class SPARQLGenerator(TextProcessor):
         disable_sparql_constraint: bool = False,
         disable_subgraph_constraint: bool = False,
         num_examples: int = 3,
-        select_k: int = 16,
+        select_k: int = 5,
         select_delta: int | None = None,
         select_max_candidates: int | None = 1024,
         system_message: str | None = None,
