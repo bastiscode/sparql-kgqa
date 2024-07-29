@@ -44,13 +44,17 @@ class SPARQLGenerationCli(TextProcessingCli):
 
         ent, prop, kg = self.args.knowledge_graph
         ent_index = os.path.join(ent, "index.bin")
+        ent_mapping = os.path.join(ent, "index.bin.mapping")
         ent_data = os.path.join(ent, "data.tsv")
         prop_index = os.path.join(prop, "index.bin")
+        prop_mapping = os.path.join(prop, "index.bin.mapping")
         prop_data = os.path.join(prop, "data.tsv")
         gen.set_kg_indices(
             kg,
             (ent_index, ent_data),
             (prop_index, prop_data),
+            ent_mapping,
+            prop_mapping,
         )
 
         if self.args.example_index is not None:

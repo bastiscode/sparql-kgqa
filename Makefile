@@ -101,21 +101,24 @@ qgram-indices:
 	> data/qgram-index/wikidata-entities/data.tsv
 	@python scripts/build_qgram_index.py \
 	data/qgram-index/wikidata-entities/data.tsv \
-	data/qgram-index/wikidata-entities/index.bin
+	data/qgram-index/wikidata-entities/index.bin \
+	--with-mapping
 	# wikidata entities small (top 1M entities by sitelinks)
 	@mkdir -p data/qgram-index/wikidata-entities-small
 	@head -n 1000001 data/qgram-index/wikidata-entities/data.tsv \
 	> data/qgram-index/wikidata-entities-small/data.tsv
 	@python scripts/build_qgram_index.py \
 	data/qgram-index/wikidata-entities-small/data.tsv \
-	data/qgram-index/wikidata-entities-small/index.bin
+	data/qgram-index/wikidata-entities-small/index.bin \
+	--with-mapping
 	# wikidata entities medium (top 10M entities by sitelinks)
 	@mkdir -p data/qgram-index/wikidata-entities-medium
 	@head -n 10000001 data/qgram-index/wikidata-entities/data.tsv \
 	> data/qgram-index/wikidata-entities-medium/data.tsv
 	@python scripts/build_qgram_index.py \
 	data/qgram-index/wikidata-entities-medium/data.tsv \
-	data/qgram-index/wikidata-entities-medium/index.bin
+	data/qgram-index/wikidata-entities-medium/index.bin \
+	--with-mapping
 	# wikidata properties
 	# https://qlever.cs.uni-freiburg.de/wikidata/ablT44
 	@mkdir -p data/qgram-index/wikidata-properties
@@ -127,4 +130,5 @@ qgram-indices:
 	> data/qgram-index/wikidata-properties/data.tsv
 	@python scripts/build_qgram_index.py \
 	data/qgram-index/wikidata-properties/data.tsv \
-	data/qgram-index/wikidata-properties/index.bin
+	data/qgram-index/wikidata-properties/index.bin \
+	--with-mapping
