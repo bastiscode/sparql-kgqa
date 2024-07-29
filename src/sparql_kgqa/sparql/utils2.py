@@ -342,8 +342,9 @@ class KgManager:
         self,
         prefix: str,
         qlever_endpoint: str | None = None,
-        limit: int | None = None
-    ) -> tuple[set[str] | None, str, tuple[str, str | None]] | None:
+        limit: int | None = None,
+        max_retries: int = 3
+    ) -> tuple[set[str] | None, str, tuple[str, str | None]]:
         """
         Autocomplete the SPARQL query prefix,
         run it against Qlever and return the entities or
@@ -472,15 +473,25 @@ class KgManager:
             ]
             prefix = _parse_to_string(parse)
 
-        result = query_qlever(
-            prefix,
-            self.parser,
-            self.kg,
-            qlever_endpoint,
-            timeout=10.0
-        )
-        assert isinstance(result, list)
-        uris = set(r[0] for r in result)
+        uris = None
+        for i in range(max(1, max_retries)):
+            try:
+                result = query_qlever(
+                    prefix,
+                    self.parser,
+                    self.kg,
+                    qlever_endpoint,
+                    timeout=10.0
+                )
+                assert isinstance(result, list)
+                uris = set(r[0] for r in result)
+                break
+            except Exception as e:
+                LOGGER.debug(
+                    "query_qlever within autocomplete_prefix "
+                    f"failed for prefix '{prefix}' in retry "
+                    f"{i}: {e}"
+                )
         return uris, obj_type, guess
 
     def fix_prefixes(
