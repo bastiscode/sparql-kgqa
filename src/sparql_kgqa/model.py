@@ -377,6 +377,12 @@ class PretrainedDecoder(Model):
         if len(devices) == 1:
             return self.to(devices[0])
 
+        if isinstance(self.model, PeftModel):
+            # unwrap peft model
+            model = self.model.base_model
+        else:
+            model = self.model
+
         # distribute the layers
         layers = [
             m
@@ -401,7 +407,7 @@ class PretrainedDecoder(Model):
         # add additional hooks for modules outside the regular
         # transformer layers
         if isinstance(
-            self.model,
+            model,
             (
                 LlamaForCausalLM,
                 Phi3ForCausalLM,
@@ -412,55 +418,55 @@ class PretrainedDecoder(Model):
         ):
             _register_hook(
                 self.hooks,
-                self.model.model.embed_tokens,
+                model.model.embed_tokens,
                 devices[0]
             )
             _register_hook(
                 self.hooks,
-                self.model.model.norm,
+                model.model.norm,
                 devices[-1]
             )
             _register_hook(
                 self.hooks,
-                self.model.lm_head,
+                model.lm_head,
                 devices[-1]
             )
-        elif isinstance(self.model, PhiForCausalLM):
+        elif isinstance(model, PhiForCausalLM):
             _register_hook(
                 self.hooks,
-                self.model.model.embed_tokens,
+                model.model.embed_tokens,
                 devices[0]
             )
             _register_hook(
                 self.hooks,
-                self.model.model.final_layer_norm,
+                model.model.final_layer_norm,
                 devices[-1]
             )
             _register_hook(
                 self.hooks,
-                self.model.lm_head,
+                model.lm_head,
                 devices[-1]
             )
         else:
-            assert isinstance(self.model, GPT2LMHeadModel)
+            assert isinstance(model, GPT2LMHeadModel)
             _register_hook(
                 self.hooks,
-                self.model.transformer.wte,
+                model.transformer.wte,
                 devices[0]
             )
             _register_hook(
                 self.hooks,
-                self.model.transformer.wpe,
+                model.transformer.wpe,
                 devices[0]
             )
             _register_hook(
                 self.hooks,
-                self.model.transformer.ln_f,
+                model.transformer.ln_f,
                 devices[-1]
             )
             _register_hook(
                 self.hooks,
-                self.model.lm_head,
+                model.lm_head,
                 devices[-1]
             )
         return self
