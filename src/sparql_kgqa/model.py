@@ -386,7 +386,7 @@ class PretrainedDecoder(Model):
         # distribute the layers
         layers = [
             m
-            for m in self.model.modules()
+            for m in model.modules()
             if isinstance(m, self.layer_cls)
         ]
         assert len(layers) > 0 and len(devices) <= len(layers), \
