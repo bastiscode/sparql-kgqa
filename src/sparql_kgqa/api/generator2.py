@@ -339,7 +339,10 @@ class SPARQLGenerator(TextProcessor):
             beams.append([beam])
 
         def eos_stop_fn(beam: Beam) -> bool:
-            return beam.token_ids[-1] == self._eos_token_id
+            return (
+                beam.token_ids[-1] == self._eos_token_id
+                or len(beam) >= self.max_length
+            )
 
         def pattern_stop_fn(beam: Beam) -> bool:
             decoded = self.tokenizer.de_tokenize(
@@ -373,7 +376,13 @@ class SPARQLGenerator(TextProcessor):
                 outputs[idx].extend(stop)
                 beams[idx] = keep
 
-            beams = self._infer_alternatives(beams, eos_stop_fn)
+            alternatives = self._infer_alternatives(beams, eos_stop_fn)
+            for idx in range(len(batch)):
+                if len(alternatives[idx]) == 0:
+                    # keep last non-empty beams
+                    outputs[idx].extend(beams[idx])
+
+            beams = alternatives
 
         yield outputs
 

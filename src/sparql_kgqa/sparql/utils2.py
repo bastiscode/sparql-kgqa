@@ -354,8 +354,9 @@ class KgManager:
         """
         matches = list(self.pattern.finditer(prefix))
         match = matches[-1]
-        prefix = prefix[:match.start()]
+        # prefix = prefix[:match.start()]
         obj_type = "entity" if match.group(1) == "e" else "property"
+        look_for = "KGE" if obj_type == "entity" else "KGP"
         name = match.group(2)
         variant = match.group(3)
         if variant == "":
@@ -370,13 +371,7 @@ class KgManager:
 
         if _find(
             parse,
-            {
-                "PNAME_LN",
-                "IRIREF",
-                "KGE",
-                "KGP"
-            },
-            skip={"SubSelect"}
+            {"PNAME_LN", "IRIREF"}, skip={"SubSelect"}
         ) is None:
             # means we have a prefix but with only vars,
             # which means that there are no constraints
@@ -396,24 +391,28 @@ class KgManager:
         last_triple = triple_blocks[-1]
         # the last triple block
         assert len(last_triple["children"]) == 2
-        first, second = last_triple["children"]
+        subj, second = last_triple["children"]
         assert second["name"] == "PropertyListPathNotEmpty"
 
         var = uuid.uuid4().hex
         assert len(second["children"]) == 3
-        if _parse_to_string(second["children"][1]) != "":
-            # subject can always be any iri
+        prop, obj, _ = second["children"]
+        if subj["name"] == look_for:
+            # subject can be anything
             return None, obj_type, (name, variant)
 
-        elif _parse_to_string(second["children"][0]) != "":
-            # object
-            second["children"][1] = {"name": "VAR1", "value": f"?{var}"}
-
-        elif _parse_to_string(first) != "":
+        elif prop["name"] == look_for:
             # property
-            second["children"][0] = {"name": "VAR1", "value": f"?{var}"}
+            prop["name"] = "VAR1"
+            prop["value"] = f"?{var}"
+            obj["name"] = "VAR1"
             obj_var = uuid.uuid4().hex
-            second["children"][1] = {"name": "VAR1", "value": f"?{obj_var}"}
+            obj["value"] = f"?{obj_var}"
+
+        elif obj["name"] == look_for:
+            # object
+            obj["name"] = "VAR1"
+            obj["value"] = f"?{var}"
 
         else:
             assert "unexpected case"
