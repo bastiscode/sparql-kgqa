@@ -213,13 +213,13 @@ def prepare(args: argparse.Namespace):
     if kg != "wikidata":
         raise RuntimeError("only wikidata supported for now")
 
-    ent = QGramIndex(3, True, "ied")
-    ent.build(args.entities)
-    prop = QGramIndex(3, True, "ied")
-    prop.build(args.properties)
+    ent_data = os.path.join(args.entities, "data.tsv")
+    ent_index = os.path.join(args.entities, "index.bin")
+    prop_data = os.path.join(args.properties, "data.tsv")
+    prop_index = os.path.join(args.properties, "index.bin")
     manager = WikidataManager(
-        ent,
-        prop
+        (ent_index, ent_data),
+        (prop_index, prop_data)
     )
 
     os.makedirs(args.output, exist_ok=True)
