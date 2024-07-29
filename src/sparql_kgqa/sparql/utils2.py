@@ -773,17 +773,18 @@ class KgManager:
                 norm = map.normalize(iri)
                 if norm is None:
                     continue
-                iri, variants = norm
+                iri, variant = norm
                 if iri not in map:
                     continue
-                valid_variants.append(variants)
+                valid_variants.append(variant)
                 indices.append(map[iri])
 
             sub_index = index.sub_index_by_indices(indices)
             for i, _ in sub_index.find_matches(guess[0], delta)[:k]:
+                variant = valid_variants[sub_index.get_idx_by_id(i)]
                 data.append((
                     sub_index.get_data_by_id(i),
-                    valid_variants[sub_index.get_idx_by_id(i)]
+                    set() if variant is None else {variant}
                 ))
 
         else:

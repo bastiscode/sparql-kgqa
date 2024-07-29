@@ -305,7 +305,7 @@ class SPARQLGenerator(TextProcessor):
             yield_intermediate=True
         )
 
-    @ torch.inference_mode()
+    @torch.inference_mode()
     def _live_inference(
         self,
         batch: data.InferenceBatch
@@ -342,13 +342,16 @@ class SPARQLGenerator(TextProcessor):
             return beam.token_ids[-1] == self._eos_token_id
 
         def pattern_stop_fn(beam: Beam) -> bool:
-            if eos_stop_fn(beam):
-                return True
-
-            assert self._manager is not None, "kg indices not set"
             decoded = self.tokenizer.de_tokenize(
                 beam.token_ids[beam.info["last"]:]
             )
+            if eos_stop_fn(beam):
+                beam.info["decoded"] += decoded
+                beam.info["sparql"] += decoded
+                beam.info["guess"] = ""
+                return True
+
+            assert self._manager is not None, "kg indices not set"
             match = next(self._manager.pattern.finditer(decoded), None)
             if match is None:
                 return False
@@ -360,7 +363,7 @@ class SPARQLGenerator(TextProcessor):
             return True
 
         outputs = [[] for _ in range(len(batch))]
-        while any(len(beam) > 0 for beam in beams):
+        while any(beam for beam in beams):
             for beams in self._partial_inference(beams, pattern_stop_fn):
                 yield beams
 
@@ -371,6 +374,8 @@ class SPARQLGenerator(TextProcessor):
                 beams[idx] = keep
 
             beams = self._infer_alternatives(beams, eos_stop_fn)
+
+        yield outputs
 
     def _infer_alternatives(
         self,
@@ -412,7 +417,6 @@ class SPARQLGenerator(TextProcessor):
                 alts
             )
             prompt = self._chat_format(prompt)
-            LOGGER.debug(f"prompt: {prompt}")
             token_ids = self.tokenizer.tokenize(
                 prompt,
                 self._is_chat

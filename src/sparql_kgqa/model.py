@@ -379,7 +379,7 @@ class PretrainedDecoder(Model):
 
         if isinstance(self.model, PeftModel):
             # unwrap peft model
-            model = self.model.base_model
+            model = self.model.base_model.model
         else:
             model = self.model
 
