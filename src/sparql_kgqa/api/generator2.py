@@ -1,4 +1,5 @@
 from typing import Any, Iterable, Iterator
+import logging
 import random
 
 import torch
@@ -39,6 +40,7 @@ from sparql_kgqa.sparql.utils2 import (
     run_parallel,
 )
 
+LOGGER = logging.getLogger(__name__)
 _BASE_URL = ""
 _NAME_TO_ZIP = {}
 
@@ -117,6 +119,12 @@ class SPARQLGenerator(TextProcessor):
         self._use_cache = False
         self._full_outputs = False
         self._max_length = None
+
+        # qgram index options
+        self._k = 16  # number of candidates to return
+        self._delta: int | None = None  # maximum edit distance
+        # maximum size where sub index is built
+        self._max_candidates: int | None = 1024
 
         # SPARQL stuff
         self._exact = self.cfg["inference"].get("exact", False)
@@ -243,8 +251,8 @@ class SPARQLGenerator(TextProcessor):
         def update_fn(beam: Beam, token_id: int, log_p: float) -> Beam | None:
             beam = Beam.from_beam(beam, token_id, log_p)
 
-            # advance constraint if enabled
-            if not self._disable_sparql_constraint:
+            # advance constraint if given
+            if "const" in beam.info:
                 const = beam.info["const"]
                 if const.is_invalid():
                     # return None if constraint is invalid
@@ -257,12 +265,12 @@ class SPARQLGenerator(TextProcessor):
 
             return beam
 
-        logit_fns = []
-        if not self._disable_sparql_constraint:
-            logit_fns.append(inference_utils.constraint_logit_fn(
-                lambda beam: beam.info["const"],
+        logit_fns = [
+            inference_utils.constraint_logit_fn(
+                lambda beam: beam.info.get("const", None),
                 self._eos_token_id
-            ))
+            )
+        ]
 
         if self._sampling_strategy == "greedy":
             sample_fn = inference_utils.greedy()
@@ -321,10 +329,13 @@ class SPARQLGenerator(TextProcessor):
                     "last": len(token_ids),
                     "decoded": "",
                     "sparql": "",
+                    "guess": "",
                     "seen_sparql": set(),
-                    "const": self._sparql_constraint.clone(),
                 }
             )
+            if not self._disable_sparql_constraint:
+                beam.info["const"] = self._sparql_constraint.clone()
+
             beams.append([beam])
 
         def eos_stop_fn(beam: Beam) -> bool:
@@ -345,14 +356,13 @@ class SPARQLGenerator(TextProcessor):
             part = decoded[:match.start()]
             beam.info["decoded"] += part
             beam.info["sparql"] += part
+            beam.info["guess"] = decoded[match.start():]
             return True
 
         outputs = [[] for _ in range(len(batch))]
         while any(len(beam) > 0 for beam in beams):
             for beams in self._partial_inference(beams, pattern_stop_fn):
                 yield beams
-
-            print([[b.info for b in beam] for beam in beams])
 
             # filter out beams that stopped because of eos
             for idx in range(len(batch)):
@@ -361,7 +371,6 @@ class SPARQLGenerator(TextProcessor):
                 beams[idx] = keep
 
             beams = self._infer_alternatives(beams, eos_stop_fn)
-            print([[b.info for b in beam] for beam in beams])
 
     def _infer_alternatives(
         self,
@@ -370,10 +379,7 @@ class SPARQLGenerator(TextProcessor):
     ) -> list[list[Beam]]:
         assert self._manager is not None, "kg indices not set"
         batch_size = len(beams)
-        k = 16
-        delta = None
-        max_results = 1024
-        options = (k, delta, max_results)
+        options = (self._k, self._delta, self._max_candidates)
         flat_beams = [
             (idx, beam)
             for idx, beams_ in enumerate(beams)
@@ -381,9 +387,7 @@ class SPARQLGenerator(TextProcessor):
         ]
 
         prefixes = [
-            self.tokenizer.de_tokenize(
-                beam.token_ids[beam.info["initial_length"]:]
-            )
+            beam.info["sparql"] + beam.info["guess"]
             for _, beam in flat_beams
         ]
         results = run_parallel(
@@ -408,6 +412,7 @@ class SPARQLGenerator(TextProcessor):
                 alts
             )
             prompt = self._chat_format(prompt)
+            LOGGER.debug(f"prompt: {prompt}")
             token_ids = self.tokenizer.tokenize(
                 prompt,
                 self._is_chat
@@ -436,16 +441,17 @@ class SPARQLGenerator(TextProcessor):
 
         output_beams = [[] for _ in range(batch_size)]
         for selection in flatten(selections):
-            result = self.tokenizer.de_tokenize(
+            selected = self.tokenizer.de_tokenize(
                 selection.token_ids[selection.info["initial_length"]:]
             )
             try:
                 selected = self._manager.parse_result(
                     selection.info["alternatives"],
                     selection.info["obj_type"],
-                    result
+                    selected
                 )
-            except Exception:
+            except Exception as e:
+                LOGGER.debug(f"error parsing result '{selected}': {e}")
                 selected = None
 
             if selected is None:
@@ -459,12 +465,11 @@ class SPARQLGenerator(TextProcessor):
             beam.info["seen_sparql"].add(sparql)
             # build new input from prompt and parts
             decoded = beam.info["decoded"] + name
-            prompt = beam.info["prompt"] + decoded
+
             token_ids = self.tokenizer.tokenize(
-                prompt,
+                beam.info["prompt"] + decoded,
                 self._is_chat
             ).token_ids
-
             updated_beam = Beam(
                 token_ids,
                 [0.0] * len(token_ids),
@@ -473,10 +478,13 @@ class SPARQLGenerator(TextProcessor):
 
             updated_beam.info["decoded"] = decoded
             updated_beam.info["sparql"] = sparql
-            updated_beam.info["const"] = beam.info["const"].clone()
-            updated_beam.info["const"].reset(decoded.encode())
             updated_beam.info["last"] = len(token_ids)
-            output_beams[selection.info["idx"]].append(updated_beam)
+            if not self._disable_sparql_constraint:
+                updated_beam.info["const"] = beam.info["const"].clone()
+                updated_beam.info["const"].reset(decoded.encode())
+
+            idx = selection.info["idx"]
+            output_beams[idx].append(updated_beam)
 
         return output_beams
 
@@ -535,6 +543,9 @@ class SPARQLGenerator(TextProcessor):
         disable_sparql_constraint: bool = False,
         disable_subgraph_constraint: bool = False,
         num_examples: int = 3,
+        select_k: int = 16,
+        select_delta: int | None = None,
+        select_max_candidates: int | None = 1024,
         system_message: str | None = None,
         force_exact: bool = False
     ) -> None:
@@ -552,6 +563,9 @@ class SPARQLGenerator(TextProcessor):
         self._force_exact = force_exact
         self._num_examples = num_examples
         self._system_message = system_message
+        self._k = select_k
+        self._delta = select_delta
+        self._max_candidates = select_max_candidates
 
     def generate(
         self,
@@ -561,7 +575,6 @@ class SPARQLGenerator(TextProcessor):
         sort: bool = True,
         num_threads: int | None = None,
         show_progress: bool = False,
-        postprocess: bool = True,
         pretty: bool = False,
         return_candidates: bool = False
     ) -> Iterator[str | list[str]]:
@@ -580,21 +593,22 @@ class SPARQLGenerator(TextProcessor):
             processed = []
             for output in outputs[0]:
                 input = output.info["prompt"]
-                if postprocess:
-                    generated = output.info["sparql"]
-                else:
-                    generated = output.info["decoded"]
+                generated = output.info["sparql"]
 
                 if pretty:
                     generated = self._manager.prettify(
-                        generated
+                        generated,
+                        is_prefix=True
                     )
+
+                if self._full_outputs:
+                    generated = input + generated
 
                 if not return_candidates:
                     # return top candidate only
-                    return input + generated
+                    return generated
 
-                processed.append(input + generated)
+                processed.append(generated)
 
             return processed
 

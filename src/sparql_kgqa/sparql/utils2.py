@@ -1,5 +1,6 @@
 from collections import Counter
 import random
+import logging
 import re
 import pickle
 import uuid
@@ -20,11 +21,12 @@ from sparql_kgqa.sparql.utils import (
     SelectResult
 )
 
-_CLEAN_PATTERN = re.compile(r"\s+", flags=re.MULTILINE)
+LOGGER = logging.getLogger(__name__)
+CLEAN_PATTERN = re.compile(r"\s+", flags=re.MULTILINE)
 
 
 def clean(s: str) -> str:
-    return _CLEAN_PATTERN.sub(" ", s).strip()
+    return CLEAN_PATTERN.sub(" ", s).strip()
 
 
 def _load_sparql_grammar(
@@ -285,7 +287,7 @@ class KgManager:
             | self.property_mapping.default_variants()
         )
         self.pattern = re.compile(
-            rf"<kg([ep])>(.*?)(?: \(({variants})\))?</kg\1>"
+            rf"<\|kg([ep])\|>(.*?)(?: \(({variants})\))?<\|kg\1\|>"
         )
 
     def get_parser(self) -> grammar.LR1Parser:
@@ -321,13 +323,21 @@ class KgManager:
         is_prefix: bool = False
     ) -> str:
         try:
+            sparql = self.fix_prefixes(
+                sparql,
+                is_prefix
+            )
+            return sparql
             return prettify(
                 sparql,
                 self.parser,
                 indent,
                 is_prefix
             )
-        except Exception:
+        except Exception as e:
+            LOGGER.debug(
+                f"prettify failed for sparql '{sparql}': {e}"
+            )
             return sparql
 
     def autocomplete_prefix(
@@ -481,12 +491,25 @@ class KgManager:
             uris.add("<" + record.value + ">")
         return uris, obj_type, guess
 
-    def fix_prefixes(self, sparql: str) -> str:
-        parse = self.parser.parse(
-            sparql,
-            skip_empty=False,
-            collapse_single=True
-        )
+    def fix_prefixes(
+        self,
+        sparql: str,
+        is_prefix: bool = False
+    ) -> str:
+        if is_prefix:
+            parse, rest = self.parser.prefix_parse(
+                sparql.encode(),
+                skip_empty=False,
+                collapse_single=True
+            )
+            rest_str = bytes(rest).decode(errors="replace")
+        else:
+            parse = self.parser.parse(
+                sparql,
+                skip_empty=False,
+                collapse_single=True
+            )
+            rest_str = ""
 
         prefixes = self.prefixes | self.custom_prefixes
 
@@ -549,7 +572,7 @@ class KgManager:
                 }
             )
 
-        return _parse_to_string(parse)
+        return _parse_to_string(parse) + rest_str
 
     def replace_iris(
         self,
@@ -623,9 +646,9 @@ class KgManager:
 
             child["name"] = obj_type
             if obj_type == "KGE":
-                label = f"<kge>{label}</kge>"
+                label = f"<|kge|>{label}<|kge|>"
             else:
-                label = f"<kgp>{label}</kgp>"
+                label = f"<|kgp|>{label}<|kgp|>"
 
             child.pop("children", None)
             child["value"] = label
@@ -678,7 +701,10 @@ class KgManager:
             if variant is not None:
                 label += f" ({variant})"
 
-            obj["value"] = f"<kge>{label}</kge>"
+            if name == "KGE":
+                obj["value"] = f"<|kge|>{label}<|kge|>"
+            else:
+                obj["value"] = f"<|kgp|>{label}<|kgp|>"
             obj["name"] = name
 
         return _parse_to_string(parse)
@@ -694,16 +720,21 @@ class KgManager:
         prefix: str,
         k: int,
         delta: int | None = None,
-        max_results: int | None = None,
+        max_candidates: int | None = None,
         endpoint: str | None = None
     ) -> tuple[list[Alternative], str, tuple[str, str | None]] | None:
         try:
             result = self.autocomplete_prefix(
                 prefix,
                 endpoint,
-                max_results + 1 if max_results is not None else None,
+                max_candidates + 1
+                if max_candidates is not None else None,
             )
-        except Exception:
+        except Exception as e:
+            LOGGER.debug(
+                f"autocomplete_prefix failed for prefix '{prefix}': "
+                f"{e}"
+            )
             result = None
 
         if result is None:
@@ -720,7 +751,7 @@ class KgManager:
         data: list[tuple[str, set[str]]] = []
         if (
             select_result is None
-            or len(select_result) > (max_results or len(select_result))
+            or len(select_result) > (max_candidates or len(select_result))
         ):
             # select result being None means that there is no way
             # to constrain / filter the knowledge graph with the
@@ -781,8 +812,7 @@ class KgManager:
     ) -> tuple[str, str] | None:
         num, name = result.split(".", 1)
         idx = int(num) - 1
-        assert 0 <= idx < len(alternatives), f"failed to parse result {result}"
-        if idx == len(alternatives):
+        if idx >= len(alternatives):
             # the none alternative was selected
             return None
 
@@ -799,10 +829,10 @@ class KgManager:
 
         if obj_type == "entity":
             map = self.entity_mapping
-            name = f"<kge>{name.strip()}</kge>"
+            name = f"<|kge|>{name.strip()}<|kge|>"
         else:
             map = self.property_mapping
-            name = f"<kgp>{name.strip()}</kgp>"
+            name = f"<|kgp|>{name.strip()}<|kgp|>"
 
         denorm = map.denormalize(alternative.identifier, variant)
         if denorm is None:

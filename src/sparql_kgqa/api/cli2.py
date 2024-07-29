@@ -74,7 +74,6 @@ class SPARQLGenerationCli(TextProcessingCli):
             batch_max_tokens=self.args.batch_max_tokens,
             sort=not self.args.unsorted,
             show_progress=self.args.progress,
-            postprocess=not self.args.no_postprocessing,
             pretty=self.args.pretty,
             return_candidates=self.args.return_candidates,
         ):
@@ -158,11 +157,6 @@ def main():
         help="Whether to return full candidate outputs "
         "(only best generated output by default)"
     )
-    parser.add_argument(
-        "--no-postprocessing",
-        action="store_true",
-        help="Whether to skip postprocessing"
-    )
 
     parser.add_argument(
         "-kg",
@@ -240,4 +234,5 @@ def main():
     args.device = args.device or "auto"
     # increase recursion limit
     sys.setrecursionlimit(10000)
+
     SPARQLGenerationCli(args).run()

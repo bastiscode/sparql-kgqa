@@ -96,11 +96,17 @@ qgram-indices:
 	--data-urlencode timeout=$(QLEVER_TIMEOUT) \
 	--data-urlencode access-token=$(WD_ACCESS_TOKEN) \
 	| python scripts/prepare_qgram_index.py \
-	> data/qgram-index/wikidata-entities.tsv
+	> data/qgram-index/wikidata-entities/data.tsv
+	@python scripts/build_qgram_index.py \
+	data/qgram-index/wikidata-entities/data.tsv \
+	data/qgram-index/wikidata-entities/index.bin
 	# https://qlever.cs.uni-freiburg.de/wikidata/ablT44
 	@curl -s $(WD_URL) -H "Accept: text/tab-separated-values" \
 	--data-urlencode query="PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX skos: <http://www.w3.org/2004/02/skos/core#> PREFIX schema: <http://schema.org/> PREFIX wikibase: <http://wikiba.se/ontology#> PREFIX wd: <http://www.wikidata.org/entity/> PREFIX wdt: <http://www.wikidata.org/prop/direct/> SELECT DISTINCT ?label ?score (GROUP_CONCAT(?alias; SEPARATOR=\";\") AS ?synonyms) ?id ?description WHERE { { SELECT ?p (COUNT(?p) AS ?score) WHERE { ?s ?p ?o } GROUP BY ?p } ?id wikibase:directClaim ?p . ?id @en@rdfs:label ?label . OPTIONAL { ?id @en@skos:altLabel ?alias } OPTIONAL { ?id @en@schema:description ?description } } GROUP BY ?label ?score ?id ?description ORDER BY DESC(?score)" \
 	--data-urlencode timeout=$(QLEVER_TIMEOUT) \
 	--data-urlencode access-token=$(WD_ACCESS_TOKEN) \
 	| python scripts/prepare_qgram_index.py \
-	> data/qgram-index/wikidata-properties.tsv
+	> data/qgram-index/wikidata-properties/data.tsv
+	@python scripts/build_qgram_index.py \
+	data/qgram-index/wikidata-properties/data.tsv \
+	data/qgram-index/wikidata-properties/index.bin
