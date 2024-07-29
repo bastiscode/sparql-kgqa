@@ -17,8 +17,7 @@ from sparql_kgqa.sparql.utils import (
     _parse_to_string,
     ask_to_select,
     prettify,
-    query_qlever,
-    SelectResult
+    query_qlever
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -480,13 +479,8 @@ class KgManager:
             qlever_endpoint,
             timeout=10.0
         )
-        assert isinstance(result, SelectResult)
-        uris = set()
-        for res in result.results:
-            record = res[var]
-            if record is None or record.data_type != "uri":
-                continue
-            uris.add("<" + record.value + ">")
+        assert isinstance(result, list)
+        uris = set(r[0] for r in result)
         return uris, obj_type, guess
 
     def fix_prefixes(
@@ -739,6 +733,7 @@ class KgManager:
             return None
 
         select_result, obj_type, guess = result
+
         if obj_type == "entity":
             index = self.entity_index
             map = self.entity_mapping
@@ -977,7 +972,7 @@ class WikidataManager(KgManager):
                     label,
                     wid,
                     None,
-                    syns.split(";"),
+                    [s for s in syns.split(";") if s != ""],
                     [desc]
                 )
                 alternatives.append(alternative)

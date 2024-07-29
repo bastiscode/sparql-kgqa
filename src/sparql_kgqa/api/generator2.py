@@ -426,6 +426,7 @@ class SPARQLGenerator(TextProcessor):
                 alts
             )
             prompt = self._chat_format(prompt)
+            LOGGER.debug(prompt)
             token_ids = self.tokenizer.tokenize(
                 prompt,
                 self._is_chat

@@ -2,7 +2,6 @@ import re
 import json
 import mmap
 import os
-import pprint
 import uuid
 import collections
 import copy
@@ -474,25 +473,25 @@ class SelectRecord:
 
 
 AskResult = bool
+SelectResult = list[list[str]]
 
-
-class SelectResult:
-    def __init__(
-        self,
-        vars: list[str],
-        results: list[dict[str, SelectRecord | None]]
-    ):
-        self.vars = vars
-        self.results = results
-
-    def __len__(self) -> int:
-        return len(self.results)
-
-    def __repr__(self) -> str:
-        return pprint.pformat(
-            self.results,
-            compact=True
-        )
+# class SelectResult:
+#     def __init__(
+#         self,
+#         vars: list[str],
+#         results: list[dict[str, SelectRecord | None]]
+#     ):
+#         self.vars = vars
+#         self.results = results
+#
+#     def __len__(self) -> int:
+#         return len(self.results)
+#
+#     def __repr__(self) -> str:
+#         return pprint.pformat(
+#             self.results,
+#             compact=True
+#         )
 
 
 def ask_to_select(
@@ -616,37 +615,26 @@ def query_qlever(
 
     response = requests.post(
         qlever_endpoint,
-        headers={"Content-type": "application/sparql-query"},
+        headers={
+            "Content-type": "application/sparql-query",
+            "Accept": "text/tab-separated-values"
+        },
         data=sparql_query,
         timeout=timeout
     )
-    json = response.json()
 
     if response.status_code != 200:
-        msg = json.get("exception", "unknown exception")
+        exception = response.json().get("exception", "")
         raise RuntimeError(
-            f"query {sparql_query} returned with "
-            f"status code {response.status_code}:\n{msg}"
+            f"query '{sparql_query}' failed with "
+            f"status code {response.status_code}:\n{exception}"
         )
 
+    result = response.text.splitlines()
     if select_query is not None:
-        return AskResult(len(json["results"]["bindings"]) > 0)
-
-    vars = json["head"]["vars"]
-    results = []
-    for binding in json["results"]["bindings"]:
-        result = {}
-        for var in vars:
-            if binding is None or var not in binding:
-                result[var] = None
-                continue
-            value = binding[var]
-            result[var] = SelectRecord(
-                value["value"],
-                value["type"]
-            )
-        results.append(result)
-    return SelectResult(vars, results)
+        return AskResult(len(result) > 0)
+    else:
+        return [line.split("\t") for line in result]
 
 
 def query_entities(
@@ -1117,16 +1105,8 @@ def subgraph_constraint(
         qlever_endpoint,
         timeout=(1.0, 3.0)
     )
-    assert isinstance(result, SelectResult)
-    uris = []
-    for r in result.results:
-        record = r[var]
-        if record is None:
-            continue
-        elif record.data_type != "uri":
-            continue
-        uris.append(record.value)
-    return uris
+    assert isinstance(result, list)
+    return [r[0] for r in result]
 
 
 class SimilarityIndex:
