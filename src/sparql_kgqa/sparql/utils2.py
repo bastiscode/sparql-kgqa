@@ -446,15 +446,22 @@ class KgManager:
 
         prefix = _parse_to_string(parse)
 
-        select = ask_to_select(prefix, self.parser,
-                               var=f"?{var}", distinct=True)
+        select = ask_to_select(
+            prefix,
+            self.parser,
+            var=f"?{var}",
+            distinct=True
+        )
         if select is not None:
             prefix = select
         else:
             # query is not an ask query, replace
             # the selected vars with our own
             parse = self.parser.parse(
-                prefix, skip_empty=False, collapse_single=False)
+                prefix,
+                skip_empty=False,
+                collapse_single=False
+            )
             sel_clause = _find(parse, "SelectClause", skip={"SubSelect"})
             assert sel_clause is not None, "could not find select clause"
             sel_clause["children"] = [
@@ -888,7 +895,10 @@ SPARQL query over {self.kg}:
         first = obj_type[0]
         prefix = prefix + f"<kg{first}>...<kg{first}>"
 
-        counts = Counter(alternative.label for alternative in alternatives)
+        counts = Counter(
+            alternative.label.lower()
+            for alternative in alternatives
+        )
         alt_strings = []
         alt_regexes = []
         for i, alternative in enumerate(alternatives):
@@ -896,7 +906,7 @@ SPARQL query over {self.kg}:
             alt_strings.append(i_str + alternative.get_string(
                 max_aliases,
                 # add info to non unique labels
-                add_infos or counts[alternative.label] > 1
+                add_infos or counts[alternative.label.lower()] > 1
             ))
             r = re.escape(i_str + alternative.label)
             if alternative.variants:
