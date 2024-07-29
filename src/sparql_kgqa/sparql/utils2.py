@@ -235,9 +235,9 @@ class KgManager:
         kg: str,
         entity_index: QGramIndex | tuple[str, str],
         property_index: QGramIndex | tuple[str, str],
-        parser: grammar.LR1Parser | None = None,
         entity_mapping: Mapping | str | None = None,
-        property_mapping: Mapping | str | None = None
+        property_mapping: Mapping | str | None = None,
+        parser: grammar.LR1Parser | None = None,
     ):
         self.kg = kg
 
@@ -327,7 +327,6 @@ class KgManager:
                 sparql,
                 is_prefix
             )
-            return sparql
             return prettify(
                 sparql,
                 self.parser,
@@ -941,19 +940,17 @@ class WikidataManager(KgManager):
         self,
         entity_index: QGramIndex | tuple[str, str],
         property_index: QGramIndex | tuple[str, str],
-        parser: grammar.LR1Parser | None = None,
         entity_mapping: Mapping | str | None = None,
         property_mapping: WikidataPropertyMapping | str | None = None,
+        parser: grammar.LR1Parser | None = None,
     ):
-        # make sure to load the property mapping first,
-        # because its based on a subclass of Mapping
         super().__init__(
             "wikidata",
             entity_index,
             property_index,
-            parser,
             entity_mapping,
-            property_mapping
+            property_mapping,
+            parser,
         )
         # add wikidata specific prefixes
         self.custom_prefixes.update({

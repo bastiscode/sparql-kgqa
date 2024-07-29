@@ -521,7 +521,7 @@ class SPARQLGenerator(TextProcessor):
                 entity_index,
                 property_index,
                 entity_mapping,
-                property_mapping
+                property_mapping  # type: ignore
             )
             self._sparql_constraint = self._manager.get_constraint(
                 self._continuations,
