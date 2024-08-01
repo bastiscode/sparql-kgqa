@@ -358,6 +358,8 @@ def prepare_selection(
             if variant is not None:
                 target_alt += f" ({variant})"
 
+        prefix = manager.fix_prefixes(prefix, is_prefix=True)
+
         prompt, _ = manager.get_alternatives_prompt_and_regex(
             question,
             prefix,
