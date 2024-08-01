@@ -531,12 +531,19 @@ class KgManager:
         exist = {}
         for prefix_decl in find_all(prologue, "PrefixDecl"):
             assert len(prefix_decl["children"]) == 3
-            short = prefix_decl["children"][1]["value"].split(":", 1)[0]
-            long = prefix_decl["children"][2]["value"][:-1]
+            first = prefix_decl["children"][1]["value"]
+            second = prefix_decl["children"][2]["value"]
+            if first == "" or second == "":
+                continue
+            short = first.split(":", 1)[0]
+            long = second[:-1]
             exist[short] = long
 
         seen = set()
-        for iri in find_all(parse, "IRIREF"):
+        for iri in find_all(parse, "IRIREF", skip={"Prologue"}):
+            if iri["value"] == "":
+                continue
+
             val = iri["value"]
 
             longest: tuple[str, str] | None = next(iter(sorted(
@@ -559,6 +566,9 @@ class KgManager:
             {"PNAME_NS", "PNAME_LN"},
             skip={"Prologue"}
         ):
+            if pfx["value"] == "":
+                continue
+
             pfx, _ = pfx["value"].split(":", 1)
             seen.add(pfx)
 
@@ -918,7 +928,7 @@ SPARQL query over {self.kg}:
     ) -> tuple[str, str]:
         assert obj_type in {"entity", "property"}
         first = obj_type[0]
-        prefix = prefix + f"<kg{first}>...<kg{first}>"
+        prefix = prefix + f"<|kg{first}|>...<|kg{first}|>"
 
         counts = Counter(
             alternative.label.lower()
