@@ -451,7 +451,6 @@ class SPARQLGenerator(TextProcessor):
             candidate_fn=update_fn,
             logit_fns=logit_fns,
             kwargs_update_fn=kwargs_update_fn,
-            return_full=True,
             return_incomplete=True,
             yield_intermediate=True
         )

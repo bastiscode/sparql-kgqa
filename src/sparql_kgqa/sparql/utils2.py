@@ -6,15 +6,15 @@ import pickle
 import uuid
 from importlib import resources
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Callable, Iterable, Iterator, Type, TypeVar
+from typing import Callable, Iterable, Iterator, Type, TypeVar, Any
 
 from text_utils import grammar
 from qgram_index import QGramIndex
 
 from sparql_kgqa.sparql.utils import (
-    _find_all,
-    _find,
-    _parse_to_string,
+    find_all,
+    find,
+    parse_to_string,
     ask_to_select,
     prettify,
     query_qlever
@@ -80,7 +80,7 @@ class Alternative:
         if add_infos and self.infos:
             info_str = self._clip(", ".join(self.infos))
             s += f" ({info_str})"
-        if self.aliases:
+        if self.aliases and max_aliases:
             aliases = random.sample(
                 self.aliases,
                 min(len(self.aliases), max_aliases)
@@ -369,7 +369,7 @@ class KgManager:
             collapse_single=True
         )
 
-        if _find(
+        if find(
             parse,
             {"PNAME_LN", "IRIREF"}, skip={"SubSelect"}
         ) is None:
@@ -379,7 +379,7 @@ class KgManager:
 
         # determine current position in the query:
         # subject, predicate or object
-        triple_blocks = list(_find_all(
+        triple_blocks = list(find_all(
             parse,
             "TriplesSameSubjectPath",
         ))
@@ -418,7 +418,7 @@ class KgManager:
             assert "unexpected case"
 
         # fix all future brackets
-        for item in _find_all(
+        for item in find_all(
             parse,
             {"{", "}", "(", ")", "."},
         ):
@@ -426,7 +426,7 @@ class KgManager:
 
         if limit is not None:
             # find solution modifier and add limit clause
-            sol_mod = _find(parse, "SolutionModifier")
+            sol_mod = find(parse, "SolutionModifier")
             assert sol_mod is not None, "could not find solution modifier"
             children = sol_mod.get("children", [])
             children.append({
@@ -444,7 +444,7 @@ class KgManager:
             })
             sol_mod["children"] = children
 
-        prefix = _parse_to_string(parse)
+        prefix = parse_to_string(parse)
 
         select = ask_to_select(
             prefix,
@@ -462,7 +462,7 @@ class KgManager:
                 skip_empty=False,
                 collapse_single=False
             )
-            sel_clause = _find(parse, "SelectClause", skip={"SubSelect"})
+            sel_clause = find(parse, "SelectClause", skip={"SubSelect"})
             assert sel_clause is not None, "could not find select clause"
             sel_clause["children"] = [
                 {
@@ -478,7 +478,7 @@ class KgManager:
                     'value': f"?{var}"
                 }
             ]
-            prefix = _parse_to_string(parse)
+            prefix = parse_to_string(parse)
 
         uris = None
         for i in range(max(1, max_retries)):
@@ -523,20 +523,20 @@ class KgManager:
 
         prefixes = self.prefixes | self.custom_prefixes
 
-        prologue = _find(parse, "Prologue")
+        prologue = find(parse, "Prologue")
         assert prologue is not None
 
-        base_decls = list(_find_all(prologue, "BaseDecl"))
+        base_decls = list(find_all(prologue, "BaseDecl"))
 
         exist = {}
-        for prefix_decl in _find_all(prologue, "PrefixDecl"):
+        for prefix_decl in find_all(prologue, "PrefixDecl"):
             assert len(prefix_decl["children"]) == 3
             short = prefix_decl["children"][1]["value"].split(":", 1)[0]
             long = prefix_decl["children"][2]["value"][:-1]
             exist[short] = long
 
         seen = set()
-        for iri in _find_all(parse, "IRIREF"):
+        for iri in find_all(parse, "IRIREF"):
             val = iri["value"]
 
             longest: tuple[str, str] | None = next(iter(sorted(
@@ -554,7 +554,7 @@ class KgManager:
             iri["value"] = short + ":" + val[len(long):-1]
             seen.add(short)
 
-        for pfx in _find_all(
+        for pfx in find_all(
             parse,
             {"PNAME_NS", "PNAME_LN"},
             skip={"Prologue"}
@@ -582,88 +582,113 @@ class KgManager:
                 }
             )
 
-        return _parse_to_string(parse) + rest_str
+        return parse_to_string(parse) + rest_str
+
+    def replace_iri(
+        self,
+        parse: dict[str, Any],
+        replacement: str = "label"
+    ) -> bool:
+        assert parse["name"] == "iri", "obj is not an iri parse tree"
+        child = parse["children"][0]
+        is_in_kg = False
+        if child["name"] == "PrefixedName":
+            child = child["children"][0]
+            start, end = child["byte_span"]
+            if start == end:
+                return False
+            val = child["value"]
+            # convert to long form
+            pfx, val = val.split(":", 1)
+            if pfx not in self.custom_prefixes:
+                return False
+            val = self.custom_prefixes[pfx] + val + ">"
+            is_in_kg = True
+        elif child["name"] == "IRIREF":
+            start, end = child["byte_span"]
+            if start == end:
+                return False
+            val = child["value"]
+            is_in_kg = next(filter(
+                lambda pfx: val.startswith(pfx),
+                self.custom_prefixes.values()
+            ), None) is not None
+        else:
+            return False
+
+        if not is_in_kg:
+            return False
+
+        norm = self.entity_mapping.normalize(val)
+        map = self.entity_mapping
+        index = self.entity_index
+        obj_type = "KGE"
+        if norm is None or norm[0] not in map:
+            norm = self.property_mapping.normalize(val)
+            map = self.property_mapping
+            index = self.property_index
+            obj_type = "KGP"
+
+        if norm is None or norm[0] not in map:
+            return True
+
+        key, variant = norm
+        data = index.get_data_by_idx(map[key])
+        if replacement == "synonyms":
+            syns = [
+                syn for syn in
+                data.split("\t")[2].split(";")
+                if syn != ""
+            ]
+        else:
+            syns = []
+        syns.append(data.split("\t")[0])
+
+        label = random.choice(syns)
+        if variant is not None:
+            label += f" ({variant})"
+
+        child["name"] = obj_type
+        if obj_type == "KGE":
+            label = f"<|kge|>{label}<|kge|>"
+        else:
+            label = f"<|kgp|>{label}<|kgp|>"
+
+        child.pop("children", None)
+        child["value"] = label
+        return False
 
     def replace_iris(
         self,
         sparql: str,
         replacement: str = "label",
+        is_prefix: bool = False
     ) -> tuple[str, bool]:
         assert replacement in [
             "label",
             "synonyms"
         ]
 
-        parse = self.parser.parse(
-            sparql,
-            skip_empty=True,
-            collapse_single=False
-        )
+        if is_prefix:
+            parse, rest = self.parser.prefix_parse(
+                sparql.encode(),
+                skip_empty=True,
+                collapse_single=False
+            )
+            rest_str = bytes(rest).decode(errors="replace")
+        else:
+            parse = self.parser.parse(
+                sparql,
+                skip_empty=True,
+                collapse_single=False
+            )
+            rest_str = ""
         incomplete = False
 
-        for obj in _find_all(parse, "iri", skip={"Prologue"}):
-            child = obj["children"][0]
-            is_in_kg = False
-            if child["name"] == "PrefixedName":
-                val = child["children"][0]["value"]
-                # convert to long form
-                pfx, val = val.split(":", 1)
-                if pfx not in self.custom_prefixes:
-                    continue
-                val = self.custom_prefixes[pfx] + val + ">"
-                is_in_kg = True
-            elif child["name"] == "IRIREF":
-                val = child["value"]
-                is_in_kg = next(filter(
-                    lambda pfx: val.startswith(pfx),
-                    self.custom_prefixes.values()
-                ), None) is not None
-            else:
-                continue
+        for obj in find_all(parse, "iri", skip={"Prologue"}):
+            incomplete = incomplete or self.replace_iri(obj, replacement)
 
-            if not is_in_kg:
-                continue
-
-            norm = self.entity_mapping.normalize(val)
-            map = self.entity_mapping
-            index = self.entity_index
-            obj_type = "KGE"
-            if norm is None or norm[0] not in map:
-                norm = self.property_mapping.normalize(val)
-                map = self.property_mapping
-                index = self.property_index
-                obj_type = "KGP"
-
-            if norm is None or norm[0] not in map:
-                incomplete = True
-                continue
-
-            key, variant = norm
-            data = index.get_data_by_idx(map[key])
-            if replacement == "synonyms":
-                syns = [
-                    syn for syn in
-                    data.split("\t")[2].split(";")
-                    if syn != ""
-                ]
-            else:
-                syns = []
-            syns.append(data.split("\t")[0])
-
-            label = random.choice(syns)
-            if variant is not None:
-                label += f" ({variant})"
-
-            child["name"] = obj_type
-            if obj_type == "KGE":
-                label = f"<|kge|>{label}<|kge|>"
-            else:
-                label = f"<|kgp|>{label}<|kgp|>"
-
-            child.pop("children", None)
-            child["value"] = label
-
-        return _parse_to_string(parse), incomplete
+        return parse_to_string(parse) + rest_str, incomplete
 
     def replace_entities_and_properties(self, sparql: str) -> str:
         parse = self.parser.parse(
@@ -672,7 +697,7 @@ class KgManager:
             collapse_single=True
         )
 
-        for obj in _find_all(
+        for obj in find_all(
             parse,
             {"IRIREF", "PNAME_LN", "PNAME_NS"},
             skip={"Prologue"}
@@ -717,7 +742,7 @@ class KgManager:
                 obj["value"] = f"<|kgp|>{label}<|kgp|>"
             obj["name"] = name
 
-        return _parse_to_string(parse)
+        return parse_to_string(parse)
 
     def alternatives_from_data(
         self,

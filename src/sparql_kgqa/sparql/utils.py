@@ -224,7 +224,7 @@ def load_sparql_constraint(
     )
 
 
-def _parse_to_string(parse: dict) -> str:
+def parse_to_string(parse: dict) -> str:
     def _flatten(parse: dict) -> str:
         if "value" in parse:
             return parse["value"]
@@ -329,15 +329,15 @@ def prettify(
     return (s.strip() + " " + rest_str).strip()
 
 
-def _find(
+def find(
     parse: dict,
     name: str | set[str],
     skip: set[str] | None = None
 ) -> dict | None:
-    return next(_find_all(parse, name, skip), None)
+    return next(find_all(parse, name, skip), None)
 
 
-def _find_all(
+def find_all(
     parse: dict,
     name: str | set[str],
     skip: set[str] | None = None
@@ -350,7 +350,7 @@ def _find_all(
         yield parse
     else:
         for child in parse.get("children", []):
-            yield from _find_all(child, name, skip)
+            yield from find_all(child, name, skip)
 
 
 _CLEAN_PATTERN = re.compile(r"\s+", flags=re.MULTILINE)
@@ -418,7 +418,7 @@ def replace_entities_and_properties(
         parse = sparql
 
     def _find_and_replace(name: str, objects: dict[str, dict[str, str]]):
-        for obj in _find_all(parse, name):
+        for obj in find_all(parse, name):
             if "value" not in obj:
                 continue
             kg_match = _KG_PATTERN.search(obj["value"])
@@ -435,7 +435,7 @@ def replace_entities_and_properties(
 
     _find_and_replace("KGE", entities)
     _find_and_replace("KGP", properties)
-    return _parse_to_string(parse)
+    return parse_to_string(parse)
 
 
 def postprocess_sparql_query(
@@ -503,7 +503,7 @@ def ask_to_select(
 ) -> str | None:
     parse = parser.parse(sparql, skip_empty=False, collapse_single=False)
 
-    sub_parse = _find(parse, "QueryType")
+    sub_parse = find(parse, "QueryType")
     assert sub_parse is not None
 
     ask_query = sub_parse["children"][0]
@@ -516,13 +516,13 @@ def ask_to_select(
         ask_var = next(
             filter(
                 lambda p: p["children"][0]["value"] == var,
-                _find_all(sub_parse, "Var", skip={"SubSelect"})
+                find_all(sub_parse, "Var", skip={"SubSelect"})
             ),
             None
         )
         assert ask_var is not None, "could not find specified var"
     else:
-        ask_var = _find(sub_parse, "Var", skip={"SubSelect"})
+        ask_var = find(sub_parse, "Var", skip={"SubSelect"})
 
     if ask_var is not None:
         var = ask_var["children"][0]["value"]
@@ -546,13 +546,13 @@ def ask_to_select(
             'name': 'SelectClause',
             'children': sel_clause
         }
-        return _parse_to_string(parse)
+        return parse_to_string(parse)
 
     # ask query does not have a var, convert to select
     # and introduce own var
     # generate unique var name with uuid
     var = f"?{uuid.uuid4().hex}"
-    iri = _find(sub_parse, "iri", skip={"SubSelect"})
+    iri = find(sub_parse, "iri", skip={"SubSelect"})
     assert iri is not None, "could not find an iri in ask query"
 
     child = iri["children"][0]
@@ -566,7 +566,7 @@ def ask_to_select(
         raise ValueError(f"unsupported iri format {iri}")
 
     where_clause = ask_query["children"][2]
-    group_graph_pattern = _find(
+    group_graph_pattern = find(
         where_clause,
         "GroupGraphPattern",
         skip={"SubSelect"}
@@ -594,7 +594,7 @@ def ask_to_select(
         ],
     }
 
-    return _parse_to_string(parse)
+    return parse_to_string(parse)
 
 
 def query_qlever(
@@ -717,20 +717,20 @@ def fix_prefixes(
     """
     parse = parser.parse(sparql, skip_empty=False, collapse_single=True)
 
-    prologue = _find(parse, "Prologue")
+    prologue = find(parse, "Prologue")
     assert prologue is not None
 
-    base_decls = list(_find_all(prologue, "BaseDecl"))
+    base_decls = list(find_all(prologue, "BaseDecl"))
 
     exist = {}
-    for prefix_decl in _find_all(prologue, "PrefixDecl"):
+    for prefix_decl in find_all(prologue, "PrefixDecl"):
         assert len(prefix_decl["children"]) == 3
         short = prefix_decl["children"][1]["value"]
         long = prefix_decl["children"][2]["value"][1:-1]
         exist[short] = long
 
     seen = set()
-    for iri in _find_all(parse, "IRIREF"):
+    for iri in find_all(parse, "IRIREF"):
         value = iri["value"]
         val = value[1:-1]
 
@@ -749,7 +749,7 @@ def fix_prefixes(
         iri["value"] = short + val[len(long):]
         seen.add(short)
 
-    for prefix_name in _find_all(parse, "PNAME_LN"):
+    for prefix_name in find_all(parse, "PNAME_LN"):
         val = prefix_name["value"]
         val = val[:val.find(":") + 1]
         seen.add(val)
@@ -774,7 +774,7 @@ def fix_prefixes(
             }
         )
 
-    return _parse_to_string(parse)
+    return parse_to_string(parse)
 
 
 def replace_vars_and_special_tokens(
@@ -796,20 +796,20 @@ def replace_vars_and_special_tokens(
         return sparql
 
     parse = parser.parse(sparql, skip_empty=True, collapse_single=True)
-    for var in _find_all(parse, "VAR1"):
+    for var in find_all(parse, "VAR1"):
         var["value"] = f"<bov>{var['value'][1:]}<eov>"
 
-    for var in _find_all(parse, "VAR2"):
+    for var in find_all(parse, "VAR2"):
         var["value"] = f"<bov>{var['value'][1:]}<eov>"
 
     # replace brackets {, and } with <bob> and <eob>
-    for bracket in _find_all(parse, "{"):
+    for bracket in find_all(parse, "{"):
         bracket["value"] = "<bob>"
 
-    for bracket in _find_all(parse, "}"):
+    for bracket in find_all(parse, "}"):
         bracket["value"] = "<eob>"
 
-    return _parse_to_string(parse)
+    return parse_to_string(parse)
 
 
 def format_ent(ent: str, version: str, kg: str) -> str:
@@ -893,7 +893,7 @@ def replace_iris(
         incomplete = False
         ent_rep = set()
         prop_rep = set()
-        for obj in _find_all(parse, "iri"):
+        for obj in find_all(parse, "iri"):
             child = obj["children"][0]
             if child["name"] == "PrefixedName":
                 val = child["children"][0]["value"]
@@ -931,14 +931,14 @@ def replace_iris(
         return parse, incomplete, empty or ident
 
     parse, incomplete, _ = _replace_objs(parse)
-    sparqls = [_parse_to_string(parse)]
+    sparqls = [parse_to_string(parse)]
 
     done = replacement == "only_first"
     while not done:
         parse, inc, stop = _replace_objs(copy.deepcopy(org_parse))
         done = inc or stop
         if not done:
-            sparqls.append(_parse_to_string(parse))
+            sparqls.append(parse_to_string(parse))
 
     return sparqls, incomplete
 
@@ -980,7 +980,7 @@ def subgraph_constraint(
 
     # determine current position in the query:
     # subject, predicate or object
-    triple_blocks = list(_find_all(
+    triple_blocks = list(find_all(
         parse,
         "TriplesSameSubjectPath",
     ))
@@ -998,15 +998,15 @@ def subgraph_constraint(
 
     var = uuid.uuid4().hex
     assert len(second["children"]) == 3
-    if _parse_to_string(second["children"][1]) != "":
+    if parse_to_string(second["children"][1]) != "":
         # subject can always be any iri
         return None
 
-    elif _parse_to_string(second["children"][0]) != "":
+    elif parse_to_string(second["children"][0]) != "":
         # object
         second["children"][1] = {"name": "VAR1", "value": f"?{var}"}
 
-    elif _parse_to_string(first) != "":
+    elif parse_to_string(first) != "":
         # property
         second["children"][0] = {"name": "VAR1", "value": f"?{var}"}
         obj_var = uuid.uuid4().hex
@@ -1016,7 +1016,7 @@ def subgraph_constraint(
         # unexpected case
         return None
 
-    if _find(
+    if find(
         parse,
         {
             "PNAME_LN",
@@ -1032,13 +1032,13 @@ def subgraph_constraint(
         return None
 
     # fix all future brackets
-    for item in _find_all(
+    for item in find_all(
         parse,
         {"{", "}", "(", ")", "."},
     ):
         item["value"] = item["name"]
 
-    prefix = _parse_to_string(parse)
+    prefix = parse_to_string(parse)
 
     select = ask_to_select(prefix, parser, var=f"?{var}", distinct=True)
     if select is not None:
@@ -1047,7 +1047,7 @@ def subgraph_constraint(
         # query is not an ask query, replace
         # the selected vars with our own
         parse = parser.parse(prefix, skip_empty=False, collapse_single=False)
-        sel_clause = _find(parse, "SelectClause", skip={"SubSelect"})
+        sel_clause = find(parse, "SelectClause", skip={"SubSelect"})
         assert sel_clause is not None, "could not find select clause"
         sel_clause["children"] = [
             {
@@ -1063,7 +1063,7 @@ def subgraph_constraint(
                 'value': f"?{var}"
             }
         ]
-        prefix = _parse_to_string(parse)
+        prefix = parse_to_string(parse)
 
     if limit is not None:
         # find solution modifier and add limit clause
@@ -1072,7 +1072,7 @@ def subgraph_constraint(
             skip_empty=False,
             collapse_single=False
         )
-        limit_clause = _find(
+        limit_clause = find(
             parse,
             "LimitOffsetClausesOptional",
             skip={"SubSelect"}
@@ -1085,7 +1085,7 @@ def subgraph_constraint(
             "name": "LimitClause",
             "value": f"LIMIT {limit}"
         }]
-        prefix = _parse_to_string(parse)
+        prefix = parse_to_string(parse)
 
     prefix = postprocess_sparql_query(
         prefix,
