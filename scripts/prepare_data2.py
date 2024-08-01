@@ -523,7 +523,7 @@ def prepare(args: argparse.Namespace):
             f"{invalid:,} ({invalid / len(samples):.2%}) "
             f"being incomplete or invalid"
         )
-        if args.with_selections:
+        if args.with_selections and split != "test":
             print(
                 f"Generated {num_selections:,} selection samples"
             )
