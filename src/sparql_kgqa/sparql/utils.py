@@ -633,9 +633,10 @@ def query_qlever(
 
     result = response.text.splitlines()
     if select_query is not None:
-        return AskResult(len(result) > 0)
+        # > 1 because of header
+        return AskResult(len(result) > 1)
     else:
-        return [line.split("\t") for line in result]
+        return [result[i].split("\t") for i in range(1, len(result))]
 
 
 def query_entities(

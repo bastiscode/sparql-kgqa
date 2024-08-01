@@ -38,6 +38,8 @@ class SPARQLGenerationCli(TextProcessingCli):
             disable_sparql_constraint=self.args.no_sparql_constraint,
             disable_subgraph_constraint=self.args.no_subgraph_constraint,
             num_examples=self.args.num_examples,
+            select_k=self.args.select_k,
+            select_max_candidates=self.args.select_max_candidates,
             system_message=self.args.system_message,
             force_exact=self.args.force_exact,
         )
@@ -227,6 +229,18 @@ def main():
         type=int,
         default=None,
         help="Seed for random number generator"
+    )
+    parser.add_argument(
+        "--select-k",
+        type=int,
+        default=5,
+        help="Number of candidates to select from"
+    )
+    parser.add_argument(
+        "--select-max-candidates",
+        type=int,
+        default=8192,
+        help="Maximum number of candidates for which a sub-index is created"
     )
     args = parser.parse_args()
     if args.seed is not None:

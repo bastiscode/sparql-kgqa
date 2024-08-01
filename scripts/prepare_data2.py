@@ -358,7 +358,9 @@ def prepare_selection(
             if variant is not None:
                 target_alt += f" ({variant})"
 
+        print(f"fixing {prefix}")
         prefix = manager.fix_prefixes(prefix, is_prefix=True)
+        print(f"fixed {prefix}")
 
         prompt, _ = manager.get_alternatives_prompt_and_regex(
             question,
