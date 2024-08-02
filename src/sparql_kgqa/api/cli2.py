@@ -46,10 +46,10 @@ class SPARQLGenerationCli(TextProcessingCli):
 
         ent, prop, kg = self.args.knowledge_graph
         ent_index = os.path.join(ent, "index.bin")
-        ent_mapping = os.path.join(ent, "index.bin.mapping")
+        ent_mapping = os.path.join(ent, "index.mapping.json.bz2")
         ent_data = os.path.join(ent, "data.tsv")
         prop_index = os.path.join(prop, "index.bin")
-        prop_mapping = os.path.join(prop, "index.bin.mapping")
+        prop_mapping = os.path.join(prop, "index.mapping.json.bz2")
         prop_data = os.path.join(prop, "data.tsv")
         gen.set_kg_indices(
             kg,

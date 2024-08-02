@@ -1,8 +1,9 @@
+import bz2
 from collections import Counter
 import random
 import logging
 import re
-import pickle
+import json
 import uuid
 from importlib import resources
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -129,30 +130,57 @@ WIKIDATA_PROPERTY_VARIANTS = {
 
 
 class Mapping:
-    def __init__(self, map: dict[str, int]) -> None:
-        self.map = map
+    def __init__(
+        self,
+        prefix: str | None = None
+    ) -> None:
+        self.map = {}
+        self.prefix = prefix
+        if self.prefix is not None:
+            assert self.prefix.startswith("<") \
+                and not self.prefix.endswith(">"), \
+                f"prefix {self.prefix} is not an IRI prefix"
 
-    @classmethod
-    def from_qgram_index(cls, index: QGramIndex) -> "Mapping":
-        map = {}
+    def _transform_key(self, key: str) -> str | None:
+        if not key.startswith("<") or not key.endswith(">"):
+            return None
+
+        if self.prefix is None:
+            return key
+        elif not key.startswith(self.prefix):
+            return None
+        else:
+            return key[len(self.prefix):-1]
+
+    def build_from_qgram_index(self, index: QGramIndex):
         for i in range(len(index)):
             data = index.get_data_by_idx(i)
             obj_id = data.split("\t")[3]
-            assert obj_id not in map, f"obj_id {obj_id} is not unique"
-            map[obj_id] = i
-        return cls(map)
+            t_obj_id = self._transform_key(obj_id)
+            assert t_obj_id is not None, f"obj_id {obj_id} is not valid"
+            assert t_obj_id not in self.map, f"obj_id {obj_id} is not unique"
+            self.map[t_obj_id] = i
 
     def save(self, file_path: str) -> None:
+        data = json.dumps({
+            "map": self.map,
+            "prefix": self.prefix
+        }).encode()
         with open(file_path, "wb") as f:
-            pickle.dump(self.map, f)
+            f.write(bz2.compress(data))
 
     @classmethod
     def load(cls, file_path: str):
         with open(file_path, "rb") as f:
-            return cls(pickle.load(f))
+            data = json.loads(bz2.decompress(f.read()))
+        mapping = cls(data["prefix"])
+        mapping.map = data["map"]
+        return mapping
 
     def __getitem__(self, key: str) -> int:
-        return self.map[key]
+        t_key = self._transform_key(key)
+        assert t_key is not None, f"key {key} is not valid"
+        return self.map[t_key]
 
     def normalize(self, iri: str) -> tuple[str, str | None] | None:
         return iri, None
@@ -164,14 +192,17 @@ class Mapping:
         return set()
 
     def __contains__(self, key: str) -> bool:
-        return key in self.map
+        t_key = self._transform_key(key)
+        if t_key is None:
+            return False
+        return t_key in self.map
 
 
 class WikidataPropertyMapping(Mapping):
     NORM_PREFIX = "<http://www.wikidata.org/entity/"
 
-    def __init__(self, map: dict[str, int]) -> None:
-        super().__init__(map)
+    def __init__(self, prefix: str | None = None) -> None:
+        super().__init__(self.NORM_PREFIX)
         self.inverse_variants = {
             var: pfx
             for pfx, var in WIKIDATA_PROPERTY_VARIANTS.items()
@@ -246,7 +277,7 @@ class KgManager:
             self.entity_index = entity_index
 
         if entity_mapping is None:
-            self.entity_mapping = self.entity_mapping_cls.from_qgram_index(
+            self.entity_mapping = self.entity_mapping_cls.build_from_qgram_index(
                 self.entity_index
             )
         elif isinstance(entity_mapping, str):
@@ -262,7 +293,7 @@ class KgManager:
             self.property_index = property_index
 
         if property_mapping is None:
-            self.property_mapping = self.property_mapping_cls.from_qgram_index(
+            self.property_mapping = self.property_mapping_cls.build_from_qgram_index(
                 self.property_index
             )
         elif isinstance(property_mapping, str):
@@ -828,7 +859,9 @@ class KgManager:
 
             sub_index = index.sub_index_by_indices(indices)
             for i, _ in sub_index.find_matches(guess[0], delta)[:k]:
-                variant = valid_variants[sub_index.get_idx_by_id(i)]
+                idx = sub_index.get_idx_by_id(i)
+                assert idx is not None
+                variant = valid_variants[idx]
                 data.append((
                     sub_index.get_data_by_id(i),
                     set() if variant is None else {variant}
