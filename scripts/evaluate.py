@@ -68,7 +68,8 @@ def evaluate(args: argparse.Namespace):
     pred_invalid = 0
     tgt_invalid = 0
     iter = (
-        (pred, target, parser, args.kg, args.qlever_endpoint)
+        (pred, target, parser,
+         not args.empty_target_invalid, args.kg, args.qlever_endpoint)
         for pred, target in zip(predictions, targets)
     )
     for i, (f1, pred_inv, tgt_inv) in tqdm(
