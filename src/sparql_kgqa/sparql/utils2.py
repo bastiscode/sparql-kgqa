@@ -248,7 +248,8 @@ class KgManager:
             self.entity_index = entity_index
 
         if entity_mapping is None:
-            self.entity_mapping = self.entity_mapping_cls.build_from_qgram_index(
+            self.entity_mapping = self.entity_mapping_cls()
+            self.entity_mapping.build_from_qgram_index(
                 self.entity_index
             )
         elif isinstance(entity_mapping, str):
@@ -264,7 +265,8 @@ class KgManager:
             self.property_index = property_index
 
         if property_mapping is None:
-            self.property_mapping = self.property_mapping_cls.build_from_qgram_index(
+            self.property_mapping = self.property_mapping_cls()
+            self.property_mapping.build_from_qgram_index(
                 self.property_index
             )
         elif isinstance(property_mapping, str):
