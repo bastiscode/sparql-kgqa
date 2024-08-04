@@ -130,42 +130,18 @@ WIKIDATA_PROPERTY_VARIANTS = {
 
 
 class Mapping:
-    def __init__(
-        self,
-        prefix: str | None = None
-    ) -> None:
+    def __init__(self) -> None:
         self.map = {}
-        self.prefix = prefix
-        if self.prefix is not None:
-            assert self.prefix.startswith("<") \
-                and not self.prefix.endswith(">"), \
-                f"prefix {self.prefix} is not an IRI prefix"
-
-    def _transform_key(self, key: str) -> str | None:
-        if not key.startswith("<") or not key.endswith(">"):
-            return None
-
-        if self.prefix is None:
-            return key
-        elif not key.startswith(self.prefix):
-            return None
-        else:
-            return key[len(self.prefix):-1]
 
     def build_from_qgram_index(self, index: QGramIndex):
         for i in range(len(index)):
             data = index.get_data_by_idx(i)
             obj_id = data.split("\t")[3]
-            t_obj_id = self._transform_key(obj_id)
-            assert t_obj_id is not None, f"obj_id {obj_id} is not valid"
-            assert t_obj_id not in self.map, f"obj_id {obj_id} is not unique"
-            self.map[t_obj_id] = i
+            assert obj_id not in self.map, f"obj_id {obj_id} is not unique"
+            self.map[obj_id] = i
 
     def save(self, file_path: str) -> None:
-        data = json.dumps({
-            "map": self.map,
-            "prefix": self.prefix
-        }).encode()
+        data = json.dumps(self.map).encode()
         with open(file_path, "wb") as f:
             f.write(bz2.compress(data))
 
@@ -173,14 +149,12 @@ class Mapping:
     def load(cls, file_path: str):
         with open(file_path, "rb") as f:
             data = json.loads(bz2.decompress(f.read()))
-        mapping = cls(data["prefix"])
-        mapping.map = data["map"]
+        mapping = cls()
+        mapping.map = data
         return mapping
 
     def __getitem__(self, key: str) -> int:
-        t_key = self._transform_key(key)
-        assert t_key is not None, f"key {key} is not valid"
-        return self.map[t_key]
+        return self.map[key]
 
     def normalize(self, iri: str) -> tuple[str, str | None] | None:
         return iri, None
@@ -192,17 +166,14 @@ class Mapping:
         return set()
 
     def __contains__(self, key: str) -> bool:
-        t_key = self._transform_key(key)
-        if t_key is None:
-            return False
-        return t_key in self.map
+        return key in self.map
 
 
 class WikidataPropertyMapping(Mapping):
     NORM_PREFIX = "<http://www.wikidata.org/entity/"
 
-    def __init__(self, prefix: str | None = None) -> None:
-        super().__init__(self.NORM_PREFIX)
+    def __init__(self) -> None:
+        super().__init__()
         self.inverse_variants = {
             var: pfx
             for pfx, var in WIKIDATA_PROPERTY_VARIANTS.items()

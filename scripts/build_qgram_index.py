@@ -18,8 +18,6 @@ def parse_args() -> argparse.Namespace:
                         choices=["ped", "ied"], default="ied")
     parser.add_argument("--with-mapping", action="store_true",
                         help="Whether to compute and save the mapping")
-    parser.add_argument("--mapping-prefix", type=str,
-                        help="Prefix for the mapping keys", default=None)
     return parser.parse_args()
 
 
@@ -29,7 +27,7 @@ if __name__ == "__main__":
     qgram_index.build(args.input)
     qgram_index.save(args.output)
     if args.with_mapping:
-        mapping = Mapping(args.mapping_prefix)
+        mapping = Mapping()
         mapping.build_from_qgram_index(qgram_index)
         file, _ = os.path.splitext(args.output)
         mapping.save(file + ".mapping.json.bz2")

@@ -303,7 +303,7 @@ def prepare_selection(
 
         prefix, _ = manager.replace_iris(
             prefix_raw,
-            "label",
+            replacement="synonyms",
             is_prefix=True
         )
         result = manager.get_alternatives(
@@ -396,7 +396,10 @@ def prepare_sample(
     )
 
     try:
-        sparql, inc = manager.replace_iris(sample.sparql, "label")
+        sparql, inc = manager.replace_iris(
+            sample.sparql,
+            replacement="synonyms"
+        )
     except Exception:
         return None
 

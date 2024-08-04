@@ -11,6 +11,7 @@ from sparql_kgqa.sparql.utils import (
     calc_f1,
     load_sparql_parser
 )
+from sparql_kgqa.sparql.utils2 import run_parallel
 
 
 def parse_args() -> argparse.Namespace:
@@ -29,6 +30,7 @@ def parse_args() -> argparse.Namespace:
         default="wikidata"
     )
     parser.add_argument("--qlever-endpoint", type=str, default=None)
+    parser.add_argument("-n", "--num-workers", type=int, default=None)
     return parser.parse_args()
 
 
@@ -65,20 +67,16 @@ def evaluate(args: argparse.Namespace):
     f1s = []
     pred_invalid = 0
     tgt_invalid = 0
-    for i, (pred, target) in tqdm(
-        enumerate(zip(predictions, targets)),
+    iter = (
+        (pred, target, parser, args.kg, args.qlever_endpoint)
+        for pred, target in zip(predictions, targets)
+    )
+    for i, (f1, pred_inv, tgt_inv) in tqdm(
+        enumerate(run_parallel(calc_f1, iter, args.num_workers)),
         desc="evaluating",
         total=len(predictions),
         leave=False
     ):
-        f1, pred_inv, tgt_inv = calc_f1(
-            pred,
-            target,
-            parser,
-            allow_empty_target=not args.empty_target_invalid,
-            kg=args.kg,
-            qlever_endpoint=args.qlever_endpoint
-        )
         if args.save_invalid and f1 is None:
             with open(args.save_invalid, "a", encoding="utf8") as f:
                 f.write(
