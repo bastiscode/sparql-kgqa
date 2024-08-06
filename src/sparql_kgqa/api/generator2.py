@@ -320,8 +320,9 @@ class SPARQLGenerator(TextProcessor):
 
         self._sparql_constraint.reset()
 
+        infos = batch.infos()
         beams = []
-        for token_ids, info in zip(batch.token_ids(), batch.infos()):
+        for token_ids, info in zip(batch.token_ids(), infos):
             beam = Beam(
                 token_ids,
                 [0.0] * len(token_ids),
@@ -332,7 +333,6 @@ class SPARQLGenerator(TextProcessor):
                     "decoded": "",
                     "sparql": "",
                     "guess": "",
-                    "seen_sparql": set(),
                 }
             )
             if not self._disable_sparql_constraint:
@@ -412,11 +412,26 @@ class SPARQLGenerator(TextProcessor):
 
         # reorder beams
         for idx in range(len(batch)):
-            outputs[idx] = sorted(
-                outputs[idx],
-                key=lambda beam: score_fn(beam),
-                reverse=True
-            )
+            if outputs[idx]:
+                outputs[idx] = sorted(
+                    outputs[idx],
+                    key=lambda beam: score_fn(beam),
+                    reverse=True
+                )
+            else:
+                info = infos[idx]
+                outputs[idx] = [Beam(
+                    [self._eos_token_id],
+                    [0.0],
+                    {
+                        "question": info["question"],
+                        "prompt": info["prompt"],
+                        "decoded": "",
+                        "sparql": "",
+                        "guess": "",
+                    },
+                    0
+                )]
 
         yield outputs
 
@@ -576,11 +591,8 @@ class SPARQLGenerator(TextProcessor):
                 f"{beam.info['sparql']}\n"
                 f"{beam.info['guess']} --> {name} ({identifier})"
             )
+
             sparql = beam.info["sparql"] + identifier
-            if sparql in beam.info["seen_sparql"]:
-                continue
-            beam.info["seen_sparql"].add(sparql)
-            # build new input from prompt and parts
             decoded = beam.info["decoded"] + name
 
             token_ids = self.tokenizer.tokenize(
