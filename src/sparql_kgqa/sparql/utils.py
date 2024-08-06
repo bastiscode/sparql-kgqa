@@ -602,7 +602,8 @@ def query_qlever(
     parser: grammar.LR1Parser,
     kg: str,
     qlever_endpoint: str | None,
-    timeout: float | tuple[float, float] | None = None
+    timeout: float | tuple[float, float] | None = None,
+    max_retries: int = 1
 ) -> SelectResult | AskResult:
     # ask_to_select return None if sparql is not an ask query
     select_query = ask_to_select(sparql_query, parser)
@@ -614,15 +615,21 @@ def query_qlever(
             f"no QLever endpoint for knowledge graph {kg}"
         qlever_endpoint = QLEVER_URLS[kg]
 
-    response = requests.post(
-        qlever_endpoint,
-        headers={
-            "Content-type": "application/sparql-query",
-            "Accept": "text/tab-separated-values"
-        },
-        data=sparql_query,
-        timeout=timeout
-    )
+    response = None
+    for _ in range(max(1, max_retries)):
+        response = requests.post(
+            qlever_endpoint,
+            headers={
+                "Content-type": "application/sparql-query",
+                "Accept": "text/tab-separated-values"
+            },
+            data=sparql_query,
+            timeout=timeout
+        )
+        if response.status_code == 200:
+            break
+
+    assert response is not None, "cannot happen"
 
     if response.status_code != 200:
         exception = response.json().get("exception", "")

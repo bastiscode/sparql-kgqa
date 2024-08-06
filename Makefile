@@ -92,17 +92,17 @@ examples:
 qgram-indices:
 	# wikidata entities
 	# https://qlever.cs.uni-freiburg.de/wikidata/0gMAIw
-	@mkdir -p data/qgram-index/wikidata-entities
-	@curl -s $(WD_URL) -H "Accept: text/tab-separated-values" \
-	--data-urlencode query="PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX skos: <http://www.w3.org/2004/02/skos/core#> PREFIX schema: <http://schema.org/> PREFIX wikibase: <http://wikiba.se/ontology#> PREFIX wd: <http://www.wikidata.org/entity/> PREFIX wdt: <http://www.wikidata.org/prop/direct/> SELECT DISTINCT ?label ?score (GROUP_CONCAT(?alias; SEPARATOR=\";\") AS ?synonyms) ?id ?description WHERE { { ?id @en@rdfs:label ?label } MINUS { ?id wdt:P31/wdt:P279* wd:Q17442446 } OPTIONAL { ?id @en@skos:altLabel ?alias } OPTIONAL { ?id ^schema:about/wikibase:sitelinks ?score } OPTIONAL { ?id @en@schema:description ?description } } GROUP BY ?label ?score ?id ?description ORDER BY DESC(?score)" \
-	--data-urlencode timeout=$(QLEVER_TIMEOUT) \
-	--data-urlencode access-token=$(WD_ACCESS_TOKEN) \
-	| python scripts/prepare_qgram_index.py \
-	> data/qgram-index/wikidata-entities/data.tsv
+	# @mkdir -p data/qgram-index/wikidata-entities
+	# @curl -s $(WD_URL) -H "Accept: text/tab-separated-values" \
+	# --data-urlencode query="PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX skos: <http://www.w3.org/2004/02/skos/core#> PREFIX schema: <http://schema.org/> PREFIX wikibase: <http://wikiba.se/ontology#> PREFIX wd: <http://www.wikidata.org/entity/> PREFIX wdt: <http://www.wikidata.org/prop/direct/> SELECT DISTINCT ?label ?score (GROUP_CONCAT(?alias; SEPARATOR=\";\") AS ?synonyms) ?id ?description WHERE { { ?id @en@rdfs:label ?label } MINUS { ?id wdt:P31/wdt:P279* wd:Q17442446 } OPTIONAL { ?id @en@skos:altLabel ?alias } OPTIONAL { ?id ^schema:about/wikibase:sitelinks ?score } OPTIONAL { ?id @en@schema:description ?description } } GROUP BY ?label ?score ?id ?description ORDER BY DESC(?score)" \
+	# --data-urlencode timeout=$(QLEVER_TIMEOUT) \
+	# --data-urlencode access-token=$(WD_ACCESS_TOKEN) \
+	# | python scripts/prepare_qgram_index.py \
+	# > data/qgram-index/wikidata-entities/data.tsv
 	@python scripts/build_qgram_index.py \
 	data/qgram-index/wikidata-entities/data.tsv \
 	data/qgram-index/wikidata-entities/index.bin \
-	--with-mapping --mapping-prefix "<http://www.wikidata.org/entity/"
+	--with-mapping
 	# wikidata entities small (top 1M entities by sitelinks)
 	@mkdir -p data/qgram-index/wikidata-entities-small
 	@head -n 1000001 data/qgram-index/wikidata-entities/data.tsv \
@@ -110,7 +110,7 @@ qgram-indices:
 	@python scripts/build_qgram_index.py \
 	data/qgram-index/wikidata-entities-small/data.tsv \
 	data/qgram-index/wikidata-entities-small/index.bin \
-	--with-mapping --mapping-prefix "<http://www.wikidata.org/entity/"
+	--with-mapping
 	# wikidata entities medium (top 10M entities by sitelinks)
 	@mkdir -p data/qgram-index/wikidata-entities-medium
 	@head -n 10000001 data/qgram-index/wikidata-entities/data.tsv \
@@ -118,7 +118,7 @@ qgram-indices:
 	@python scripts/build_qgram_index.py \
 	data/qgram-index/wikidata-entities-medium/data.tsv \
 	data/qgram-index/wikidata-entities-medium/index.bin \
-	--with-mapping --mapping-prefix "<http://www.wikidata.org/entity/"
+	--with-mapping
 	# wikidata properties
 	# https://qlever.cs.uni-freiburg.de/wikidata/ablT44
 	@mkdir -p data/qgram-index/wikidata-properties
@@ -131,4 +131,4 @@ qgram-indices:
 	@python scripts/build_qgram_index.py \
 	data/qgram-index/wikidata-properties/data.tsv \
 	data/qgram-index/wikidata-properties/index.bin \
-	--with-mapping --mapping-prefix "<http://www.wikidata.org/entity/"
+	--with-mapping

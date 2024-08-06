@@ -347,7 +347,7 @@ class KgManager:
         prefix: str,
         qlever_endpoint: str | None = None,
         limit: int | None = None,
-        max_retries: int = 3
+        max_retries: int = 1
     ) -> tuple[set[str] | None, str, tuple[str, str | None]]:
         """
         Autocomplete the SPARQL query prefix,
@@ -373,22 +373,46 @@ class KgManager:
             collapse_single=True
         )
 
-        if find(
-            parse,
-            {"PNAME_LN", "IRIREF"}, skip={"SubSelect"}
-        ) is None:
+        # find one non-empty iri
+        iri = next((
+            p for p in find_all(
+                parse,
+                {"IRIREF", "PNAME_LN", "PNAME_NS"},
+                skip={"Prologue", "SubSelect"}
+            ) if p["value"] != ""),
+            None
+        )
+        if iri is None:
             # means we have a prefix but with only vars,
             # which means that there are no constraints
             return None, obj_type, guess
 
         # determine current position in the query:
         # subject, predicate or object
+
+        # find all triple blocks first
         triple_blocks = list(find_all(
             parse,
             "TriplesSameSubjectPath",
+            skip={"SubSelect"}
         ))
-        if len(triple_blocks) == 0:
+        if not triple_blocks:
             # without triples the knowledge graph can not be
+            # constrained
+            return None, obj_type, guess
+
+        no_iris = all(
+            all(
+                iri["value"] == ""
+                for iri in find_all(
+                    triple_block,
+                    {"IRIREF", "PNAME_NS", "PNAME_LN"}
+                )
+            )
+            for triple_block in triple_blocks
+        )
+        if no_iris:
+            # without iris the knowledge graph can not be
             # constrained
             return None, obj_type, guess
 
@@ -485,24 +509,22 @@ class KgManager:
             prefix = parse_to_string(parse)
 
         uris = None
-        for i in range(max(1, max_retries)):
-            try:
-                result = query_qlever(
-                    prefix,
-                    self.parser,
-                    self.kg,
-                    qlever_endpoint,
-                    timeout=10.0
-                )
-                assert isinstance(result, list)
-                uris = set(r[0] for r in result)
-                break
-            except Exception as e:
-                LOGGER.debug(
-                    "query_qlever within autocomplete_prefix "
-                    f"failed for prefix '{prefix}' in retry "
-                    f"{i}: {e}"
-                )
+        try:
+            result = query_qlever(
+                prefix,
+                self.parser,
+                self.kg,
+                qlever_endpoint,
+                timeout=10.0,
+                max_retries=max_retries
+            )
+            assert isinstance(result, list)
+            uris = set(r[0] for r in result)
+        except Exception as e:
+            LOGGER.debug(
+                "querying qlever within autocomplete_prefix "
+                f"failed for prefix '{prefix}': {e}"
+            )
         return uris, obj_type, guess
 
     def fix_prefixes(
@@ -1070,6 +1092,19 @@ def flatten(
 ) -> Iterator[T]:
     for sub_iter in iter:
         yield from sub_iter
+
+
+def split(
+    items: list[T],
+    splits: list[int]
+) -> list[list[T]]:
+    assert sum(splits) == len(items), "splits do not match items"
+    start = 0
+    result = []
+    for split in splits:
+        result.append(items[start:start + split])
+        start += split
+    return result
 
 
 def partition_by(

@@ -40,6 +40,8 @@ class SPARQLGenerationCli(TextProcessingCli):
             num_examples=self.args.num_examples,
             select_k=self.args.select_k,
             select_max_candidates=self.args.select_max_candidates,
+            select_max_aliases=self.args.select_max_aliases,
+            select_add_infos=self.args.select_add_info,
             system_message=self.args.system_message,
             force_exact=self.args.force_exact,
         )
@@ -233,7 +235,7 @@ def main():
     parser.add_argument(
         "--select-k",
         type=int,
-        default=5,
+        default=16,
         help="Number of candidates to select from"
     )
     parser.add_argument(
@@ -241,6 +243,18 @@ def main():
         type=int,
         default=8192,
         help="Maximum number of candidates for which a sub-index is created"
+    )
+    parser.add_argument(
+        "--select-max-aliases",
+        type=int,
+        default=5,
+        help="Maximum number of aliases for each selection candidate"
+    )
+    parser.add_argument(
+        "--select-add-info",
+        action="store_true",
+        help="Whether to (forcefully) add additional information to selection "
+        "candidates"
     )
     args = parser.parse_args()
     if args.seed is not None:

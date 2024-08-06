@@ -55,6 +55,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--entities", type=str, required=True)
     parser.add_argument("--properties", type=str, required=True)
     parser.add_argument("--progress", action="store_true")
+    parser.add_argument("--samples-per-sample", type=int, default=1)
     selection_group = parser.add_argument_group("selection")
     selection_group.add_argument("--with-selections", action="store_true")
     selection_group.add_argument(
@@ -256,7 +257,7 @@ def prepare_selection(
     args: argparse.Namespace
 ) -> list[tuple[str, str]]:
     selections = []
-    for i in range(args.selections_per_sample):
+    for _ in range(args.selections_per_sample):
         parse = manager.parser.parse(
             raw_sparql,
             skip_empty=True,
@@ -386,7 +387,7 @@ def prepare_sample(
     str,
     str,
     str,
-    str,
+    list[str],
     list[tuple[str, str]],
 ] | None:
     # clean sparql in sample
@@ -395,22 +396,32 @@ def prepare_sample(
         clean(sample.sparql),
     )
 
-    try:
-        sparql, inc = manager.replace_iris(
-            sample.sparql,
-            replacement="synonyms"
-        )
-    except Exception:
-        return None
+    sparqls = []
+    for _ in range(max(1, args.samples_per_sample)):
+        try:
+            sparql, inc = manager.replace_iris(
+                sample.sparql,
+                replacement="label" if split == "test" else "synonyms"
+            )
+            sparql = manager.fix_prefixes(sparql)
+        except Exception:
+            break
 
-    if inc:
+        if inc:
+            break
+
+        sparqls.append(sparql)
+
+        if split == "test":
+            break
+
+    if len(sparqls) == 0:
         return None
 
     # same as above, but without replacing
     # with natural language entities
     raw_sparql = manager.fix_prefixes(sample.sparql)
 
-    sparql = manager.fix_prefixes(sparql)
     prompt = manager.get_sparql_prompt(sample.question)
 
     if not args.with_selections or split == "test":
@@ -428,7 +439,7 @@ def prepare_sample(
         sample.question,
         raw_sparql,
         prompt,
-        sparql,
+        sparqls,
         selections
     )
 
@@ -442,11 +453,15 @@ def prepare(args: argparse.Namespace):
 
     ent_data = os.path.join(args.entities, "data.tsv")
     ent_index = os.path.join(args.entities, "index.bin")
+    ent_mapping = os.path.join(args.entities, "index.mapping.json.bz2")
     prop_data = os.path.join(args.properties, "data.tsv")
     prop_index = os.path.join(args.properties, "index.bin")
+    prop_mapping = os.path.join(args.properties, "index.mapping.json.bz2")
     manager = WikidataManager(
         (ent_index, ent_data),
-        (prop_index, prop_data)
+        (prop_index, prop_data),
+        ent_mapping,
+        prop_mapping
     )
 
     os.makedirs(args.output, exist_ok=True)
@@ -474,6 +489,7 @@ def prepare(args: argparse.Namespace):
             f"{split}_examples.tsv"
         )
         invalid = 0
+        num_samples = 0
         num_selections = 0
         with open(input, "w") as inf, \
                 open(input_raw, "w") as inrf, \
@@ -495,21 +511,24 @@ def prepare(args: argparse.Namespace):
                     invalid += 1
                     continue
 
-                (question, raw_sparql, prompt, sparql, selections) = output
+                (question, raw_sparql, prompt, sparqls, selections) = output
                 ef.write(json.dumps({
                     "question": question,
                     "sparql": raw_sparql
                 }) + "\n")
 
-                tf.write(json.dumps(sparql) + "\n")
-                trf.write(raw_sparql + "\n")
-                inf.write(
-                    json.dumps([{
-                        "role": "user",
-                        "text": prompt
-                    }]) + "\n"
-                )
-                inrf.write(json.dumps(question) + "\n")
+                num_samples += len(sparqls)
+                for sparql in sparqls:
+                    tf.write(json.dumps(sparql) + "\n")
+                    trf.write(raw_sparql + "\n")
+                    inf.write(
+                        json.dumps([{
+                            "role": "user",
+                            "text": prompt
+                        }]) + "\n"
+                    )
+                    inrf.write(json.dumps(question) + "\n")
+
                 num_selections += len(selections)
                 for prompt, target in selections:
                     inf.write(
@@ -523,7 +542,7 @@ def prepare(args: argparse.Namespace):
                     trf.write(target + "\n")
 
         print(
-            f"Generated {len(samples) - invalid:,} SPARQL queries while "
+            f"Generated {num_samples:,} SPARQL queries while "
             f"processing {len(samples):,} {split} samples with "
             f"{invalid:,} ({invalid / len(samples):.2%}) "
             f"being incomplete or invalid"

@@ -16,9 +16,10 @@ from text_utils.inference import (
     utils as inference_utils,
     beam_search
 )
-from text_utils.inference.utils import Beam
+from text_utils.inference.utils import Beam, ScoreFn, log_likelihood_score
 
 from qgram_index import QGramIndex
+from torch.nn.utils.rnn import pad_sequence
 
 from sparql_kgqa.model import (
     Model,
@@ -29,7 +30,6 @@ from sparql_kgqa.model import (
 from sparql_kgqa.sparql.utils import (
     SimilarityIndex,
     load_examples,
-    prettify,
 )
 from sparql_kgqa.sparql.utils2 import (
     KgManager,
@@ -40,7 +40,8 @@ from sparql_kgqa.sparql.utils2 import (
     run_parallel,
 )
 
-LOGGER = logging.getLogger(__name__)
+logging.getLogger("requests").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 _BASE_URL = ""
 _NAME_TO_ZIP = {}
 
@@ -125,6 +126,8 @@ class SPARQLGenerator(TextProcessor):
         self._delta: int | None = None  # maximum edit distance
         # maximum size where sub index is built
         self._max_candidates: int | None = 1024
+        # add info to selection candidates (added automatically for duplicates)
+        self._add_infos = False
 
         # SPARQL stuff
         self._exact = self.cfg["inference"].get("exact", False)
@@ -216,24 +219,27 @@ class SPARQLGenerator(TextProcessor):
         return s
 
     @torch.inference_mode()
+    def _decode_fn(
+        self,
+        token_ids: torch.Tensor,
+        lengths: torch.Tensor,
+        **kwargs: Any
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
+        assert isinstance(self.model, PretrainedDecoder)
+        dec, cache = self.model.decode(
+            token_ids,
+            lengths,
+            kwargs.get("kv_cache", None),
+            self._use_cache
+        )
+        return dec, {"kv_cache": cache}
+
     def _partial_inference(
         self,
         beams: list[Beam] | list[list[Beam]],
-        stop_fn: inference_utils.StopFn
+        stop_fn: inference_utils.StopFn,
+        max_outputs: int | list[int] | None = None
     ) -> Iterator[list[list[Beam]]]:
-        def decode_fn(
-            token_ids: torch.Tensor,
-            **kwargs: Any
-        ) -> tuple[torch.Tensor, dict[str, Any]]:
-            assert isinstance(self.model, PretrainedDecoder)
-            dec, cache = self.model.decode(
-                token_ids,
-                kwargs["lengths"],
-                kwargs.get("kv_cache", None),
-                self._use_cache
-            )
-            return dec, {"kv_cache": cache}
-
         def kwargs_update_fn(
             kwargs: dict[str, Any],
             info: dict[str, Any],
@@ -248,19 +254,18 @@ class SPARQLGenerator(TextProcessor):
                 for cache in info["kv_cache"]
             )
 
-        def update_fn(beam: Beam, token_id: int, log_p: float) -> Beam | None:
-            beam = Beam.from_beam(beam, token_id, log_p)
-
+        def update_fn(beam: Beam) -> Beam | None:
             # advance constraint if given
             if "const" in beam.info:
                 const = beam.info["const"]
                 if const.is_invalid():
                     # return None if constraint is invalid
+                    # or no tokens have been generated
                     return None
 
                 # clone constraint and update it
                 const = const.clone()
-                const.next(token_id)
+                const.next(beam.token_ids[-1])
                 beam.info["const"] = const
 
             return beam
@@ -289,23 +294,21 @@ class SPARQLGenerator(TextProcessor):
             ))
 
         yield from beam_search(
-            decode_fn=decode_fn,
+            decode_fn=self._decode_fn,
             initial=beams,
             pad_token_id=self.tokenizer.pad_token_id(),
             max_length=self.max_length,
             stop_fn=stop_fn,  # type: ignore
             device=self.devices[0],
-            normalize_by_length=True,
-            alpha=1.0,
             beam_width=self._beam_width,
             sample_fn=sample_fn,
-            candidate_fn=update_fn,
+            update_fn=update_fn,
             logit_fns=logit_fns,
             kwargs_update_fn=kwargs_update_fn,
+            max_outputs=max_outputs,
             yield_intermediate=True
         )
 
-    @torch.inference_mode()
     def _live_inference(
         self,
         batch: data.InferenceBatch
@@ -325,7 +328,6 @@ class SPARQLGenerator(TextProcessor):
                 {
                     "question": info["question"],
                     "prompt": info["prompt"],
-                    "initial_length": len(token_ids),
                     "last": len(token_ids),
                     "decoded": "",
                     "sparql": "",
@@ -339,10 +341,7 @@ class SPARQLGenerator(TextProcessor):
             beams.append([beam])
 
         def eos_stop_fn(beam: Beam) -> bool:
-            return (
-                beam.token_ids[-1] == self._eos_token_id
-                or len(beam) >= self.max_length
-            )
+            return beam.token_ids[-1] == self._eos_token_id
 
         def pattern_stop_fn(beam: Beam) -> bool:
             decoded = self.tokenizer.de_tokenize(
@@ -365,26 +364,112 @@ class SPARQLGenerator(TextProcessor):
             beam.info["guess"] = decoded[match.start():]
             return True
 
+        # normalized log likelihood score
+        score_fn = log_likelihood_score()
+
         outputs = [[] for _ in range(len(batch))]
         while any(beam for beam in beams):
-            for beams in self._partial_inference(beams, pattern_stop_fn):
+            # run inference until eos or next entity/property
+            for beams in self._partial_inference(
+                beams,
+                pattern_stop_fn,
+                max_outputs=[
+                    self._beam_width - len(output)
+                    for output in outputs
+                ]
+            ):
                 yield beams
 
-            # filter out beams that stopped because of eos
+            decoded = "\n".join(
+                f"({score_fn(b):.4f}) " + b.info["decoded"]
+                for b in flatten(beams)
+            )
+            self.logger.debug(
+                "current beams:\n"
+                f"{decoded}"
+            )
+
+            # filter out beams that stopped because of eos,
+            # also remove duplicates
             for idx in range(len(batch)):
                 stop, keep = partition_by(beams[idx], eos_stop_fn)
                 outputs[idx].extend(stop)
                 beams[idx] = keep
 
-            alternatives = self._infer_alternatives(beams, eos_stop_fn)
-            for idx in range(len(batch)):
-                if len(alternatives[idx]) == 0:
-                    # keep last non-empty beams
-                    outputs[idx].extend(beams[idx])
+            # get continuation alternatives for non-stop beams
+            beams = self._infer_alternatives(beams, eos_stop_fn)
 
-            beams = alternatives
+            # rescore and keep top beams
+            beams = self._rescore(beams, score_fn)
+            decoded = "\n".join(
+                f"({score_fn(b):.4f}) " + b.info["decoded"]
+                for b in flatten(beams)
+            )
+            self.logger.debug(
+                "beams after rescoring and pruning:\n"
+                f"{decoded}"
+            )
+
+        # reorder beams
+        for idx in range(len(batch)):
+            outputs[idx] = sorted(
+                outputs[idx],
+                key=lambda beam: score_fn(beam),
+                reverse=True
+            )
 
         yield outputs
+
+    def _rescore(
+        self,
+        beams: list[list[Beam]],
+        score_fn: ScoreFn
+    ) -> list[list[Beam]]:
+        # just make a forward pass for the current beams
+        # and update their log probs, sort by sequence log likelihood
+        # and keep the top beams
+        assert self._manager is not None, "kg indices not set"
+
+        token_ids = []
+        lengths = []
+        for beam in flatten(beams):
+            assert len(beam) >= 2 and beam.initial_length > 0, \
+                "expected at least one input and one output token"
+            token_ids.append(torch.tensor(beam.token_ids[:-1]))
+            lengths.append(len(beam) - 1)
+
+        if len(token_ids) == 0:
+            # nothing to rescore
+            return beams
+
+        logits, _ = self._decode_fn(
+            pad_sequence(
+                token_ids,
+                batch_first=True
+            )[:, :self.max_length].to(self.devices[0]),
+            torch.tensor(lengths, device=self.devices[0]),
+        )
+
+        log_probs = torch.log_softmax(logits, dim=-1).cpu()
+
+        for logp, beam in zip(log_probs, flatten(beams)):
+            probs = torch.gather(
+                logp,
+                -1,
+                torch.tensor(beam.token_ids[1:]).unsqueeze(1)
+            ).squeeze(1).tolist()
+            assert len(probs) == len(beam) - 1
+            length = beam.decoded_length
+            beam.log_probs[-length:] = probs[-length:]
+            assert len(beam.log_probs) == len(beam)
+
+        for idx in range(len(beams)):
+            beams[idx] = sorted(
+                beams[idx],
+                key=lambda beam: score_fn(beam),
+                reverse=True
+            )[:self._beam_width]
+        return beams
 
     def _infer_alternatives(
         self,
@@ -423,7 +508,9 @@ class SPARQLGenerator(TextProcessor):
                 beam.info["decoded"],
                 obj_type,
                 guess,
-                alts
+                alts,
+                max_aliases=self._max_aliases,
+                add_infos=self._add_infos
             )
             prompt = self._chat_format(prompt)
             token_ids = self.tokenizer.tokenize(
@@ -436,29 +523,28 @@ class SPARQLGenerator(TextProcessor):
                 {
                     "beam": beam,
                     "idx": idx,
-                    "prompt": prompt,
                     "alternatives": alts,
                     "obj_type": obj_type,
                     "const": grammar.RegexConstraint(
                         regex,
                         self._continuations
                     ),
-                    "initial_length": len(token_ids),
                 }
             )
             select_beams.append(select_beam)
 
-        *_, selections = self._partial_inference(
+        * _, selections = self._partial_inference(
             select_beams,
             stop_fn
+        )
+        self.logger.debug(
+            f"got {sum(len(s) for s in selections)} continuation alternatives "
+            f"for {len(select_beams)} prefixes"
         )
 
         output_beams = [[] for _ in range(batch_size)]
         for selection in flatten(selections):
-            selected = self.tokenizer.de_tokenize(
-                selection.token_ids[selection.info["initial_length"]:]
-            )
-            LOGGER.debug(selection.info["prompt"] + selected)
+            selected = self.tokenizer.de_tokenize(selection.decoded_token_ids)
             try:
                 selected = self._manager.parse_result(
                     selection.info["alternatives"],
@@ -466,14 +552,30 @@ class SPARQLGenerator(TextProcessor):
                     selected
                 )
             except Exception as e:
-                LOGGER.debug(f"error parsing result '{selected}': {e}")
+                beam = selection.info["beam"]
+                decoded = beam.info["decoded"]
+                self.logger.debug(
+                    f"error parsing result '{selected}' "
+                    f"for beam '{decoded}': {e}"
+                )
                 selected = None
 
+            beam: Beam = selection.info["beam"]
             if selected is None:
+                self.logger.debug(
+                    f"stopping beam because none alternative was selected:\n"
+                    f"{beam.info['decoded']}\n"
+                    f"{beam.info['sparql']}"
+                )
                 continue
 
             identifier, name = selected
-            beam: Beam = selection.info["beam"]
+            self.logger.debug(
+                f"selected {selection.info['obj_type']} alternative:\n"
+                f"{beam.info['decoded']}\n"
+                f"{beam.info['sparql']}\n"
+                f"{beam.info['guess']} --> {name} ({identifier})"
+            )
             sparql = beam.info["sparql"] + identifier
             if sparql in beam.info["seen_sparql"]:
                 continue
@@ -482,18 +584,20 @@ class SPARQLGenerator(TextProcessor):
             decoded = beam.info["decoded"] + name
 
             token_ids = self.tokenizer.tokenize(
-                beam.info["prompt"] + decoded,
+                decoded,
                 self._is_chat
             ).token_ids
             updated_beam = Beam(
-                token_ids,
-                [0.0] * len(token_ids),
+                beam.initial_token_ids + token_ids,
+                beam.initial_log_probs + [0.0] * len(token_ids),
                 {k: v for k, v in beam.info.items()},
+                beam.initial_length,
             )
 
             updated_beam.info["decoded"] = decoded
             updated_beam.info["sparql"] = sparql
-            updated_beam.info["last"] = len(token_ids)
+            updated_beam.info["guess"] = ""
+            updated_beam.info["last"] = len(updated_beam)
             if not self._disable_sparql_constraint:
                 updated_beam.info["const"] = beam.info["const"].clone()
                 updated_beam.info["const"].reset(decoded.encode())
@@ -558,9 +662,11 @@ class SPARQLGenerator(TextProcessor):
         disable_sparql_constraint: bool = False,
         disable_subgraph_constraint: bool = False,
         num_examples: int = 3,
-        select_k: int = 5,
+        select_k: int = 16,
         select_delta: int | None = None,
-        select_max_candidates: int | None = 1024,
+        select_max_candidates: int | None = 8192,
+        select_max_aliases: int = 5,
+        select_add_infos: bool = False,
         system_message: str | None = None,
         force_exact: bool = False
     ) -> None:
@@ -581,6 +687,8 @@ class SPARQLGenerator(TextProcessor):
         self._k = select_k
         self._delta = select_delta
         self._max_candidates = select_max_candidates
+        self._add_infos = select_add_infos
+        self._max_aliases = select_max_aliases
 
     def generate(
         self,
@@ -647,6 +755,7 @@ class SPARQLGenerator(TextProcessor):
         postprocess: bool = True,
         pretty: bool = False
     ) -> Iterator[list[str]]:
+        assert self._manager is not None, "kg indices not set"
         input = self._prepare_input(query, examples)
         batch = next(data.InferenceLoader.from_iterator(
             iter([input]),
@@ -655,62 +764,56 @@ class SPARQLGenerator(TextProcessor):
             ignore_special_tokens=self._is_chat
         ))
 
-        # tokenize and de_tokenize here to get rid of
-        # special tokens and start/end patterns
-        token_ids = self.tokenizer.tokenize(input.text).token_ids
-        yield [self.tokenizer.de_tokenize(token_ids)]
+        # yield the prompt
+        items = batch.items()
+        yield [item.info["prompt"] for item in items]
 
         last: list[Beam] | None = None
         for output in self._live_inference(batch):
             beams = output[0]
             last = beams
 
-            sparqls = []
+            outputs = []
             for beam in beams:
-                init = 0 if self._full_outputs else beam.info["initial_length"]
-                sparql_prefix = self.tokenizer.de_tokenize(
-                    beam.token_ids[init:]
+                current = self.tokenizer.de_tokenize(
+                    beam.decoded_token_ids
                 )
                 if pretty:
                     try:
-                        sparql_prefix = prettify(
-                            sparql_prefix,
-                            self._sparql_parser,
+                        current = self._manager.prettify(
+                            current,
                             is_prefix=True
                         )
                     except Exception:
                         pass
 
-                sparqls.append(sparql_prefix)
+                outputs.append(
+                    beam.info["prompt"] + current if self._full_outputs
+                    else current
+                )
 
-            yield sparqls
+            yield outputs
 
         if not postprocess:
             return
 
         assert last is not None, "should not happen"
 
-        sparqls = []
+        outputs = []
         for beam in last:
-            init = beam.info["initial_length"]
-            sparql = self.tokenizer.de_tokenize(beam.token_ids[init:])
-            if self._full_outputs:
-                input = self.tokenizer.de_tokenize(beam.token_ids[:init])
-            else:
-                input = ""
+            sparql = beam.info["sparql"]
+            if pretty:
+                try:
+                    sparql = self._manager.prettify(
+                        sparql,
+                        is_prefix=False
+                    )
+                except Exception:
+                    pass
 
-            try:
-                sparql = input + postprocess_sparql_query(
-                    sparql,
-                    self._sparql_parser,
-                    beam.info["entities"],
-                    beam.info["properties"],
-                    self._prefixes,
-                    pretty
-                )
-            except Exception:
-                sparql = input + sparql
+            outputs.append(
+                beam.info["prompt"] + sparql if self._full_outputs
+                else sparql
+            )
 
-            sparqls.append(sparql)
-
-        yield sparqls
+        yield outputs
