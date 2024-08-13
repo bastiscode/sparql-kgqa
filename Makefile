@@ -8,6 +8,8 @@ WD_ACCESS_TOKEN=null
 ENT_SUFFIX="</kge>"
 PROP_SUFFIX="</kgp>"
 
+SEARCH_INDEX=qgram
+
 .PHONY: all data querylogs indices examples
 all: data querylogs indices examples
 
@@ -89,46 +91,50 @@ examples:
 	data/example-index/wikidata.bin \
 	--progress
 
-qgram-indices:
+search-indices:
 	# wikidata entities
 	# https://qlever.cs.uni-freiburg.de/wikidata/0gMAIw
-	# @mkdir -p data/qgram-index/wikidata-entities
-	# @curl -s $(WD_URL) -H "Accept: text/tab-separated-values" \
-	# --data-urlencode query="PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX skos: <http://www.w3.org/2004/02/skos/core#> PREFIX schema: <http://schema.org/> PREFIX wikibase: <http://wikiba.se/ontology#> PREFIX wd: <http://www.wikidata.org/entity/> PREFIX wdt: <http://www.wikidata.org/prop/direct/> SELECT DISTINCT ?label ?score (GROUP_CONCAT(?alias; SEPARATOR=\";\") AS ?synonyms) ?id ?description WHERE { { ?id @en@rdfs:label ?label } MINUS { ?id wdt:P31/wdt:P279* wd:Q17442446 } OPTIONAL { ?id @en@skos:altLabel ?alias } OPTIONAL { ?id ^schema:about/wikibase:sitelinks ?score } OPTIONAL { ?id @en@schema:description ?description } } GROUP BY ?label ?score ?id ?description ORDER BY DESC(?score)" \
-	# --data-urlencode timeout=$(QLEVER_TIMEOUT) \
-	# --data-urlencode access-token=$(WD_ACCESS_TOKEN) \
-	# | python scripts/prepare_qgram_index.py \
-	# > data/qgram-index/wikidata-entities/data.tsv
-	@python scripts/build_qgram_index.py \
-	data/qgram-index/wikidata-entities/data.tsv \
-	data/qgram-index/wikidata-entities/index.bin \
-	--with-mapping
+	@mkdir -p data/search-index/wikidata-entities/$(SEARCH_INDEX)
+	@curl -s $(WD_URL) -H "Accept: text/tab-separated-values" \
+	--data-urlencode query="PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX skos: <http://www.w3.org/2004/02/skos/core#> PREFIX schema: <http://schema.org/> PREFIX wikibase: <http://wikiba.se/ontology#> PREFIX wd: <http://www.wikidata.org/entity/> PREFIX wdt: <http://www.wikidata.org/prop/direct/> SELECT DISTINCT ?label ?score (GROUP_CONCAT(?alias; SEPARATOR=\";\") AS ?synonyms) ?id ?description WHERE { { ?id @en@rdfs:label ?label } MINUS { ?id wdt:P31/wdt:P279* wd:Q17442446 } OPTIONAL { ?id @en@skos:altLabel ?alias } OPTIONAL { ?id ^schema:about/wikibase:sitelinks ?score } OPTIONAL { ?id @en@schema:description ?description } } GROUP BY ?label ?score ?id ?description ORDER BY DESC(?score)" \
+	--data-urlencode timeout=$(QLEVER_TIMEOUT) \
+	--data-urlencode access-token=$(WD_ACCESS_TOKEN) \
+	| python scripts/prepare_search_index.py \
+	> data/search-index/wikidata-entities/data.tsv
+	@python scripts/build_search_index.py \
+	data/search-index/wikidata-entities/data.tsv \
+	data/search-index/wikidata-entities/$(SEARCH_INDEX) \
+	--with-mapping \
+	--type $(SEARCH_INDEX)
 	# wikidata entities small (top 1M entities by sitelinks)
-	@mkdir -p data/qgram-index/wikidata-entities-small
-	@head -n 1000001 data/qgram-index/wikidata-entities/data.tsv \
-	> data/qgram-index/wikidata-entities-small/data.tsv
-	@python scripts/build_qgram_index.py \
-	data/qgram-index/wikidata-entities-small/data.tsv \
-	data/qgram-index/wikidata-entities-small/index.bin \
-	--with-mapping
+	@mkdir -p data/search-index/wikidata-entities-small/$(SEARCH_INDEX)
+	@head -n 1000001 data/search-index/wikidata-entities/data.tsv \
+	> data/search-index/wikidata-entities-small/data.tsv
+	@python scripts/build_search_index.py \
+	data/search-index/wikidata-entities-small/data.tsv \
+	data/search-index/wikidata-entities-small/$(SEARCH_INDEX) \
+	--with-mapping \
+	--type $(SEARCH_INDEX)
 	# wikidata entities medium (top 10M entities by sitelinks)
-	@mkdir -p data/qgram-index/wikidata-entities-medium
-	@head -n 10000001 data/qgram-index/wikidata-entities/data.tsv \
-	> data/qgram-index/wikidata-entities-medium/data.tsv
-	@python scripts/build_qgram_index.py \
-	data/qgram-index/wikidata-entities-medium/data.tsv \
-	data/qgram-index/wikidata-entities-medium/index.bin \
-	--with-mapping
+	@mkdir -p data/search-index/wikidata-entities-medium/$(SEARCH_INDEX)
+	@head -n 10000001 data/search-index/wikidata-entities/data.tsv \
+	> data/search-index/wikidata-entities-medium/data.tsv
+	@python scripts/build_search_index.py \
+	data/search-index/wikidata-entities-medium/data.tsv \
+	data/search-index/wikidata-entities-medium/$(SEARCH_INDEX) \
+	--with-mapping \
+	--type $(SEARCH_INDEX)
 	# wikidata properties
 	# https://qlever.cs.uni-freiburg.de/wikidata/ablT44
-	@mkdir -p data/qgram-index/wikidata-properties
+	@mkdir -p data/search-index/wikidata-properties/$(SEARCH_INDEX)
 	@curl -s $(WD_URL) -H "Accept: text/tab-separated-values" \
 	--data-urlencode query="PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX skos: <http://www.w3.org/2004/02/skos/core#> PREFIX schema: <http://schema.org/> PREFIX wikibase: <http://wikiba.se/ontology#> PREFIX wd: <http://www.wikidata.org/entity/> PREFIX wdt: <http://www.wikidata.org/prop/direct/> SELECT DISTINCT ?label ?score (GROUP_CONCAT(?alias; SEPARATOR=\";\") AS ?synonyms) ?id ?description WHERE { { SELECT ?p (COUNT(?p) AS ?score) WHERE { ?s ?p ?o } GROUP BY ?p } ?id wikibase:directClaim ?p . ?id @en@rdfs:label ?label . OPTIONAL { ?id @en@skos:altLabel ?alias } OPTIONAL { ?id @en@schema:description ?description } } GROUP BY ?label ?score ?id ?description ORDER BY DESC(?score)" \
 	--data-urlencode timeout=$(QLEVER_TIMEOUT) \
 	--data-urlencode access-token=$(WD_ACCESS_TOKEN) \
-	| python scripts/prepare_qgram_index.py \
-	> data/qgram-index/wikidata-properties/data.tsv
-	@python scripts/build_qgram_index.py \
-	data/qgram-index/wikidata-properties/data.tsv \
-	data/qgram-index/wikidata-properties/index.bin \
-	--with-mapping
+	| python scripts/prepare_search_index.py \
+	> data/search-index/wikidata-properties/data.tsv
+	@python scripts/build_search_index.py \
+	data/search-index/wikidata-properties/data.tsv \
+	data/search-index/wikidata-properties/$(SEARCH_INDEX) \
+	--with-mapping \
+	--type $(SEARCH_INDEX)
