@@ -1,6 +1,4 @@
 // directly ported from https://www.w3.org/TR/sparql11-query/#sparqlGrammar
-ENTITY_VARIANTS ''
-PROPERTY_VARIANTS ''
 
 // fragments
 EXPONENT [eE] [+-]? [0-9]+
@@ -20,8 +18,10 @@ PN_LOCAL_ESC '\' ( '_' | '~' | '.' | '-' | '!' | '$' | '&' | "'" | '(' | ')' | '
 %%
 
 // Custom tags
-KGE         '<|kge|>' .*?(?:\({ENTITY_VARIANTS}\))? '<|kge|>'
-KGP         '<|kgp|>' .*?(?:\({PROPERTY_VARIANTS}\))? '<|kgp|>'
+// KGE         '<|kge|>' .*? '<|kge|>'
+// KGP         '<|kgp|>' .*? '<|kgp|>'
+KGE         '<|kge|>'
+KGP         '<|kgp|>'
 
 // SPARQL keywords
 BASE        (?i)BASE

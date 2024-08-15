@@ -4,6 +4,7 @@ import random
 import os
 from typing import Iterator
 
+from search_index import PrefixIndex
 import torch
 
 from text_utils.api.cli import TextProcessingCli
@@ -12,6 +13,7 @@ from text_utils.api.processor import TextProcessor
 from sparql_kgqa import version
 from sparql_kgqa.api.generator2 import SPARQLGenerator
 from sparql_kgqa.api.server2 import SPARQLGenerationServer
+from sparql_kgqa.sparql.utils2 import Mapping, WikidataPropertyMapping, load_index_and_mapping
 
 
 class SPARQLGenerationCli(TextProcessingCli):
@@ -34,7 +36,6 @@ class SPARQLGenerationCli(TextProcessingCli):
             beam_width=self.args.beam_width,
             max_length=self.args.max_length,
             use_cache=self.args.kv_cache,
-            full_outputs=self.args.full_outputs,
             disable_sparql_constraint=self.args.no_sparql_constraint,
             disable_subgraph_constraint=self.args.no_subgraph_constraint,
             num_examples=self.args.num_examples,
@@ -46,17 +47,24 @@ class SPARQLGenerationCli(TextProcessingCli):
             force_exact=self.args.force_exact,
         )
 
-        ent, prop, kg = self.args.knowledge_graph
-        ent_index = os.path.join(ent, "index.bin")
-        ent_mapping = os.path.join(ent, "index.mapping.json.bz2")
-        ent_data = os.path.join(ent, "data.tsv")
-        prop_index = os.path.join(prop, "index.bin")
-        prop_mapping = os.path.join(prop, "index.mapping.json.bz2")
-        prop_data = os.path.join(prop, "data.tsv")
+        ent_dir, ent_type = self.args.entities
+        prop_dir, prop_type = self.args.properties
+
+        ent_index, ent_mapping = load_index_and_mapping(
+            ent_type,
+            Mapping,
+            ent_dir
+        )
+        prop_index, prop_mapping = load_index_and_mapping(
+            prop_type,
+            WikidataPropertyMapping,
+            prop_dir
+        )
+
         gen.set_kg_indices(
-            kg,
-            (ent_index, ent_data),
-            (prop_index, prop_data),
+            self.args.knowledge_graph,
+            ent_index,
+            prop_index,
             ent_mapping,
             prop_mapping,
         )
@@ -78,12 +86,9 @@ class SPARQLGenerationCli(TextProcessingCli):
 
         for output in processor.generate(
             ((json.loads(item) if jsonl_in else item, None) for item in iter),
-            batch_size=self.args.batch_size,
-            batch_max_tokens=self.args.batch_max_tokens,
             sort=not self.args.unsorted,
             show_progress=self.args.progress,
             pretty=self.args.pretty,
-            return_candidates=self.args.return_candidates,
         ):
             if self.args.output_format == "jsonl":
                 yield json.dumps(output)
@@ -141,13 +146,6 @@ def main():
         help="Maximum supported input/output length in tokens"
     )
     parser.add_argument(
-        "-full",
-        "--full-outputs",
-        action="store_true",
-        help="Whether to return input and generated text as output "
-        "(default is only generated text)"
-    )
-    parser.add_argument(
         "--input-format",
         choices=["text", "jsonl"],
         default="text",
@@ -160,24 +158,29 @@ def main():
         help="Whether to format output as jsonl or text"
     )
     parser.add_argument(
-        "--return-candidates",
-        action="store_true",
-        help="Whether to return full candidate outputs "
-        "(only best generated output by default)"
-    )
-
-    parser.add_argument(
         "-kg",
         "--knowledge-graph",
         type=str,
-        nargs=3,
-        metavar=(
-            "entity",
-            "property",
-            "name"
-        ),
-        help="Add knowledge graph to the generation process",
+        choices=["wikidata"],
+        default="wikidata",
+        help="Knowledge graph to use for generation",
+        required=True
+    )
+    parser.add_argument(
+        "--entities",
+        type=str,
+        nargs=2,
+        metavar=("DIR", "TYPE"),
         required=True,
+        help="Directory and type of entities index"
+    )
+    parser.add_argument(
+        "--properties",
+        type=str,
+        nargs=2,
+        metavar=("DIR", "TYPE"),
+        required=True,
+        help="Directory and type of properties index"
     )
     parser.add_argument(
         "--system-message",

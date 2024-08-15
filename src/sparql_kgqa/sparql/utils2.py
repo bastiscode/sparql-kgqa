@@ -1,16 +1,17 @@
-import bz2
 from collections import Counter
+import os
 import random
 import logging
 import re
-import json
 import uuid
 from importlib import resources
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Callable, Iterable, Iterator, Type, TypeVar, Any
+from typing import Callable, Generator, Iterable, Iterator, Type, TypeVar, Any
 
+from search_index import PrefixIndex, QGramIndex
 from text_utils import grammar
-from qgram_index import QGramIndex
+from search_index.index import SearchIndex
+from search_index.mapping import Mapping as SearchIndexMapping
 
 from sparql_kgqa.sparql.utils import (
     find_all,
@@ -23,16 +24,14 @@ from sparql_kgqa.sparql.utils import (
 
 LOGGER = logging.getLogger(__name__)
 CLEAN_PATTERN = re.compile(r"\s+", flags=re.MULTILINE)
+Chat = list[dict[str, str]]
 
 
 def clean(s: str) -> str:
     return CLEAN_PATTERN.sub(" ", s).strip()
 
 
-def _load_sparql_grammar(
-    entity_variants: set[str] | None = None,
-    property_variants: set[str] | None = None
-) -> tuple[str, str]:
+def load_sparql_grammar() -> tuple[str, str]:
     sparql_grammar = resources.read_text(
         "sparql_kgqa.sparql.grammar",
         "sparql.y"
@@ -40,16 +39,6 @@ def _load_sparql_grammar(
     sparql_lexer = resources.read_text(
         "sparql_kgqa.sparql.grammar",
         "sparql2.l"
-    )
-    ent = '|'.join(re.escape(v) for v in entity_variants or set())
-    sparql_lexer.replace(
-        "ENTITY_VARIANTS ''",
-        f"ENTITY_VARIANTS '{ent}'"
-    )
-    prop = '|'.join(re.escape(v) for v in property_variants or set())
-    sparql_lexer.replace(
-        "PROPERTY_VARIANTS ''",
-        f"PROPERTY_VARIANTS '{prop}'"
     )
     return sparql_grammar, sparql_lexer
 
@@ -130,31 +119,23 @@ WIKIDATA_PROPERTY_VARIANTS = {
 
 
 class Mapping:
+    IDENTIFIER_COLUMN = 3
+
     def __init__(self) -> None:
-        self.map = {}
-
-    def build_from_qgram_index(self, index: QGramIndex):
-        for i in range(len(index)):
-            data = index.get_data_by_idx(i)
-            obj_id = data.split("\t")[3]
-            assert obj_id not in self.map, f"obj_id {obj_id} is not unique"
-            self.map[obj_id] = i
-
-    def save(self, file_path: str) -> None:
-        data = json.dumps(self.map).encode()
-        with open(file_path, "wb") as f:
-            f.write(bz2.compress(data))
+        self.map: SearchIndexMapping | None = None
 
     @classmethod
-    def load(cls, file_path: str):
-        with open(file_path, "rb") as f:
-            data = json.loads(bz2.decompress(f.read()))
+    def load(cls, index: SearchIndex, path: str) -> "Mapping":
+        map = SearchIndexMapping(index, cls.IDENTIFIER_COLUMN, path)
         mapping = cls()
-        mapping.map = data
+        mapping.map = map
         return mapping
 
     def __getitem__(self, key: str) -> int:
-        return self.map[key]
+        assert self.map is not None, "mapping not loaded"
+        item = self.map.get(key)
+        assert item is not None, f"key '{key}' not in mapping"
+        return item
 
     def normalize(self, iri: str) -> tuple[str, str | None] | None:
         return iri, None
@@ -166,7 +147,8 @@ class Mapping:
         return set()
 
     def __contains__(self, key: str) -> bool:
-        return key in self.map
+        assert self.map is not None, "mapping not loaded"
+        return self.map.get(key) is not None
 
 
 class WikidataPropertyMapping(Mapping):
@@ -234,84 +216,29 @@ class KgManager:
     def __init__(
         self,
         kg: str,
-        entity_index: QGramIndex | tuple[str, str],
-        property_index: QGramIndex | tuple[str, str],
-        entity_mapping: Mapping | str | None = None,
-        property_mapping: Mapping | str | None = None,
-        parser: grammar.LR1Parser | None = None,
+        entity_index: SearchIndex,
+        property_index: SearchIndex,
+        entity_mapping: Mapping,
+        property_mapping: Mapping,
     ):
         self.kg = kg
-
-        if isinstance(entity_index, tuple):
-            self.entity_index = QGramIndex.load(*entity_index)
-        else:
-            self.entity_index = entity_index
-
-        if entity_mapping is None:
-            self.entity_mapping = self.entity_mapping_cls()
-            self.entity_mapping.build_from_qgram_index(
-                self.entity_index
-            )
-        elif isinstance(entity_mapping, str):
-            self.entity_mapping = self.entity_mapping_cls.load(entity_mapping)
-        else:
-            assert isinstance(entity_mapping, self.entity_mapping_cls), \
-                f"entity_mapping is not of type {self.entity_mapping_cls}"
-            self.entity_mapping = entity_mapping
-
-        if isinstance(property_index, tuple):
-            self.property_index = QGramIndex.load(*property_index)
-        else:
-            self.property_index = property_index
-
-        if property_mapping is None:
-            self.property_mapping = self.property_mapping_cls()
-            self.property_mapping.build_from_qgram_index(
-                self.property_index
-            )
-        elif isinstance(property_mapping, str):
-            self.property_mapping = self.property_mapping_cls.load(
-                property_mapping
-            )
-        else:
-            assert isinstance(property_mapping, self.property_mapping_cls), \
-                f"property_mapping is not of type {self.property_mapping_cls}"
-            self.property_mapping = property_mapping
-
-        if parser is None:
-            self.parser = self.get_parser()
-        else:
-            self.parser = parser
-
-        variants = "|".join(
-            re.escape(v)
-            for v in
-            self.entity_mapping.default_variants()
-            | self.property_mapping.default_variants()
-        )
-        self.pattern = re.compile(
-            rf"<\|kg([ep])\|>(.*?)(?: \(({variants})\))?<\|kg\1\|>"
-        )
-
-    def get_parser(self) -> grammar.LR1Parser:
-        sparql_grammar, sparql_lexer = _load_sparql_grammar(
-            self.entity_mapping.default_variants(),
-            self.property_mapping.default_variants()
-        )
-        return grammar.LR1Parser(
+        self.entity_index = entity_index
+        self.property_index = property_index
+        self.entity_mapping = entity_mapping
+        self.property_mapping = property_mapping
+        sparql_grammar, sparql_lexer = load_sparql_grammar()
+        self.parser = grammar.LR1Parser(
             sparql_grammar,
             sparql_lexer,
         )
+        self.search_pattern = re.compile(r"<\|kg([ep])\|>")
 
     def get_constraint(
         self,
         continuations: list[bytes],
         exact: bool
     ) -> grammar.LR1Constraint:
-        sparql_grammar, sparql_lexer = _load_sparql_grammar(
-            self.entity_mapping.default_variants(),
-            self.property_mapping.default_variants()
-        )
+        sparql_grammar, sparql_lexer = load_sparql_grammar()
         return grammar.LR1Constraint(
             sparql_grammar,
             sparql_lexer,
@@ -348,24 +275,15 @@ class KgManager:
         qlever_endpoint: str | None = None,
         limit: int | None = None,
         max_retries: int = 1
-    ) -> tuple[set[str] | None, str, tuple[str, str | None]]:
+    ) -> set[str] | None:
         """
-        Autocomplete the SPARQL query prefix,
+        Autocomplete the SPARQL prefix,
         run it against Qlever and return the entities or
         properties that can come next.
-        Assumes that the prefix is a valid SPARQL query prefix,
-        otherwise throws an exception.
+        Assumes that the prefix is a valid SPARQL prefix
+        ending with <|kge search|> or <|kgp search|>.
         """
-        matches = list(self.pattern.finditer(prefix))
-        match = matches[-1]
-        # prefix = prefix[:match.start()]
-        obj_type = "entity" if match.group(1) == "e" else "property"
-        look_for = "KGE" if obj_type == "entity" else "KGP"
-        name = match.group(2)
-        variant = match.group(3)
-        if variant == "":
-            variant = None
-        guess = (name, variant)
+        look_for = ["KGE", "KGP"]
 
         parse, _ = self.parser.prefix_parse(
             prefix.encode(),
@@ -385,7 +303,7 @@ class KgManager:
         if iri is None:
             # means we have a prefix but with only vars,
             # which means that there are no constraints
-            return None, obj_type, guess
+            return None
 
         # determine current position in the query:
         # subject, predicate or object
@@ -399,7 +317,7 @@ class KgManager:
         if not triple_blocks:
             # without triples the knowledge graph can not be
             # constrained
-            return None, obj_type, guess
+            return None
 
         no_iris = all(
             all(
@@ -414,7 +332,7 @@ class KgManager:
         if no_iris:
             # without iris the knowledge graph can not be
             # constrained
-            return None, obj_type, guess
+            return None
 
         last_triple = triple_blocks[-1]
         # the last triple block
@@ -425,11 +343,11 @@ class KgManager:
         var = uuid.uuid4().hex
         assert len(second["children"]) == 3
         prop, obj, _ = second["children"]
-        if subj["name"] == look_for:
+        if subj["name"] in look_for:
             # subject can be anything
-            return None, obj_type, (name, variant)
+            return None
 
-        elif prop["name"] == look_for:
+        elif prop["name"] in look_for:
             # property
             prop["name"] = "VAR1"
             prop["value"] = f"?{var}"
@@ -437,7 +355,7 @@ class KgManager:
             obj_var = uuid.uuid4().hex
             obj["value"] = f"?{obj_var}"
 
-        elif obj["name"] == look_for:
+        elif obj["name"] in look_for:
             # object
             obj["name"] = "VAR1"
             obj["value"] = f"?{var}"
@@ -525,7 +443,7 @@ class KgManager:
                 "querying qlever within autocomplete_prefix "
                 f"failed for prefix '{prefix}': {e}"
             )
-        return uris, obj_type, guess
+        return uris
 
     def fix_prefixes(
         self,
@@ -658,18 +576,16 @@ class KgManager:
         norm = self.entity_mapping.normalize(val)
         map = self.entity_mapping
         index = self.entity_index
-        obj_type = "KGE"
         if norm is None or norm[0] not in map:
             norm = self.property_mapping.normalize(val)
             map = self.property_mapping
             index = self.property_index
-            obj_type = "KGP"
 
         if norm is None or norm[0] not in map:
             return True
 
         key, variant = norm
-        data = index.get_data_by_idx(map[key])
+        data = index.get_row(map[key])
         if replacement == "synonyms":
             syns = [
                 syn for syn in
@@ -684,14 +600,9 @@ class KgManager:
         if variant is not None:
             label += f" ({variant})"
 
-        child["name"] = obj_type
-        if obj_type == "KGE":
-            label = f"<|kge|>{label}<|kge|>"
-        else:
-            label = f"<|kgp|>{label}<|kgp|>"
-
+        child["name"] = "IRIREF"
         child.pop("children", None)
-        child["value"] = label
+        child["value"] = f"<{label}>"
         return False
 
     def replace_iris(
@@ -754,49 +665,45 @@ class KgManager:
             norm = self.entity_mapping.normalize(val)
             map = self.entity_mapping
             index = self.entity_index
-            name = "KGE"
             if norm is None or norm[0] not in map:
                 # fallback to property
                 norm = self.property_mapping.normalize(val)
                 map = self.property_mapping
                 index = self.property_index
-                name = "KGP"
 
             # if norm is still none or key not in map, continue
             if norm is None or norm[0] not in map:
                 continue
 
             key, variant = norm
-            data = index.get_data_by_idx(map[key])
+            data = index.get_row(map[key])
             label = data.split("\t")[0]
             if variant is not None:
                 label += f" ({variant})"
 
-            if name == "KGE":
-                obj["value"] = f"<|kge|>{label}<|kge|>"
-            else:
-                obj["value"] = f"<|kgp|>{label}<|kgp|>"
-            obj["name"] = name
+            obj["value"] = f"<{label}>"
 
         return parse_to_string(parse)
 
-    def alternatives_from_data(
+    def build_alternatives_from_data(
         self,
         data: list[tuple[str, set[str]]],
     ) -> list[Alternative]:
         raise NotImplementedError
 
-    def get_alternatives(
+    def get_selection_alternatives(
         self,
         prefix: str,
+        obj_type: str,
+        search: str,
         k: int,
-        delta: int | None = None,
         max_candidates: int | None = None,
-        endpoint: str | None = None
-    ) -> tuple[list[Alternative], str, tuple[str, str | None]] | None:
+        endpoint: str | None = None,
+        **kwargs: Any
+    ) -> list[Alternative] | None:
         try:
             result = self.autocomplete_prefix(
-                prefix,
+                prefix + search_token_from_obj_type(obj_type),
                 endpoint,
                 max_candidates + 1
                 if max_candidates is not None else None,
@@ -806,12 +713,7 @@ class KgManager:
                 f"autocomplete_prefix failed for prefix '{prefix}': "
                 f"{e}"
             )
-            result = None
-
-        if result is None:
             return None
-
-        select_result, obj_type, guess = result
 
         if obj_type == "entity":
             index = self.entity_index
@@ -821,10 +723,7 @@ class KgManager:
             map = self.property_mapping
 
         data: list[tuple[str, set[str]]] = []
-        if (
-            select_result is None
-            or len(select_result) > (max_candidates or len(select_result))
-        ):
+        if result is None or len(result) > (max_candidates or len(result)):
             # select result being None means that there is no way
             # to constrain / filter the knowledge graph with the
             # current prefix, just search in the full index
@@ -832,39 +731,29 @@ class KgManager:
             # we also do this if the number of results is greater
             # than max_results, because creating an extra qgram index
             # for that would be too expensive
-            for i, _ in index.find_matches(guess[0], delta)[:k]:
-                data.append((
-                    index.get_data_by_id(i),
-                    map.default_variants()
-                ))
+            for id, _ in index.find_matches(search, **kwargs)[:k]:
+                data.append((index.get_row(id), map.default_variants()))
 
-        elif k < len(select_result):
+        elif k < len(result):
             # build a sub index and find matches in it
-            indices = []
-            valid_variants = []
-            for iri in select_result:
+            id_map = {}
+            for iri in result:
                 norm = map.normalize(iri)
                 if norm is None:
                     continue
                 iri, variant = norm
                 if iri not in map:
                     continue
-                valid_variants.append(variant)
-                indices.append(map[iri])
+                id = map[iri]
+                id_map[id] = set() if variant is None else {variant}
 
-            sub_index = index.sub_index_by_indices(indices)
-            for i, _ in sub_index.find_matches(guess[0], delta)[:k]:
-                idx = sub_index.get_idx_by_id(i)
-                assert idx is not None
-                variant = valid_variants[idx]
-                data.append((
-                    sub_index.get_data_by_id(i),
-                    set() if variant is None else {variant}
-                ))
+            sub_index = index.sub_index_by_ids(list(id_map))
+            for id, _ in sub_index.find_matches(search, **kwargs)[:k]:
+                data.append((sub_index.get_row(id), id_map[id]))
 
         else:
             # we have less than k result, just get all of them
-            for iri in select_result:
+            for iri in result:
                 norm = map.normalize(iri)
                 if norm is None:
                     continue
@@ -872,91 +761,26 @@ class KgManager:
                 if iri not in map:
                     continue
                 data.append((
-                    index.get_data_by_idx(map[iri]),
+                    index.get_row(map[iri]),
                     set() if variant is None else {variant}
                 ))
 
-        alternatives = self.alternatives_from_data(data)
-        return alternatives, obj_type, guess
+        return self.build_alternatives_from_data(data)
 
-    def parse_result(
-        self,
-        alternatives: list[Alternative],
-        obj_type: str,
-        result: str
-    ) -> tuple[str, str] | None:
-        num, name = result.split(".", 1)
-        idx = int(num) - 1
-        if idx >= len(alternatives):
-            # the none alternative was selected
-            return None
-
-        alternative = alternatives[idx]
-        variant = None
-        if not alternative.variants:
-            # no variants to parse
-            variant = None
-        else:
-            # parse variant
-            # + 4 to account for ". " and opening " ("
-            # - 1 to account for closing ")"
-            variant = result[len(num) + len(alternative.label) + 4:-1]
-
-        if obj_type == "entity":
-            map = self.entity_mapping
-            name = f"<|kge|>{name.strip()}<|kge|>"
-        else:
-            map = self.property_mapping
-            name = f"<|kgp|>{name.strip()}<|kgp|>"
-
-        denorm = map.denormalize(alternative.identifier, variant)
-        if denorm is None:
-            return None
-        elif alternative.identifier not in map:
-            return None
-        else:
-            return denorm, name.strip()
-
-    def get_sparql_prompt(
-        self,
-        question: str,
-        examples: list[tuple[str, str]] | None = None
-    ) -> str:
-        def _prompt(q: str):
-            return f"""\
-Question:
-{q.strip()}
-
-SPARQL query over {self.kg}:
-"""
-
-        inputs = []
-        for q, s in examples or []:
-            try:
-                s = self.fix_prefixes(self.replace_entities_and_properties(s))
-            except Exception:
-                # skip invalid examples
-                continue
-            inputs.append(_prompt(q) + s)
-
-        # add actual question
-        inputs.append(_prompt(question))
-        return "\n\n".join(inputs)
-
-    def get_alternatives_prompt_and_regex(
+    def get_selection_prompt_and_regex(
         self,
         question: str,
         prefix: str,
         obj_type: str,
-        guess: tuple[str, str | None],
+        search_query: str,
         alternatives: list[Alternative],
         add_none_alternative: bool = True,
         max_aliases: int = 5,
-        add_infos: bool = False
+        add_infos: bool = False,
+        failures: set[str] | None = None
     ) -> tuple[str, str]:
         assert obj_type in {"entity", "property"}
-        first = obj_type[0]
-        prefix = prefix + f"<|kg{first}|>...<|kg{first}|>"
+        prefix = prefix + "<...>"
 
         counts = Counter(
             alternative.label.lower()
@@ -989,27 +813,215 @@ SPARQL query over {self.kg}:
 
         alt_string = "\n".join(alt_strings)
 
-        name, variant = guess
-        if variant is not None:
-            name = f"{name} ({variant})"
+        failure = ""
+        if failures:
+            if obj_type == "entity":
+                map = self.entity_mapping
+            else:
+                map = self.property_mapping
+
+            failed = []
+            for f in failures:
+                i, alt = next(
+                    alt for alt in enumerate(alternatives)
+                    if alt[1].identifier == f
+                )
+                fail = f"{i + 1}. {alt.label}"
+                norm = map.normalize(alt.identifier)
+                if norm is None or norm[1] is None:
+                    failed.append(fail)
+                    continue
+
+                _, variant = norm
+                fail += f" ({variant})"
+                failed.append(fail)
+
+            failed = "\n".join(failed)
+            if add_none_alternative:
+                stop_action = "select the none alternative"
+            else:
+                stop_action = "output one of these again"
+
+            failure = f"""
+The following {obj_type} alternatives were already tried but unsuccessful. \
+If there is no other sensible {obj_type} alternative to try, {stop_action} \
+to indicate that the search should be stopped at this point:
+{failed}
+"""
 
         prompt = f"""\
+Select the most fitting {obj_type} alternative to continue the SPARQL \
+query with. The question to be answered, the current SPARQL prefix, the \
+list of possible {obj_type} alternatives and the search query producing \
+these alternatives are given below.
+
 Question:
 {question.strip()}
 
-SPARQL query prefix over {self.kg}:
+SPARQL prefix over {self.kg}:
 {prefix}
 
-Current {obj_type} guess:
-{name}
+{obj_type.capitalize()} search query:
+{search_query}
 
-Actual {obj_type} alternatives:
+{obj_type.capitalize()} alternatives:
 {alt_string}
-
-The most fitting {obj_type} alternative for continuing the SPARQL \
-query to answer the given question is:
+{failure}
+Selection:
 """
         return prompt, "(?:" + "|".join(alt_regexes) + ")"
+
+    def parse_selection(
+        self,
+        alternatives: list[Alternative],
+        obj_type: str,
+        result: str
+    ) -> tuple[str, str] | None:
+        num, name = result.split(".", 1)
+        idx = int(num) - 1
+        if idx >= len(alternatives):
+            # the none alternative was selected
+            return None
+
+        alternative = alternatives[idx]
+        variant = None
+        if not alternative.variants:
+            # no variants to parse
+            variant = None
+        else:
+            # parse variant
+            # + 4 to account for ". " and opening " ("
+            # - 1 to account for closing ")"
+            variant = result[len(num) + len(alternative.label) + 4:-1]
+
+        name = f"<{name}>"
+        if obj_type == "entity":
+            map = self.entity_mapping
+        else:
+            map = self.property_mapping
+
+        denorm = map.denormalize(alternative.identifier, variant)
+        assert denorm is not None, "denormalization failed"
+        return denorm, name
+
+    def get_search_prompt_and_regex(
+        self,
+        question: str,
+        obj_type: str,
+        prefix: str,
+        failures: set[str] | None = None
+    ) -> tuple[str, str]:
+        assert obj_type in {"entity", "property"}
+        prefix = prefix + "<...>"
+
+        if obj_type == "entity":
+            index = self.entity_index
+            obj_type_plural = "entities"
+        else:
+            index = self.property_index
+            obj_type_plural = "properties"
+
+        if isinstance(index, PrefixIndex):
+            index_type = "keyword prefix index"
+        else:
+            assert isinstance(index, QGramIndex)
+            if index.distance == "ied":
+                dist = "infix"
+            else:
+                dist = "prefix"
+            index_type = f"fuzzy {dist} {index.q}-gram index"
+
+        regex = r"[a-z0-9 ]+"
+        failure = ""
+        if failures:
+            failed = "\n".join(failures)
+            failure = f"""
+The following search queries were already tried but unsuccessful. If there \
+is no other sensible search query to try, output one of these again to \
+indicate that the search should be stopped at this point:
+{failed}
+"""
+            regex += "|(?:" + "|".join(re.escape(f) for f in failures) + ")"
+
+        prompt = f"""\
+Generate a search query for the next {obj_type} over a {index_type} \
+containing possible next {obj_type_plural}, given the question to \
+be answered and the current SPARQL prefix.
+
+Question:
+{question.strip()}
+
+SPARQL prefix over {self.kg}:
+{prefix}
+{failure}
+Search query:
+"""
+        return prompt, regex
+
+    def get_sparql_prompt(
+        self,
+        question: str,
+        prefix: str,
+        examples: list[tuple[str, str]] | None = None,
+        failures: set[str] | None = None
+    ) -> Chat:
+        def _ex_prompt(q: str):
+            return f"""\
+Generate a SPARQL query over {self.kg} to answer the given question.
+
+Question:
+{q.strip()}
+
+SPARQL query:
+"""
+
+        failure = ""
+        if failures:
+            failed = "\n".join(failures)
+            failure = f"""
+The following continuations were already tried but unsuccessful. If there \
+is no other sensible continuation to try, output one of these again to \
+indicate that the search should be stopped at this point:
+{failed}
+"""
+        prompt = f"""\
+Continue the given SPARQL prefix to answer the given question \
+until the end of the query or the next entity or property search \
+via <|kge|> or <|kgp|>.
+
+Question:
+{question.strip()}
+
+SPARQL prefix over {self.kg}:
+{prefix}
+{failure}
+Continuation:
+"""
+
+        messages = []
+        for q, s in examples or []:
+            try:
+                s = self.fix_prefixes(self.replace_entities_and_properties(s))
+            except Exception:
+                # skip invalid examples
+                continue
+            messages.extend([
+                {
+                    "role": "user",
+                    "text": _ex_prompt(q)
+                },
+                {
+                    "role": "assistant",
+                    "text": s
+                }
+            ])
+
+        # add actual question
+        messages.append({
+            "role": "user",
+            "text": prompt
+        })
+        return messages
 
 
 class WikidataManager(KgManager):
@@ -1017,11 +1029,10 @@ class WikidataManager(KgManager):
 
     def __init__(
         self,
-        entity_index: QGramIndex | tuple[str, str],
-        property_index: QGramIndex | tuple[str, str],
-        entity_mapping: Mapping | str | None = None,
-        property_mapping: WikidataPropertyMapping | str | None = None,
-        parser: grammar.LR1Parser | None = None,
+        entity_index: SearchIndex,
+        property_index: SearchIndex,
+        entity_mapping: Mapping,
+        property_mapping: WikidataPropertyMapping,
     ):
         super().__init__(
             "wikidata",
@@ -1029,7 +1040,6 @@ class WikidataManager(KgManager):
             property_index,
             entity_mapping,
             property_mapping,
-            parser,
         )
         # add wikidata specific prefixes
         self.custom_prefixes.update({
@@ -1040,7 +1050,7 @@ class WikidataManager(KgManager):
             }
         })
 
-    def alternatives_from_data(
+    def build_alternatives_from_data(
         self,
         data: list[tuple[str, set[str]]]
     ) -> list[Alternative]:
@@ -1084,6 +1094,24 @@ def run_parallel(
             yield future.result()
 
 
+def search_token_from_obj_type(obj_type: str) -> str:
+    if obj_type == "entity":
+        return "<|kge|>"
+    elif obj_type == "property":
+        return "<|kgp|>"
+    else:
+        raise ValueError(f"unknown object type '{obj_type}'")
+
+
+def obj_type_from_search(token: str) -> str:
+    if token == "<|kge|>":
+        return "entity"
+    elif token == "<|kgp|>":
+        return "property"
+    else:
+        raise ValueError(f"unknown search token '{token}'")
+
+
 T = TypeVar("T")
 
 
@@ -1092,6 +1120,14 @@ def flatten(
 ) -> Iterator[T]:
     for sub_iter in iter:
         yield from sub_iter
+
+
+def enumerate_flatten(
+    iter: Iterable[Iterable[T]]
+) -> Iterator[tuple[int, T]]:
+    for i, sub_iter in enumerate(iter):
+        for item in sub_iter:
+            yield i, item
 
 
 def split(
@@ -1118,3 +1154,28 @@ def partition_by(
         else:
             b.append(item)
     return a, b
+
+
+def load_index_and_mapping(
+    index_type: str,
+    mapping_cls: Type[Mapping],
+    dir: str,
+    **kwargs: Any
+) -> tuple[SearchIndex, Mapping]:
+    if index_type == "prefix":
+        index_cls = PrefixIndex
+    elif index_type == "qgram":
+        index_cls = QGramIndex
+    else:
+        raise ValueError(f"unknown index type {index_type}")
+
+    index = index_cls.load(
+        os.path.join(dir, "data.tsv"),
+        os.path.join(dir, index_type),
+        **kwargs
+    )
+    mapping = mapping_cls.load(
+        index,
+        os.path.join(dir, index_type, "index.mapping")
+    )
+    return index, mapping
