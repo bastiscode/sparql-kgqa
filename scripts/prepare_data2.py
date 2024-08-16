@@ -6,17 +6,16 @@ import json
 import collections
 from typing import Any
 
-from search_index import PrefixIndex, QGramIndex
 from tqdm import tqdm
 from datasets import load_dataset
 
 from sparql_kgqa.sparql.utils import find_all, parse_to_string
 from sparql_kgqa.sparql.utils2 import (
     KgManager,
-    Mapping,
     WikidataManager,
     WikidataPropertyMapping,
     clean,
+    load_index_and_mapping,
     run_parallel
 )
 
@@ -55,14 +54,8 @@ def parse_args() -> argparse.Namespace:
     data.add_argument("--monument", type=str)
 
     parser.add_argument("--output", type=str, required=True)
-    parser.add_argument("--entities", type=str, required=True)
-    parser.add_argument("--entities-index", type=str, default="qgram", choices=[
-        "qgram", "prefix"
-    ])
-    parser.add_argument("--properties", type=str, required=True)
-    parser.add_argument("--properties-index", type=str, default="qgram", choices=[
-        "qgram", "prefix"
-    ])
+    parser.add_argument("--entities", type=str, nargs=2, required=True)
+    parser.add_argument("--properties", type=str, nargs=2, required=True)
     parser.add_argument("--progress", action="store_true")
     parser.add_argument("--samples-per-sample", type=int, default=1)
     selection_group = parser.add_argument_group("selection")
@@ -460,27 +453,14 @@ def prepare(args: argparse.Namespace):
     if kg != "wikidata":
         raise RuntimeError("only wikidata supported for now")
 
-    entities_data = os.path.join(args.entities, "data.tsv")
-    entities_index = os.path.join(args.entities, args.entities_index_type)
-    if args.entities_index_type == "qgram":
-        ent_index = QGramIndex.load(entities_data, entities_index)
-    else:
-        ent_index = PrefixIndex.load(entities_data, entities_index)
-    ent_mapping = Mapping.load(
-        ent_index,
-        os.path.join(entities_index, "index.mapping")
-    )
+    ent_dir, ent_type = args.entities
+    ent_index, ent_mapping = load_index_and_mapping(ent_dir, ent_type)
 
-    properties_data = os.path.join(args.properties, "data.tsv")
-    properties_index = os.path.join(
-        args.properties, args.properties_index_type)
-    if args.properties_index_type == "qgram":
-        prop_index = QGramIndex.load(properties_data, properties_index)
-    else:
-        prop_index = PrefixIndex.load(properties_data, properties_index)
-    prop_mapping = WikidataPropertyMapping.load(
-        prop_index,
-        os.path.join(properties_index, "index.mapping")
+    prop_dir, prop_type = args.properties
+    prop_index, prop_mapping = load_index_and_mapping(
+        prop_dir,
+        prop_type,
+        WikidataPropertyMapping
     )
     assert isinstance(prop_mapping, WikidataPropertyMapping)
 

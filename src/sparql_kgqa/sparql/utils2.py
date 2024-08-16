@@ -602,6 +602,7 @@ class KgManager:
 
         child["name"] = "IRIREF"
         child.pop("children", None)
+        child["value"] = "<iri>"
         child["value"] = f"<{label}>"
         return False
 
@@ -633,7 +634,23 @@ class KgManager:
         incomplete = False
 
         for obj in find_all(parse, "iri", skip={"Prologue"}):
-            incomplete = incomplete or self.replace_iri(obj, replacement)
+            iri_incomplete = self.replace_iri(obj, replacement)
+            incomplete |= iri_incomplete
+
+        if not incomplete:
+            # remove custom prefixes if they are not used
+            for pfx in find_all(
+                parse,
+                "PrefixDecl"
+            ):
+                if len(pfx["children"]) != 3:
+                    continue
+
+                short = pfx["children"][1]["value"][:-1]
+                if short not in self.custom_prefixes:
+                    continue
+
+                pfx["children"] = []
 
         return parse_to_string(parse) + rest_str, incomplete
 
@@ -1157,9 +1174,9 @@ def partition_by(
 
 
 def load_index_and_mapping(
+    index_dir: str,
     index_type: str,
-    mapping_cls: Type[Mapping],
-    dir: str,
+    mapping_cls: Type[Mapping] = Mapping,
     **kwargs: Any
 ) -> tuple[SearchIndex, Mapping]:
     if index_type == "prefix":
@@ -1170,12 +1187,12 @@ def load_index_and_mapping(
         raise ValueError(f"unknown index type {index_type}")
 
     index = index_cls.load(
-        os.path.join(dir, "data.tsv"),
-        os.path.join(dir, index_type),
+        os.path.join(index_dir, "data.tsv"),
+        os.path.join(index_dir, index_type),
         **kwargs
     )
     mapping = mapping_cls.load(
         index,
-        os.path.join(dir, index_type, "index.mapping")
+        os.path.join(index_dir, index_type, "index.mapping")
     )
     return index, mapping

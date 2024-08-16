@@ -51,14 +51,15 @@ class SPARQLGenerationCli(TextProcessingCli):
         prop_dir, prop_type = self.args.properties
 
         ent_index, ent_mapping = load_index_and_mapping(
-            ent_type,
-            Mapping,
-            ent_dir
+            ent_dir,
+            ent_type
         )
         prop_index, prop_mapping = load_index_and_mapping(
+            prop_dir,
             prop_type,
+            # wikidata properties need special mapping
+            # because of wdt, p, ps, pq, ... variants
             WikidataPropertyMapping,
-            prop_dir
         )
 
         gen.set_kg_indices(

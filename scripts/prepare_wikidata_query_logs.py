@@ -7,37 +7,26 @@ from urllib.parse import unquote_plus
 
 from tqdm import tqdm
 
-from text_utils import grammar
-
-from sparql_kgqa.sparql.utils import (
-    KgIndex,
-    general_prefixes,
-    clean,
-    fix_prefixes,
-    load_sparql_parser,
-    replace_vars_and_special_tokens,
-    replace_iris
+from sparql_kgqa.sparql.utils import clean
+from sparql_kgqa.sparql.utils2 import (
+    KgManager,
+    WikidataManager,
+    WikidataPropertyMapping,
+    load_index_and_mapping
 )
 
 
 def get_prompt(kg: str) -> str:
     return f"""\
-Task:
-SPARQL query autocompletion over the specified knowledge graphs
-
-Knowledge graphs:
-{kg}
-
-SPARQL:
+Generate a SPARQL query with natural language entities and \
+properties over {kg}:
 """
 
 
 def prepare_file(
     file: str,
     files: dict[str, TextIO],
-    ent_index: KgIndex,
-    prop_index: KgIndex,
-    parser: grammar.LR1Parser,
+    manager: KgManager,
     seen: set[str],
     sources: list[str],
     args: argparse.Namespace
@@ -46,13 +35,6 @@ def prepare_file(
     num_duplicate = 0
     num_incomplete = 0
     num_invalid = 0
-
-    prefixes = general_prefixes()
-    prefixes.update(ent_index.prefixes)
-    prefixes.update(prop_index.prefixes)
-
-    ent_indices = {"wikidata": ent_index}
-    prop_indices = {"wikidata": prop_index}
 
     with open(file, "r") as f:
         _ = next(f)  # forward headers
@@ -75,60 +57,29 @@ def prepare_file(
             seen.add(sparql)
 
             try:
-                sparql_raw = fix_prefixes(
-                    sparql,
-                    parser,
-                    prefixes
-                )
+                sparql_raw = manager.fix_prefixes(sparql)
             except Exception:
                 num_invalid += 1
                 continue
 
-            sparql_raw = replace_vars_and_special_tokens(
-                sparql_raw,
-                parser,
-                args.version
-            )
-
-            sparqls_natural, inc = replace_iris(
-                sparql,
-                parser,
-                ent_indices,
-                prop_indices,
-                args.version,
-                "in_order"
-            )
+            sparql_natural, inc = manager.replace_iris(sparql_raw)
             num_incomplete += inc
 
-            for sparql_natural in sparqls_natural:
-                files[source].write(sparql + "\n")
-                files[f"{source}_input"].write(json.dumps({
-                    "role": "user",
-                    "text": get_prompt("wikidata")
-                }) + "\n")
+            files[source].write(sparql + "\n")
+            files[f"{source}_input"].write(json.dumps({
+                "role": "user",
+                "text": get_prompt("wikidata")
+            }) + "\n")
 
-                sparql_natural = fix_prefixes(
-                    sparql_natural,
-                    parser,
-                    prefixes
-                )
-                sparql_natural = replace_vars_and_special_tokens(
-                    sparql_natural,
-                    parser,
-                    args.version
-                )
-
-                files[f"{source}_natural"].write(
-                    json.dumps(sparql_natural) + "\n"
-                )
-                files[f"{source}_raw"].write(sparql_raw + "\n")
+            files[f"{source}_natural"].write(
+                json.dumps(sparql_natural) + "\n"
+            )
+            files[f"{source}_raw"].write(sparql_raw + "\n")
 
     return num_total, num_duplicate, num_incomplete, num_invalid
 
 
 def prepare(args: argparse.Namespace):
-    parser = load_sparql_parser(["wikidata"])
-
     sources = []
     if not args.robotic_only:
         sources.append("organic")
@@ -147,14 +98,22 @@ def prepare(args: argparse.Namespace):
             )
             return
 
-    entity_index = KgIndex.load(
-        args.entities,
-        args.progress
-    )
+    ent_dir, ent_type = args.entities
+    ent_index, ent_mapping = load_index_and_mapping(ent_dir, ent_type)
 
-    property_index = KgIndex.load(
-        args.properties,
-        args.progress
+    prop_dir, prop_type = args.properties
+    prop_index, prop_mapping = load_index_and_mapping(
+        prop_dir,
+        prop_type,
+        WikidataPropertyMapping
+    )
+    assert isinstance(prop_mapping, WikidataPropertyMapping)
+
+    manager = WikidataManager(
+        ent_index,
+        prop_index,
+        ent_mapping,
+        prop_mapping
     )
 
     for source in sources:
@@ -186,9 +145,7 @@ def prepare(args: argparse.Namespace):
         total, duplicate, incomplete, invalid = prepare_file(
             file,
             files,
-            entity_index,
-            property_index,
-            parser,
+            manager,
             seen,
             sources,
             args
@@ -238,9 +195,8 @@ def parse_args() -> argparse.Namespace:
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--organic-only", action="store_true")
     source.add_argument("--robotic-only", action="store_true")
-    parser.add_argument("--entities", type=str, required=True)
-    parser.add_argument("--properties", type=str, required=True)
-    parser.add_argument("--version", choices=["v1", "v2"], default="v2")
+    parser.add_argument("--entities", type=str, nargs=2, required=True)
+    parser.add_argument("--properties", type=str, nargs=2, required=True)
     parser.add_argument("--rec-limit", type=int, default=10000)
     return parser.parse_args()
 
