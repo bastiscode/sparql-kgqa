@@ -852,8 +852,8 @@ to indicate that the search should be stopped at this point:
         prompt = f"""\
 Select the most fitting {obj_type} alternative to continue the SPARQL \
 query with. The question to be answered, the current SPARQL prefix, the \
-list of possible {obj_type} alternatives and the search query producing \
-these alternatives are given below.
+list of possible {obj_type} alternatives and the index search query that \
+returned these alternatives are given below.
 
 Question:
 {question.strip()}
@@ -861,7 +861,7 @@ Question:
 SPARQL prefix over {self.kg}:
 {prefix}
 
-{obj_type.capitalize()} search query:
+{obj_type.capitalize()} index search query:
 {search_query}
 
 {obj_type.capitalize()} alternatives:
@@ -879,6 +879,7 @@ Selection:
     ) -> tuple[str, str] | None:
         num, name = result.split(".", 1)
         idx = int(num) - 1
+        name = name[1:]
         if idx >= len(alternatives):
             # the none alternative was selected
             return None
@@ -922,16 +923,19 @@ Selection:
             obj_type_plural = "properties"
 
         if isinstance(index, PrefixIndex):
-            index_type = "keyword prefix index"
+            index_info = "keyword prefix index"
+            dist_info = "number of keyword matches"
         else:
             assert isinstance(index, QGramIndex)
             if index.distance == "ied":
-                dist = "infix"
+                dist = "substring"
             else:
                 dist = "prefix"
-            index_type = f"fuzzy {dist} {index.q}-gram index"
+            index_info = "character-level n-gram index"
+            dist_info = f"{dist} distance"
 
-        regex = r"[a-z0-9 ]+"
+        # only lowercase ascii + space, non-empty, up to 128 characters
+        regex = r"[a-z0-9 ]{1,128}"
         failure = ""
         if failures:
             failed = "\n".join(failures)
@@ -944,9 +948,11 @@ indicate that the search should be stopped at this point:
             regex += "|(?:" + "|".join(re.escape(f) for f in failures) + ")"
 
         prompt = f"""\
-Generate a search query for the next {obj_type} over a {index_type} \
-containing possible next {obj_type_plural}, given the question to \
-be answered and the current SPARQL prefix.
+Generate a search query for the next {obj_type} to continue the SPARQL \
+query with. The search query will be executed over a {index_info} containing \
+possible next {obj_type_plural}. It should be short and concise, retrieving \
+{obj_type_plural} by {dist_info}. The question to be answered and \
+the current SPARQL prefix are given below.
 
 Question:
 {question.strip()}
@@ -954,7 +960,7 @@ Question:
 SPARQL prefix over {self.kg}:
 {prefix}
 {failure}
-Search query:
+{obj_type.capitalize()} index search query:
 """
         return prompt, regex
 
@@ -965,6 +971,9 @@ Search query:
         examples: list[tuple[str, str]] | None = None,
         failures: set[str] | None = None
     ) -> Chat:
+        if prefix == "":
+            prefix = "Empty prefix"
+
         def _ex_prompt(q: str):
             return f"""\
 Generate a SPARQL query over {self.kg} to answer the given question.
@@ -985,9 +994,9 @@ indicate that the search should be stopped at this point:
 {failed}
 """
         prompt = f"""\
-Continue the given SPARQL prefix to answer the given question \
-until the end of the query or the next entity or property search \
-via <|kge|> or <|kgp|>.
+Continue the SPARQL prefix over {self.kg} to answer the question \
+until the end of the SPARQL query or the next entity or property index \
+search via <|kge|> or <|kgp|>.
 
 Question:
 {question.strip()}
