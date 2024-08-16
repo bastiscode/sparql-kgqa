@@ -1,7 +1,6 @@
 from typing import Any, Generator, Iterable, Iterator
 import logging
 import random
-import sys
 
 from search_index.index import SearchIndex
 import torch
@@ -118,10 +117,11 @@ class SPARQLGenerator(TextProcessor):
         self._use_cache = False
         self._max_length = None
 
-        # qgram index options
-        self._k = 5  # number of candidates to return
+        # search index options
+        # number of alternatives to select from
+        self._k = 8
         # maximum size where sub index is built
-        self._max_candidates: int | None = 1024
+        self._max_candidates: int | None = 4096
         # add info to selection candidates (added automatically for duplicates)
         self._add_infos = False
 
@@ -380,7 +380,7 @@ class SPARQLGenerator(TextProcessor):
             for i, (first, second) in enumerate(current):
                 s = state(i)
                 if s == "sparql":
-                    pfx += first
+                    pfx += " " * (i > 0) + first
                 elif s == "select":
                     pfx += first if type == "sparql" else second
                 else:
@@ -406,11 +406,13 @@ class SPARQLGenerator(TextProcessor):
 
             names = ["sparql", "search", "select"]
             name = names[idx % len(names)]
-            if name != "sparql" or not current:
+            if name != "search":
                 return name
-            else:
-                _, search_token = current[-1]
-                return "done" if search_token == "" else name
+
+            # last one was sparql, if sparql produced empty
+            # search token (finished sparql query) we are done
+            _, search = previous()
+            return "done" if search == "" else name
 
         def previous() -> tuple[str, str]:
             assert current, "no previous state"
@@ -422,10 +424,12 @@ class SPARQLGenerator(TextProcessor):
 
         while s:
             self.logger.debug(
-                f"current state: {s}\n"
-                f"current sparql: {prefix('sparql')}\n"
-                f"current natural: {prefix('natural')}\n"
-                f"current failures: {failures()}"
+                f"current state:\n"
+                f"name:     {s}\n"
+                f"sparql:   {prefix('sparql')}\n"
+                f"natural:  {prefix('natural')}\n"
+                f"failures: {failures()}\n"
+                f"previous: {previous() if current else 'None'}"
             )
             if s == "done":
                 accept = self._check_sparql(
@@ -452,7 +456,11 @@ class SPARQLGenerator(TextProcessor):
                     failed
                 )
                 if continuation + search in failed:
-                    backtrack()
+                    if current:
+                        backtrack()
+                    else:
+                        # cannot backtrack, return empty sparql
+                        break
                 else:
                     advance((continuation, search))
 
@@ -467,11 +475,7 @@ class SPARQLGenerator(TextProcessor):
                     failed
                 )
                 if search_query in failed:
-                    if current:
-                        backtrack()
-                    else:
-                        # cannot backtrack, return empty sparql
-                        break
+                    backtrack()
                 else:
                     advance((obj_type, search_query))
 
@@ -524,9 +528,8 @@ class SPARQLGenerator(TextProcessor):
             natural_prefix,
             failures=failures
         )
-        prompt = self._chat_format(prompt)
         token_ids = self.tokenizer.tokenize(
-            prompt,
+            self._chat_format(prompt),
             self._is_chat
         ).token_ids
 
@@ -569,11 +572,19 @@ class SPARQLGenerator(TextProcessor):
             beam,
             stop_fn
         ):
+            self.logger.debug(
+                self.tokenizer.de_tokenize(output.decoded_token_ids)
+            )
             yield self.tokenizer.de_tokenize(output.decoded_token_ids)
             last = output
 
         assert last is not None, "should not happen"
-        return last.info["continuation"], last.info["search"]
+        cont = last.info["continuation"]
+        search = last.info["search"]
+        self.logger.debug(
+            f"continuation:\n{prompt[-1]['text']}{cont + search}"
+        )
+        return cont, search
 
     def _generate_search_query(
         self,
@@ -589,9 +600,8 @@ class SPARQLGenerator(TextProcessor):
             prefix,
             failures
         )
-        prompt = self._chat_format(prompt)
         token_ids = self.tokenizer.tokenize(
-            prompt,
+            self._chat_format(prompt),
             self._is_chat
         ).token_ids
         beam = Beam(
@@ -643,9 +653,8 @@ class SPARQLGenerator(TextProcessor):
             add_infos=self._add_infos,
             failures=failures
         )
-        prompt = self._chat_format(prompt)
         token_ids = self.tokenizer.tokenize(
-            prompt,
+            self._chat_format(prompt),
             self._is_chat
         ).token_ids
         beam = Beam(
@@ -663,6 +672,7 @@ class SPARQLGenerator(TextProcessor):
             lambda beam: beam.token_ids[-1] == self._eos_token_id
         )
         selected = self.tokenizer.de_tokenize(selection.decoded_token_ids)
+        self.logger.debug(f"selection:\n{prompt}{selected}")
         return self._manager.parse_selection(
             alternatives,
             obj_type,
@@ -723,8 +733,8 @@ class SPARQLGenerator(TextProcessor):
         disable_sparql_constraint: bool = False,
         disable_subgraph_constraint: bool = False,
         num_examples: int = 3,
-        select_k: int = 16,
-        select_max_candidates: int | None = 8192,
+        select_k: int = 8,
+        select_max_candidates: int | None = 4096,
         select_max_aliases: int = 5,
         select_add_infos: bool = False,
         system_message: str | None = None,

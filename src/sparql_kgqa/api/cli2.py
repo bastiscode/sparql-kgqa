@@ -1,10 +1,8 @@
 import json
 import sys
 import random
-import os
 from typing import Iterator
 
-from search_index import PrefixIndex
 import torch
 
 from text_utils.api.cli import TextProcessingCli
@@ -13,7 +11,11 @@ from text_utils.api.processor import TextProcessor
 from sparql_kgqa import version
 from sparql_kgqa.api.generator2 import SPARQLGenerator
 from sparql_kgqa.api.server2 import SPARQLGenerationServer
-from sparql_kgqa.sparql.utils2 import Mapping, WikidataPropertyMapping, load_index_and_mapping
+from sparql_kgqa.sparql.utils2 import (
+    Mapping,
+    WikidataPropertyMapping,
+    load_index_and_mapping
+)
 
 
 class SPARQLGenerationCli(TextProcessingCli):
@@ -239,13 +241,13 @@ def main():
     parser.add_argument(
         "--select-k",
         type=int,
-        default=16,
+        default=8,
         help="Number of candidates to select from"
     )
     parser.add_argument(
         "--select-max-candidates",
         type=int,
-        default=8192,
+        default=4096,
         help="Maximum number of candidates for which a sub-index is created"
     )
     parser.add_argument(
