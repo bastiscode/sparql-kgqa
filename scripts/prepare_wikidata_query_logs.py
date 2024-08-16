@@ -58,11 +58,11 @@ def prepare_file(
 
             try:
                 sparql_raw = manager.fix_prefixes(sparql)
+                sparql_natural, inc = manager.replace_iris(sparql_raw)
             except Exception:
                 num_invalid += 1
                 continue
 
-            sparql_natural, inc = manager.replace_iris(sparql_raw)
             num_incomplete += inc
 
             files[source].write(sparql + "\n")

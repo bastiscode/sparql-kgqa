@@ -6,7 +6,7 @@ import re
 import uuid
 from importlib import resources
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Callable, Generator, Iterable, Iterator, Type, TypeVar, Any
+from typing import Callable, Iterable, Iterator, Type, TypeVar, Any
 
 from search_index import PrefixIndex, QGramIndex
 from text_utils import grammar
@@ -41,6 +41,13 @@ def load_sparql_grammar() -> tuple[str, str]:
         "sparql2.l"
     )
     return sparql_grammar, sparql_lexer
+
+
+def is_prefix_of_iri(prefix: str, iri: str) -> bool:
+    # find / necessary becuase some prefixes are prefixes of each other,
+    # e.g. <http://www.wikidata.org/entity/
+    # and  <http://www.wikidata.org/entity/statement/
+    return iri.startswith(prefix) and iri.find("/", len(prefix)) == -1
 
 
 class Alternative:
@@ -165,7 +172,7 @@ class WikidataPropertyMapping(Mapping):
     def _longest_prefix(key: str) -> str | None:
         longest = None
         for prefix in WIKIDATA_PROPERTY_VARIANTS:
-            if not key.startswith(prefix):
+            if not is_prefix_of_iri(prefix, key):
                 continue
             if longest is None or len(prefix) > len(longest):
                 longest = prefix
@@ -183,7 +190,7 @@ class WikidataPropertyMapping(Mapping):
             return key
         elif variant not in self.inverse_variants:
             return None
-        elif not key.startswith(self.NORM_PREFIX):
+        elif not is_prefix_of_iri(self.NORM_PREFIX, key):
             return None
         pfx = self.inverse_variants[variant]
         return pfx + key[len(self.NORM_PREFIX):]
@@ -492,7 +499,7 @@ class KgManager:
 
             longest: tuple[str, str] | None = next(iter(sorted(
                 filter(
-                    lambda pair: val.startswith(pair[1]),
+                    lambda pair: is_prefix_of_iri(pair[1], val),
                     prefixes.items()
                 ),
                 key=lambda pair: len(pair[1]),
@@ -564,7 +571,7 @@ class KgManager:
                 return False
             val = child["value"]
             is_in_kg = next(filter(
-                lambda pfx: val.startswith(pfx),
+                lambda pfx: is_prefix_of_iri(pfx, val),
                 self.custom_prefixes.values()
             ), None) is not None
         else:
@@ -1070,6 +1077,8 @@ class WikidataManager(KgManager):
         # add wikidata specific prefixes
         self.custom_prefixes.update({
             "wd": "<http://www.wikidata.org/entity/",
+            "wds": "<http://www.wikidata.org/entity/statement/",
+            "wdref": "<http://www.wikidata.org/reference/",
             **{
                 short: long
                 for long, short in WIKIDATA_PROPERTY_VARIANTS.items()
