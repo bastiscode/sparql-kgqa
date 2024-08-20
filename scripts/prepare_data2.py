@@ -14,6 +14,7 @@ from datasets import load_dataset
 
 from sparql_kgqa.sparql.utils import find_all
 from sparql_kgqa.sparql.utils2 import (
+    Chat,
     KgManager,
     WikidataManager,
     WikidataPropertyMapping,
@@ -303,7 +304,14 @@ def get_search_query(
         n_syns = random.randint(0, min(2, len(syns)))
         for syn in random.sample(syns, n_syns):
             keywords.update(normalize(syn).split())
-        keywords = list(k for k in keywords if k not in STOP)
+        keywords = list(
+            k for k in keywords
+            if k not in STOP
+            and not any(
+                k.startswith(other) for other in keywords
+                if k != other
+            )
+        )
         random.shuffle(keywords)
         query = " ".join(keywords)
     else:
@@ -337,7 +345,7 @@ def prepare_stages(
     raw_sparql: str,
     managers: list[KgManager],
     args: argparse.Namespace
-) -> list[tuple[str, str]]:
+) -> list[tuple[str | Chat, str]]:
     manager = random.choice(managers)
     raw_encoded = raw_sparql.encode()
     parse = manager.parser.parse(
@@ -554,19 +562,6 @@ def prepare_stages(
 
         samples.append((select_prompt, select_target))
 
-        # print last continuation, search and selection
-        # prompts and targets, separated by a line of dashes
-        # print(f"Question:\n{question}")
-        # print(f"Sparql:\n{raw_sparql}")
-        # print(f"Last prefix:\n{last_prefix}")
-        # print(f"Prefix:\n{prefix}")
-        # print("-" * 80)
-        # for prompt, target in samples[-3:]:
-        #     if not isinstance(prompt, str):
-        #         prompt = prompt[-1]["text"]
-        #     print(f"{prompt}{target}")
-        #     print("-" * 80)
-
     return samples
 
 
@@ -575,7 +570,7 @@ def prepare_sample(
     managers: list[KgManager],
     args: argparse.Namespace,
     split: str
-) -> tuple[str, str, list[tuple[str, str]]] | None:
+) -> tuple[str, str, list[tuple[str | Chat, str]]] | None:
     # clean sparql in sample
     sample = Sample(
         sample.question,
@@ -596,8 +591,6 @@ def prepare_sample(
         return None
 
     sparqls.append((prompt, sparql))
-    # print(f"{prompt}{sparql}")
-    # print("-" * 80)
     if split != "test":
         sparqls.extend(prepare_stages(
             sample.question,
@@ -666,11 +659,6 @@ def prepare(args: argparse.Namespace):
                 open(target, "w") as tf, \
                 open(raw, "w") as rf:
             for output in tqdm(
-                # run_parallel(
-                #     prepare_sample,
-                #     ((sample, manager, args, split) for sample in samples),
-                #     args.num_workers
-                # ),
                 (prepare_sample(
                     sample,
                     managers,
@@ -694,12 +682,12 @@ def prepare(args: argparse.Namespace):
 
                 num_sparqls += len(sparqls)
                 for prompt, target in sparqls:
-                    inf.write(
-                        json.dumps([{
+                    if isinstance(prompt, str):
+                        prompt = [{
                             "role": "user",
                             "text": prompt
-                        }]) + "\n"
-                    )
+                        }]
+                    inf.write(json.dumps(prompt) + "\n")
                     tf.write(json.dumps(target) + "\n")
 
         print(

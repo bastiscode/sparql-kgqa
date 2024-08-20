@@ -342,7 +342,7 @@ class PretrainedDecoder(Model):
         token_ids: torch.Tensor,
         lengths: torch.Tensor,
         kv_cache: Optional[tuple[tuple[torch.Tensor]]] = None,
-        use_cache: bool = True
+        use_cache: bool = False
     ) -> tuple[torch.Tensor, tuple[tuple[torch.Tensor]]]:
         if use_cache and kv_cache is not None:
             b, s = token_ids.shape
