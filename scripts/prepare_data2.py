@@ -659,12 +659,11 @@ def prepare(args: argparse.Namespace):
                 open(target, "w") as tf, \
                 open(raw, "w") as rf:
             for output in tqdm(
-                (prepare_sample(
-                    sample,
-                    managers,
-                    args,
-                    split
-                ) for sample in samples),
+                run_parallel(
+                    prepare_sample,
+                    ((sample, managers, args, split) for sample in samples),
+                    args.num_workers,
+                ),
                 desc=f"processing and writing {split} samples",
                 leave=False,
                 total=len(samples),
