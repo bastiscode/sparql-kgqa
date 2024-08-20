@@ -18,8 +18,7 @@ from sparql_kgqa.sparql.utils2 import (
 
 def get_prompt(kg: str) -> str:
     return f"""\
-Generate a SPARQL query with natural language entities and \
-properties over {kg}:
+Generate a natural language SPARQL query over {kg}:
 """
 
 
@@ -65,16 +64,12 @@ def prepare_file(
 
             num_incomplete += inc
 
-            files[source].write(sparql + "\n")
             files[f"{source}_input"].write(json.dumps({
                 "role": "user",
                 "text": get_prompt("wikidata")
             }) + "\n")
-
-            files[f"{source}_natural"].write(
-                json.dumps(sparql_natural) + "\n"
-            )
-            files[f"{source}_raw"].write(sparql_raw + "\n")
+            files[f"{source}_target"].write(json.dumps(sparql_natural) + "\n")
+            files[f"{source}_raw"].write(json.dumps(sparql_raw) + "\n")
 
     return num_total, num_duplicate, num_incomplete, num_invalid
 
@@ -89,8 +84,10 @@ def prepare(args: argparse.Namespace):
     files = {}
     for source in sources:
         if any(
-            os.path.exists(os.path.join(args.output_dir, f"{source}{ext}.txt"))
-            for ext in ["", ".nl", ".raw"]
+            os.path.exists(os.path.join(
+                args.output_dir, f"{source}{ext}.jsonl"
+            ))
+            for ext in ["_input", "_target", "_sparql"]
         ):
             print(
                 f"output files for {source} in {args.output_dir}"
@@ -117,17 +114,14 @@ def prepare(args: argparse.Namespace):
     )
 
     for source in sources:
-        files[source] = open(
-            os.path.join(args.output_dir, f"{source}.txt"), "w"
-        )
         files[f"{source}_input"] = open(
-            os.path.join(args.output_dir, f"{source}.input.txt"), "w"
+            os.path.join(args.output_dir, f"{source}_input.jsonl"), "w"
         )
-        files[f"{source}_natural"] = open(
-            os.path.join(args.output_dir, f"{source}.nl.txt"), "w"
+        files[f"{source}_target"] = open(
+            os.path.join(args.output_dir, f"{source}_target.jsonl"), "w"
         )
         files[f"{source}_raw"] = open(
-            os.path.join(args.output_dir, f"{source}.raw.txt"), "w"
+            os.path.join(args.output_dir, f"{source}_raw.jsonl"), "w"
         )
 
     num_total = 0

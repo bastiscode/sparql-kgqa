@@ -1,4 +1,5 @@
 import argparse
+import itertools
 import random
 import os
 import re
@@ -6,10 +7,12 @@ import json
 import collections
 from typing import Any
 
+from search_index import PrefixIndex, QGramIndex, normalize
+from search_index.index import SearchIndex
 from tqdm import tqdm
 from datasets import load_dataset
 
-from sparql_kgqa.sparql.utils import find_all, parse_to_string
+from sparql_kgqa.sparql.utils import find_all
 from sparql_kgqa.sparql.utils2 import (
     KgManager,
     WikidataManager,
@@ -54,43 +57,41 @@ def parse_args() -> argparse.Namespace:
     data.add_argument("--monument", type=str)
 
     parser.add_argument("--output", type=str, required=True)
-    parser.add_argument("--entities", type=str, nargs=2, required=True)
-    parser.add_argument("--properties", type=str, nargs=2, required=True)
+    parser.add_argument("--entities", type=str, required=True)
+    parser.add_argument("--properties", type=str, required=True)
     parser.add_argument("--progress", action="store_true")
-    parser.add_argument("--samples-per-sample", type=int, default=1)
-    selection_group = parser.add_argument_group("selection")
-    selection_group.add_argument("--with-selections", action="store_true")
-    selection_group.add_argument(
-        "--selections-per-sample",
+    sample_group = parser.add_argument_group("samples")
+    sample_group.add_argument(
+        "--samples-per-question",
         type=int,
         default=1
     )
-    selection_group.add_argument(
+    sample_group.add_argument(
+        "--sample-dropout",
+        type=float,
+        default=0.1
+    )
+    sample_group.add_argument(
         "--selections-min-k",
         type=int,
         default=4
     )
-    selection_group.add_argument(
+    sample_group.add_argument(
         "--selections-max-k",
         type=int,
-        default=32
+        default=16
     )
-    selection_group.add_argument(
+    sample_group.add_argument(
         "--selections-min-aliases",
         type=int,
         default=0
     )
-    selection_group.add_argument(
+    sample_group.add_argument(
         "--selections-max-aliases",
         type=int,
         default=8
     )
-    selection_group.add_argument(
-        "--selections-dropout",
-        type=float,
-        default=0.1
-    )
-    selection_group.add_argument(
+    sample_group.add_argument(
         "--selections-add-info-p",
         type=float,
         default=0.1
@@ -252,198 +253,360 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
     return kg, output
 
 
-def prepare_selection(
-    question: str,
-    raw_sparql: str,
-    manager: KgManager,
-    args: argparse.Namespace
-) -> list[tuple[str, str]]:
-    selections = []
-    for _ in range(args.selections_per_sample):
-        parse = manager.parser.parse(
-            raw_sparql,
-            skip_empty=True,
-            collapse_single=False
-        )
+# nltk english stopwords
+STOP = [
+    'i', 'me', 'my', 'myself', 'we', 'our', 'ours', 'ourselves', 'you',
+    "you're", "you've", "you'll", "you'd", 'your', 'yours', 'yourself',
+    'yourselves', 'he', 'him', 'his', 'himself', 'she', "she's", 'her',
+    'hers', 'herself', 'it', "it's", 'its', 'itself', 'they', 'them',
+    'their', 'theirs', 'themselves', 'what', 'which', 'who', 'whom',
+    'this', 'that', "that'll", 'these', 'those', 'am', 'is', 'are', 'was',
+    'were', 'be', 'been', 'being', 'have', 'has', 'had', 'having', 'do',
+    'does', 'did', 'doing', 'a', 'an', 'the', 'and', 'but', 'if', 'or',
+    'because', 'as', 'until', 'while', 'of', 'at', 'by', 'for', 'with',
+    'about', 'against', 'between', 'into', 'through', 'during', 'before',
+    'after', 'above', 'below', 'to', 'from', 'up', 'down', 'in', 'out', 'on',
+    'off', 'over', 'under', 'again', 'further', 'then', 'once', 'here',
+    'there', 'when', 'where', 'why', 'how', 'all', 'any', 'both', 'each',
+    'few', 'more', 'most', 'other', 'some', 'such', 'no', 'nor', 'not',
+    'only', 'own', 'same', 'so', 'than', 'too', 'very', 's', 't', 'can',
+    'will', 'just', 'don', "don't", 'should', "should've", 'now', 'd', 'll',
+    'm', 'o', 're', 've', 'y', 'ain', 'aren', "aren't", 'couldn', "couldn't",
+    'didn', "didn't", 'doesn', "doesn't", 'hadn', "hadn't", 'hasn', "hasn't",
+    'haven', "haven't", 'isn', "isn't", 'ma', 'mightn', "mightn't", 'mustn',
+    "mustn't", 'needn', "needn't", 'shan', "shan't", 'shouldn', "shouldn't",
+    'wasn', "wasn't", 'weren', "weren't", 'won', "won't", 'wouldn', "wouldn't"
+]
 
-        def map_item(obj) -> tuple[Any, str, str, int] | None:
-            if obj["name"] != "iri":
-                return None
-            child = obj["children"][0]
-            if child["name"] != "PrefixedName":
-                return None
-            child = child["children"][0]
-            if child["name"] != "PNAME_LN":
-                return None
-            pfx, val = child["value"].split(":", 1)
-            return obj, pfx, val, child["byte_span"][0]
 
-        items = list(filter(
-            lambda item: item is not None
-            and item[1] in manager.custom_prefixes,
-            map(
-                map_item,
-                find_all(
-                    parse,
-                    name="iri",
-                    skip={"Prologue"}
-                )
-            )
-        ))
-        if len(items) == 0:
+def filter_stopwords(words: list[str]) -> list[str]:
+    return [
+        word for word in words
+        if word not in STOP
+    ]
+
+
+def get_search_query(
+    id: int,
+    index: SearchIndex,
+    k: int,
+    return_non_matching_ids: bool = False
+) -> tuple[str, list[int]]:
+    data = index.get_row(id)
+    name, _, syns, *_ = data.split("\t")
+    syns = [s for s in syns.split(";") if s]
+
+    # simulate some sensible search behavior
+    # for the different index types
+    if isinstance(index, PrefixIndex):
+        keywords = set(normalize(name).split())
+        n_syns = random.randint(0, min(2, len(syns)))
+        for syn in random.sample(syns, n_syns):
+            keywords.update(normalize(syn).split())
+        keywords = list(k for k in keywords if k not in STOP)
+        random.shuffle(keywords)
+        query = " ".join(keywords)
+    else:
+        assert isinstance(index, QGramIndex)
+        syns.append(name)
+        # make label equally likely to be selected
+        # as all other synonyms
+        if len(syns) > 1:
+            counts = [1] * len(syns)
+            counts[-1] = len(syns) - 1
+        else:
+            counts = [1]
+        query = normalize(random.sample(syns, 1, counts=counts)[0])
+
+    non_matching_ids = []
+    if not return_non_matching_ids:
+        return query, non_matching_ids
+
+    matches = index.find_matches(query)
+    for match_id, _ in matches[:k]:
+        if id == match_id:
             continue
 
-        item = random.choice(items)
+        non_matching_ids.append(match_id)
+
+    return query, non_matching_ids
+
+
+def prepare_stages(
+    question: str,
+    raw_sparql: str,
+    managers: list[KgManager],
+    args: argparse.Namespace
+) -> list[tuple[str, str]]:
+    manager = random.choice(managers)
+    raw_encoded = raw_sparql.encode()
+    parse = manager.parser.parse(
+        raw_sparql,
+        skip_empty=True,
+        collapse_single=False
+    )
+
+    def map_item(obj) -> tuple[Any, str, str, tuple[int, int]] | None:
+        if obj["name"] != "iri":
+            return None
+        child = obj["children"][0]
+        if child["name"] != "PrefixedName":
+            return None
+        child = child["children"][0]
+        if child["name"] != "PNAME_LN":
+            return None
+        pfx, val = child["value"].split(":", 1)
+        return obj, pfx, val, child["byte_span"]
+
+    items = list(filter(
+        lambda item: item is not None
+        and item[1] in manager.custom_prefixes,
+        map(
+            map_item,
+            find_all(
+                parse,
+                name="iri",
+                skip={"Prologue"}
+            )
+        )
+    ))
+
+    samples = []
+    for item_idx in random.sample(
+        list(range(len(items))),
+        min(len(items), args.samples_per_question)
+    ):
+        manager = random.choice(managers)
+        item = items[item_idx]
         assert item is not None
-        item, pfx, iri, start = item
+
+        item, pfx, iri, (start, _) = item
         long = manager.custom_prefixes[pfx]
         iri = long + iri + ">"
 
-        raw_encoded = raw_sparql.encode()
-        prefix_raw = raw_encoded[:start].decode(errors="replace")
-        assert not manager.replace_iri(item, replacement="synonyms")
-        replaced = parse_to_string(item)
+        index_map = manager.entity_mapping
+        index = manager.entity_index
+        norm = index_map.normalize(iri)
+        obj_type = "entity"
+        search_token = "<|kge|>"
+        if norm is None or norm[0] not in index_map:
+            index_map = manager.property_mapping
+            index = manager.property_index
+            norm = index_map.normalize(iri)
+            obj_type = "property"
+            search_token = "<|kgp|>"
 
-        prefix, _ = manager.replace_iris(
+        if norm is None or norm[0] not in index_map:
+            print(
+                f"Skipping {question} with sparql {raw_sparql} "
+                f"due to unknown {obj_type} ({iri}, {norm})"
+            )
+            continue
+
+        key, variant = norm
+
+        prefix_raw = raw_encoded[:start].decode(errors="replace")
+        prefix, inc = manager.replace_iris(
             prefix_raw,
-            replacement="synonyms",
             is_prefix=True
         )
-        result = manager.get_selection_alternatives(
-            prefix_raw + replaced,
-            random.randint(
-                args.selections_min_k,
-                args.selections_max_k
+        if inc:
+            print(
+                f"Skipping {question} with sparql {raw_sparql} "
+                f"due to incomplete prefix {prefix}"
             )
+            continue
+
+        if item_idx > 0:
+            last = items[item_idx - 1]
+            assert last is not None
+            *_, (_, end) = last
+            prefix_raw = raw_encoded[:end].decode(errors="replace")
+            last_prefix, _ = manager.replace_iris(
+                prefix_raw,
+                is_prefix=True
+            )
+        else:
+            last_prefix = ""
+
+        if item_idx == len(items) - 1:
+            search_token = ""
+
+        continuation_prompt = manager.get_sparql_continuation_prompt(
+            question,
+            last_prefix
         )
-        if result is None:
-            continue
+        continuation_target = prefix[len(last_prefix):] + search_token
+        samples.append((continuation_prompt, continuation_target))
 
-        alts, obj_type, guess = result
-
-        if obj_type == "entity":
-            mapping = manager.entity_mapping
-        else:
-            mapping = manager.property_mapping
-
-        norm = mapping.normalize(iri)
-        if norm is None:
-            continue
-
-        # variant dropout
-        default_variants = mapping.default_variants()
-        if (
-            guess[1] is not None
-            and default_variants
-            and random.random() < args.selections_dropout
-        ):
-            random_variant = random.choice(
-                list(default_variants) + [None]
+        search_failures = set()
+        selection_k = random.randint(
+            args.selections_min_k,
+            args.selections_max_k
+        )
+        search_target, non_matching_ids = get_search_query(
+            index_map[key],
+            index,
+            selection_k,
+            return_non_matching_ids=True
+        )
+        num_search_failures = min(
+            random.randint(0, 3),
+            len(non_matching_ids)
+        )
+        for id in random.sample(non_matching_ids, num_search_failures):
+            search_fail, *_ = get_search_query(
+                id,
+                index,
+                selection_k
             )
-            guess = (guess[0], random_variant)
+            search_failures.add(search_fail)
 
-        # alternative dropout
-        identifier, variant = norm
-        i = 0
-        for alt in alts:
-            if alt.identifier == identifier:
-                break
-            i += 1
+        drop_search = random.random() < args.sample_dropout
+        if drop_search:
+            search_target = normalize(index.get_name(index_map[key]))
+            search_failures.add(search_target)
 
-        if i < len(alts) and random.random() < args.selections_dropout:
-            alts.pop(i)
-            i = len(alts)
+        search_prompt, _ = manager.get_search_prompt_and_regex(
+            question,
+            obj_type,
+            prefix,
+            failures=search_failures
+        )
 
-        if i == len(alts):
-            target_alt = f"{len(alts) + 1}. none"
-        else:
-            target_alt = f"{i + 1}. {alts[i].label}"
-            if variant is not None:
-                target_alt += f" ({variant})"
+        samples.append((search_prompt, search_target))
 
-        prefix = manager.fix_prefixes(prefix, is_prefix=True)
+        alts = manager.get_selection_alternatives(
+            prefix_raw,
+            obj_type,
+            search_target,
+            selection_k,
+            max_candidates=16384
+        )
+        if alts is None:
+            alts = []
 
-        prompt, _ = manager.get_selection_prompt_and_regex(
+        target_alt = next(
+            (alt for alt in alts
+             if alt.identifier == key
+             and variant in (alt.variants or [None])),
+            None
+        )
+
+        select_failures = set()
+
+        drop_alt = random.random() < args.sample_dropout
+        if target_alt is not None and drop_alt:
+            # differentiate between dropping the target from
+            # the list of alternatives entirely or only adding the
+            # variant to previous fails
+            if random.random() < 0.5:
+                alts.remove(target_alt)
+            else:
+                select_failures.add((target_alt.identifier, variant))
+
+            target_alt = None
+
+        other_alts = [
+            (alt.identifier, var)
+            for alt in alts
+            for var in (alt.variants or [None])
+            if target_alt is None
+            or alt.identifier != target_alt.identifier
+            or var != variant
+        ]
+
+        if other_alts:
+            counts = [
+                int(index.get_val(index_map[id], 1))
+                for id, _ in other_alts
+            ]
+            num_select_failures = random.randint(0, 3 - len(select_failures))
+            failed = random.sample(
+                other_alts,
+                min(len(other_alts), num_select_failures),
+                counts=counts
+            )
+            select_failures.update(failed)
+
+        select_prompt, _ = manager.get_selection_prompt_and_regex(
             question,
             prefix,
             obj_type,
-            guess,
+            search_target,
             alts,
             max_aliases=random.randint(
                 args.selections_min_aliases,
                 args.selections_max_aliases
             ),
-            add_infos=random.random() < args.selections_add_info_p
+            add_infos=random.random() < args.selections_add_info_p,
+            failures=select_failures
         )
-        selections.append((prompt, target_alt))
 
-    return selections
+        if target_alt is None:
+            select_target = f"{len(alts)}. none"
+        else:
+            select_idx = alts.index(target_alt)
+            select_name = target_alt.label
+            if variant:
+                select_name += f" ({variant})"
+            select_target = f"{select_idx + 1}. {select_name}"
+
+        samples.append((select_prompt, select_target))
+
+        # print last continuation, search and selection
+        # prompts and targets, separated by a line of dashes
+        # print(f"Question:\n{question}")
+        # print(f"Sparql:\n{raw_sparql}")
+        # print(f"Last prefix:\n{last_prefix}")
+        # print(f"Prefix:\n{prefix}")
+        # print("-" * 80)
+        # for prompt, target in samples[-3:]:
+        #     if not isinstance(prompt, str):
+        #         prompt = prompt[-1]["text"]
+        #     print(f"{prompt}{target}")
+        #     print("-" * 80)
+
+    return samples
 
 
 def prepare_sample(
     sample: Sample,
-    manager: KgManager,
+    managers: list[KgManager],
     args: argparse.Namespace,
     split: str
-) -> tuple[
-    str,
-    str,
-    str,
-    list[str],
-    list[tuple[str, str]],
-] | None:
+) -> tuple[str, str, list[tuple[str, str]]] | None:
     # clean sparql in sample
     sample = Sample(
         sample.question,
         clean(sample.sparql),
     )
 
-    sparqls = []
-    for _ in range(max(1, args.samples_per_sample)):
-        try:
-            sparql, inc = manager.replace_iris(
-                sample.sparql,
-                replacement="label" if split == "test" else "synonyms"
-            )
-            sparql = manager.fix_prefixes(sparql)
-        except Exception:
-            break
+    manager = random.choice(managers)
 
-        if inc:
-            break
-
-        sparqls.append(sparql)
-
-        if split == "test":
-            break
-
-    if len(sparqls) == 0:
+    try:
+        raw_sparql = manager.fix_prefixes(sample.sparql)
+    except Exception:
         return None
 
-    # same as above, but without replacing
-    # with natural language entities
-    raw_sparql = manager.fix_prefixes(sample.sparql)
-
+    sparqls = []
     prompt = manager.get_sparql_prompt(sample.question)
+    sparql, inc = manager.replace_iris(raw_sparql)
+    if inc:
+        return None
 
-    if not args.with_selections or split == "test":
-        # do not include selection samples in test split
-        selections = []
-    else:
-        selections = prepare_selection(
+    sparqls.append((prompt, sparql))
+    # print(f"{prompt}{sparql}")
+    # print("-" * 80)
+    if split != "test":
+        sparqls.extend(prepare_stages(
             sample.question,
             raw_sparql,
-            manager,
+            managers,
             args
-        )
+        ))
 
-    return (
-        sample.question,
-        raw_sparql,
-        prompt,
-        sparqls,
-        selections
-    )
+    return sample.question, raw_sparql, sparqls
 
 
 def prepare(args: argparse.Namespace):
@@ -453,62 +616,67 @@ def prepare(args: argparse.Namespace):
     if kg != "wikidata":
         raise RuntimeError("only wikidata supported for now")
 
-    ent_dir, ent_type = args.entities
-    ent_index, ent_mapping = load_index_and_mapping(ent_dir, ent_type)
+    ent_indices = []
+    prop_indices = []
+    for index_type in ["qgram", "prefix"]:
+        ent_index, ent_mapping = load_index_and_mapping(
+            args.entities,
+            index_type
+        )
+        prop_index, prop_mapping = load_index_and_mapping(
+            args.properties,
+            index_type,
+            WikidataPropertyMapping
+        )
+        assert isinstance(prop_mapping, WikidataPropertyMapping)
+        ent_indices.append((ent_index, ent_mapping))
+        prop_indices.append((prop_index, prop_mapping))
 
-    prop_dir, prop_type = args.properties
-    prop_index, prop_mapping = load_index_and_mapping(
-        prop_dir,
-        prop_type,
-        WikidataPropertyMapping
-    )
-    assert isinstance(prop_mapping, WikidataPropertyMapping)
-
-    manager = WikidataManager(
-        ent_index,
-        prop_index,
-        ent_mapping,
-        prop_mapping
-    )
+    managers = []
+    for prod in itertools.product(ent_indices, prop_indices):
+        ent_index, ent_mapping = prod[0]
+        prop_index, prop_mapping = prod[1]
+        manager = WikidataManager(
+            ent_index,
+            prop_index,
+            ent_mapping,
+            prop_mapping
+        )
+        managers.append(manager)
 
     os.makedirs(args.output, exist_ok=True)
 
     for split, samples in data.items():
+        assert len(samples) > 0, f"no samples for split {split}"
         input = os.path.join(
             args.output,
-            f"{split}_input.txt"
+            f"{split}_input.jsonl"
         )
-        input_raw = os.path.join(
-            args.output,
-            f"{split}_input.raw.txt"
-        )
-        assert len(samples) > 0, f"no samples for split {split}"
         target = os.path.join(
             args.output,
-            f"{split}_sparql.txt"
+            f"{split}_target.jsonl"
         )
-        target_raw = os.path.join(
+        raw = os.path.join(
             args.output,
-            f"{split}_sparql.raw.txt"
-        )
-        examples = os.path.join(
-            args.output,
-            f"{split}_examples.tsv"
+            f"{split}_raw.jsonl"
         )
         invalid = 0
-        num_samples = 0
-        num_selections = 0
+        num_sparqls = 0
         with open(input, "w") as inf, \
-                open(input_raw, "w") as inrf, \
                 open(target, "w") as tf, \
-                open(target_raw, "w") as trf, \
-                open(examples, "w") as ef:
+                open(raw, "w") as rf:
             for output in tqdm(
-                run_parallel(
-                    prepare_sample,
-                    ((sample, manager, args, split) for sample in samples),
-                    args.num_workers
-                ),
+                # run_parallel(
+                #     prepare_sample,
+                #     ((sample, manager, args, split) for sample in samples),
+                #     args.num_workers
+                # ),
+                (prepare_sample(
+                    sample,
+                    managers,
+                    args,
+                    split
+                ) for sample in samples),
                 desc=f"processing and writing {split} samples",
                 leave=False,
                 total=len(samples),
@@ -518,46 +686,28 @@ def prepare(args: argparse.Namespace):
                     invalid += 1
                     continue
 
-                (question, raw_sparql, prompt, sparqls, selections) = output
-                ef.write(json.dumps({
+                (question, raw_sparql, sparqls) = output
+                rf.write(json.dumps({
                     "question": question,
                     "sparql": raw_sparql
                 }) + "\n")
 
-                num_samples += len(sparqls)
-                for sparql in sparqls:
-                    tf.write(json.dumps(sparql) + "\n")
-                    trf.write(raw_sparql + "\n")
+                num_sparqls += len(sparqls)
+                for prompt, target in sparqls:
                     inf.write(
                         json.dumps([{
                             "role": "user",
                             "text": prompt
                         }]) + "\n"
                     )
-                    inrf.write(json.dumps(question) + "\n")
-
-                num_selections += len(selections)
-                for prompt, target in selections:
-                    inf.write(
-                        json.dumps([{
-                            "role": "user",
-                            "text": prompt
-                        }]) + "\n"
-                    )
-                    inrf.write(json.dumps(prompt) + "\n")
                     tf.write(json.dumps(target) + "\n")
-                    trf.write(target + "\n")
 
         print(
-            f"Generated {num_samples:,} SPARQL queries while "
-            f"processing {len(samples):,} {split} samples with "
+            f"Processed {len(samples):,} {split} samples with "
             f"{invalid:,} ({invalid / len(samples):.2%}) "
-            f"being incomplete or invalid"
+            f"being incomplete or invalid.\n"
+            f"Generated {num_sparqls:,} samples."
         )
-        if args.with_selections and split != "test":
-            print(
-                f"Generated {num_selections:,} selection samples"
-            )
 
 
 if __name__ == "__main__":

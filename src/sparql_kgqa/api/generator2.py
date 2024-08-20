@@ -179,7 +179,7 @@ class SPARQLGenerator(TextProcessor):
 
         assert examples is not None
 
-        messages = self._manager.get_sparql_prompt(question, "")
+        messages = self._manager.get_sparql_continuation_prompt(question, "")
         prompt = self._chat_format(messages)
         return data.InferenceData(
             prompt,
@@ -523,7 +523,7 @@ class SPARQLGenerator(TextProcessor):
     ) -> Generator[str, None, tuple[str, str]]:
         assert self._manager is not None, "kg indices not set"
         assert self._sparql_constraint is not None, "sparql constraint not set"
-        prompt = self._manager.get_sparql_prompt(
+        prompt = self._manager.get_sparql_continuation_prompt(
             question,
             natural_prefix,
             failures=failures

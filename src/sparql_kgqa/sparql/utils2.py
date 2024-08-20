@@ -66,7 +66,7 @@ class Alternative:
         self.infos = infos
 
     def __repr__(self) -> str:
-        return f"Alternative({self.label}, {self.identifier})"
+        return f"Alternative({self.label}, {self.identifier}, {self.variants})"
 
     @staticmethod
     def _clip(s: str, max_len: int = 64) -> str:
@@ -801,7 +801,7 @@ class KgManager:
         add_none_alternative: bool = True,
         max_aliases: int = 5,
         add_infos: bool = False,
-        failures: set[str] | None = None
+        failures: set[tuple[str, str | None]] | None = None
     ) -> tuple[str, str]:
         assert obj_type in {"entity", "property"}
         prefix = prefix + "<...>"
@@ -839,25 +839,22 @@ class KgManager:
 
         failure = ""
         if failures:
-            if obj_type == "entity":
-                map = self.entity_mapping
-            else:
-                map = self.property_mapping
-
             failed = []
-            for f in failures:
-                i, alt = next(
-                    alt for alt in enumerate(alternatives)
-                    if alt[1].identifier == f
+            for key, variant in failures:
+                nxt = next(
+                    (alt for alt in enumerate(alternatives)
+                     if alt[1].identifier == key),
+                    None
                 )
+                assert nxt is not None, \
+                    f"could not find failed alternative {key}"
+                i, alt = nxt
                 fail = f"{i + 1}. {alt.label}"
-                norm = map.normalize(alt.identifier)
-                if norm is None or norm[1] is None:
-                    failed.append(fail)
-                    continue
+                if variant is not None:
+                    assert variant in (alt.variants or []), \
+                        f"variant {variant} not in {alt.variants}"
+                    fail += f" ({variant})"
 
-                _, variant = norm
-                fail += f" ({variant})"
                 failed.append(fail)
 
             failed = "\n".join(failed)
@@ -988,7 +985,18 @@ SPARQL prefix over {self.kg}:
 """
         return prompt, regex
 
-    def get_sparql_prompt(
+    def get_sparql_prompt(self, question: str) -> str:
+        return f"""\
+Generate a natural language SPARQL query over {self.kg} to answer the given \
+question.
+
+Question:
+{question.strip()}
+
+SPARQL query:
+"""
+
+    def get_sparql_continuation_prompt(
         self,
         question: str,
         prefix: str,
@@ -997,16 +1005,6 @@ SPARQL prefix over {self.kg}:
     ) -> Chat:
         if prefix == "":
             prefix = "Empty prefix"
-
-        def _ex_prompt(q: str):
-            return f"""\
-Generate a SPARQL query over {self.kg} to answer the given question.
-
-Question:
-{q.strip()}
-
-SPARQL query:
-"""
 
         failure = ""
         if failures:
@@ -1018,9 +1016,8 @@ indicate that the search should be stopped at this point:
 {failed}
 """
         prompt = f"""\
-Continue the SPARQL prefix over {self.kg} to answer the question \
-until the end of the SPARQL query or the next entity or property index \
-search via <|kge|> or <|kgp|>.
+Continue the SPARQL prefix to answer the question until the end of the SPARQL \
+query or the next entity or property index search via <|kge|> or <|kgp|>.
 
 Question:
 {question.strip()}
@@ -1038,10 +1035,11 @@ Continuation:
             except Exception:
                 # skip invalid examples
                 continue
+
             messages.extend([
                 {
                     "role": "user",
-                    "text": _ex_prompt(q)
+                    "text": self.get_sparql_prompt(q)
                 },
                 {
                     "role": "assistant",
