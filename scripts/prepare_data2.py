@@ -518,7 +518,7 @@ def prepare_stages(
 
         if other_alts:
             counts = [
-                int(index.get_val(index_map[id], 1))
+                max(1, int(index.get_val(index_map[id], 1)))
                 for id, _ in other_alts
             ]
             num_select_failures = random.randint(0, 3 - len(select_failures))
