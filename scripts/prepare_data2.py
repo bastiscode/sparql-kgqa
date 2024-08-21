@@ -61,6 +61,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--entities", type=str, required=True)
     parser.add_argument("--properties", type=str, required=True)
     parser.add_argument("--progress", action="store_true")
+    parser.add_argument("--skip", nargs="+", default=[])
     sample_group = parser.add_argument_group("samples")
     sample_group.add_argument(
         "--max-questions",
@@ -444,14 +445,16 @@ def prepare_stages(
                 question,
                 final_prefix
             )
-            samples.append((final_continuation_prompt, final_continuation))
+            samples.append(
+                (final_continuation_prompt, final_continuation.strip())
+            )
 
         continuation_prompt = manager.get_sparql_continuation_prompt(
             question,
             last_prefix
         )
         continuation = prefix[len(last_prefix):] + search_token
-        samples.append((continuation_prompt, continuation))
+        samples.append((continuation_prompt, continuation.strip()))
 
         search_failures = set()
         selection_k = random.randint(
@@ -590,20 +593,21 @@ def prepare_sample(
     except Exception:
         return None
 
-    sparqls = []
+    if split == "test":
+        return sample.question, raw_sparql, []
+
     prompt = manager.get_sparql_prompt(sample.question)
     sparql, inc = manager.replace_iris(raw_sparql)
     if inc:
         return None
 
-    sparqls.append((prompt, sparql))
-    if split != "test":
-        sparqls.extend(prepare_stages(
-            sample.question,
-            raw_sparql,
-            managers,
-            args
-        ))
+    sparqls: list[tuple[str | Chat, str]] = [(prompt, sparql)]
+    sparqls.extend(prepare_stages(
+        sample.question,
+        raw_sparql,
+        managers,
+        args
+    ))
 
     return sample.question, raw_sparql, sparqls
 
@@ -646,12 +650,16 @@ def prepare(args: argparse.Namespace):
     os.makedirs(args.output, exist_ok=True)
 
     for split, samples in data.items():
-        assert len(samples) > 0, f"no samples for split {split}"
+        if split in args.skip:
+            print(f"skipping {split} split")
+            continue
+
         if args.max_questions is not None:
             samples = random.sample(
                 samples,
                 min(len(samples), args.max_questions)
             )
+
         input = os.path.join(
             args.output,
             f"{split}_input.jsonl"
@@ -689,6 +697,11 @@ def prepare(args: argparse.Namespace):
                     "question": question,
                     "sparql": raw_sparql
                 }) + "\n")
+
+                if split == "test":
+                    assert len(sparqls) == 0
+                    inf.write(json.dumps(question) + "\n")
+                    tf.write(json.dumps(raw_sparql) + "\n")
 
                 num_sparqls += len(sparqls)
                 for prompt, target in sparqls:
