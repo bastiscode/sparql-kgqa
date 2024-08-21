@@ -520,7 +520,7 @@ def prepare_stages(
             if random.random() < 0.5:
                 alts.remove(target_alt)
             else:
-                select_failures.add((target_alt.identifier, variant))
+                select_failures.add(iri)
 
             target_alt = None
 
@@ -544,7 +544,10 @@ def prepare_stages(
                 min(len(other_alts), num_select_failures),
                 counts=counts
             )
-            select_failures.update(failed)
+            select_failures.update(
+                index_map.denormalize(*fail)
+                for fail in failed
+            )
 
         select_prompt, _ = manager.get_selection_prompt_and_regex(
             question,
@@ -683,6 +686,8 @@ def prepare(args: argparse.Namespace):
                     ((sample, managers, args, split) for sample in samples),
                     args.num_workers,
                 ),
+                # (prepare_sample(sample, managers, args, split)
+                #  for sample in samples),
                 desc=f"processing and writing {split} samples",
                 leave=False,
                 total=len(samples),
