@@ -423,13 +423,15 @@ class SPARQLGenerator(TextProcessor):
         assert s == "sparql", "initial state must be sparql"
 
         while s:
+            prev = state(len(current) - 1) if current else 'start'
             self.logger.debug(
                 f"current state:\n"
                 f"name:     {s}\n"
                 f"sparql:   {prefix('sparql')}\n"
                 f"natural:  {prefix('natural')}\n"
                 f"failures: {failures()}\n"
-                f"previous: {previous() if current else 'None'}"
+                f"previous: {prev} "
+                f" {previous() if current else 'none'}"
             )
             if s == "done":
                 accept = self._check_sparql(
@@ -618,6 +620,7 @@ class SPARQLGenerator(TextProcessor):
             beam,
             lambda beam: beam.token_ids[-1] == self._eos_token_id
         )
+
         search_query = self.tokenizer.de_tokenize(search.decoded_token_ids)
         self.logger.debug(f"search:\n{prompt}{search_query}")
         return search_query
@@ -671,6 +674,7 @@ class SPARQLGenerator(TextProcessor):
             beam,
             lambda beam: beam.token_ids[-1] == self._eos_token_id
         )
+
         selected = self.tokenizer.de_tokenize(selection.decoded_token_ids)
         self.logger.debug(f"selection:\n{prompt}{selected}")
         return self._manager.parse_selection(

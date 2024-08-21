@@ -8,8 +8,8 @@ from importlib import resources
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Iterable, Iterator, Type, TypeVar, Any
 
+from text_utils import grammar, tokenization
 from search_index import PrefixIndex, QGramIndex
-from text_utils import grammar
 from search_index.index import SearchIndex
 from search_index.mapping import Mapping as SearchIndexMapping
 
@@ -288,7 +288,7 @@ class KgManager:
         run it against Qlever and return the entities or
         properties that can come next.
         Assumes that the prefix is a valid SPARQL prefix
-        ending with <|kge search|> or <|kgp search|>.
+        ending with <|kge|> or <|kgp|>.
         """
         look_for = ["KGE", "KGP"]
 
@@ -444,7 +444,7 @@ class KgManager:
                 max_retries=max_retries
             )
             assert isinstance(result, list)
-            uris = set(r[0] for r in result)
+            uris = set(res[0] for res in result)
         except Exception as e:
             LOGGER.debug(
                 "querying qlever within autocomplete_prefix "
@@ -768,8 +768,13 @@ class KgManager:
                 iri, variant = norm
                 if iri not in map:
                     continue
+
                 id = map[iri]
-                id_map[id] = set() if variant is None else {variant}
+                if id not in id_map:
+                    id_map[id] = set()
+
+                if variant is not None:
+                    id_map[id].add(variant)
 
             sub_index = index.sub_index_by_ids(list(id_map))
             for id, _ in sub_index.find_matches(search, **kwargs)[:k]:
@@ -801,7 +806,7 @@ class KgManager:
         add_none_alternative: bool = True,
         max_aliases: int = 5,
         add_infos: bool = False,
-        failures: set[tuple[str, str | None]] | None = None
+        failures: set[str] | None = None
     ) -> tuple[str, str]:
         assert obj_type in {"entity", "property"}
         prefix = prefix + "<...>"
@@ -839,8 +844,17 @@ class KgManager:
 
         failure = ""
         if failures:
+            if obj_type == "entity":
+                map = self.entity_mapping
+            else:
+                map = self.property_mapping
+
             failed = []
-            for key, variant in failures:
+            for iri in failures:
+                norm = map.normalize(iri)
+                assert norm is not None, \
+                    f"normalizing {iri} failed"
+                key, variant = norm
                 nxt = next(
                     (alt for alt in enumerate(alternatives)
                      if alt[1].identifier == key),
@@ -1087,27 +1101,21 @@ class WikidataManager(KgManager):
         self,
         data: list[tuple[str, set[str]]]
     ) -> list[Alternative]:
-        map = {}
         alternatives: list[Alternative] = []
 
         for line, variants in data:
             label, _, syns, wid, desc = line.rstrip("\r\n").split("\t")
 
-            if wid not in map:
-                map[wid] = variants
-                alternative = Alternative(
-                    label,
-                    wid,
-                    None,
-                    [s for s in syns.split(";") if s != ""],
-                    [desc]
-                )
-                alternatives.append(alternative)
-            else:
-                map[wid].update(variants)
-
-        for alternative in alternatives:
-            alternative.variants = sorted(map[alternative.identifier])
+            assert all(alt.identifier != wid for alt in alternatives), \
+                f"duplicate identifier {wid} in data"
+            alternative = Alternative(
+                label,
+                wid,
+                sorted(variants),
+                [s for s in syns.split(";") if s != ""],
+                [desc]
+            )
+            alternatives.append(alternative)
 
         return alternatives
 
@@ -1212,3 +1220,17 @@ def load_index_and_mapping(
         os.path.join(index_dir, index_type, "index.mapping")
     )
     return index, mapping
+
+
+def de_tokenize_incremental(
+    tokenizer: tokenization.Tokenizer,
+    initial_token_ids: list[int]
+) -> Callable[[list[int]], str]:
+    initial = tokenizer.de_tokenize(initial_token_ids)
+
+    def _inc(token_ids: list[int]):
+        assert all(i == t for i, t in zip(initial_token_ids, token_ids))
+        dec = tokenizer.de_tokenize(token_ids)
+        return dec[len(initial):]
+
+    return _inc

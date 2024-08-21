@@ -1,5 +1,6 @@
 import argparse
 import os
+import json
 
 from tqdm import tqdm
 
@@ -45,6 +46,7 @@ def delete_file_or_create_dir(path: str):
 
 def evaluate(args: argparse.Namespace):
     targets = load_text_file(args.target)
+    targets = [json.loads(t) for t in targets]
     predictions = load_text_file(args.prediction)
     if not args.allow_subset:
         assert len(targets) == len(predictions), \
@@ -52,6 +54,7 @@ def evaluate(args: argparse.Namespace):
 
     if args.save_invalid or args.save_incorrect:
         inputs = load_text_file(args.input)
+        inputs = [json.loads(i) for i in inputs]
         assert len(inputs) == len(targets), \
             "expected same number of inputs and targets"
     else:
