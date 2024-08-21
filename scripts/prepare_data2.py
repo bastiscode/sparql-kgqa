@@ -62,6 +62,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--properties", type=str, required=True)
     parser.add_argument("--progress", action="store_true")
     sample_group = parser.add_argument_group("samples")
+    sample_group.add_argument_group(
+        "--max-questions",
+        type=int,
+        default=None
+    )
     sample_group.add_argument(
         "--samples-per-question",
         type=int,
@@ -342,15 +347,14 @@ def get_search_query(
 
 def prepare_stages(
     question: str,
-    raw_sparql: str,
-    natural_sparql: str,
+    sparql: str,
     managers: list[KgManager],
     args: argparse.Namespace
 ) -> list[tuple[str | Chat, str]]:
     manager = random.choice(managers)
-    raw_encoded = raw_sparql.encode()
+    sparql_encoded = sparql.encode()
     parse = manager.parser.parse(
-        raw_sparql,
+        sparql,
         skip_empty=True,
         collapse_single=False
     )
@@ -410,7 +414,7 @@ def prepare_stages(
 
         key, variant = norm
 
-        prefix_raw = raw_encoded[:start].decode(errors="replace")
+        prefix_raw = sparql_encoded[:start].decode(errors="replace")
         prefix, _ = manager.replace_iris(
             prefix_raw,
             is_prefix=True
@@ -420,7 +424,8 @@ def prepare_stages(
             last = items[item_idx - 1]
             assert last is not None
             *_, (_, last_end) = last
-            last_prefix_raw = raw_encoded[:last_end].decode(errors="replace")
+            last_prefix_raw = sparql_encoded[:last_end].decode(
+                errors="replace")
             last_prefix, _ = manager.replace_iris(
                 last_prefix_raw,
                 is_prefix=True
@@ -431,10 +436,10 @@ def prepare_stages(
         if item_idx == len(items) - 1:
             # add additional continuation sample for the end of the query
             final_prefix, _ = manager.replace_iris(
-                raw_encoded[:end].decode(errors="replace"),
+                sparql_encoded[:end].decode(errors="replace"),
                 is_prefix=True
             )
-            final_continuation = raw_encoded[end:].decode(errors="ignore")
+            final_continuation = sparql_encoded[end:].decode(errors="ignore")
             final_continuation_prompt = manager.get_sparql_continuation_prompt(
                 question,
                 final_prefix
@@ -596,7 +601,6 @@ def prepare_sample(
         sparqls.extend(prepare_stages(
             sample.question,
             raw_sparql,
-            sparql,
             managers,
             args
         ))
@@ -643,6 +647,11 @@ def prepare(args: argparse.Namespace):
 
     for split, samples in data.items():
         assert len(samples) > 0, f"no samples for split {split}"
+        if args.max_questions is not None:
+            samples = random.sample(
+                samples,
+                min(len(samples), args.max_questions)
+            )
         input = os.path.join(
             args.output,
             f"{split}_input.jsonl"
