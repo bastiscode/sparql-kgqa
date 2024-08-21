@@ -343,6 +343,7 @@ def get_search_query(
 def prepare_stages(
     question: str,
     raw_sparql: str,
+    natural_sparql: str,
     managers: list[KgManager],
     args: argparse.Namespace
 ) -> list[tuple[str | Chat, str]]:
@@ -388,7 +389,7 @@ def prepare_stages(
         item = items[item_idx]
         assert item is not None
 
-        item, pfx, iri, (start, _) = item
+        item, pfx, iri, (start, end) = item
         long = manager.custom_prefixes[pfx]
         iri = long + iri + ">"
 
@@ -405,54 +406,54 @@ def prepare_stages(
             search_token = "<|kgp|>"
 
         if norm is None or norm[0] not in index_map:
-            print(
-                f"Skipping {question} with sparql {raw_sparql} "
-                f"due to unknown {obj_type} ({iri}, {norm})"
-            )
             continue
 
         key, variant = norm
 
         prefix_raw = raw_encoded[:start].decode(errors="replace")
-        prefix, inc = manager.replace_iris(
+        prefix, _ = manager.replace_iris(
             prefix_raw,
             is_prefix=True
         )
-        if inc:
-            print(
-                f"Skipping {question} with sparql {raw_sparql} "
-                f"due to incomplete prefix {prefix}"
-            )
-            continue
 
         if item_idx > 0:
             last = items[item_idx - 1]
             assert last is not None
-            *_, (_, end) = last
-            prefix_raw = raw_encoded[:end].decode(errors="replace")
+            *_, (_, last_end) = last
+            last_prefix_raw = raw_encoded[:last_end].decode(errors="replace")
             last_prefix, _ = manager.replace_iris(
-                prefix_raw,
+                last_prefix_raw,
                 is_prefix=True
             )
         else:
             last_prefix = ""
 
         if item_idx == len(items) - 1:
-            search_token = ""
+            # add additional continuation sample for the end of the query
+            final_prefix, _ = manager.replace_iris(
+                raw_encoded[:end].decode(errors="replace"),
+                is_prefix=True
+            )
+            final_continuation = raw_encoded[end:].decode(errors="ignore")
+            final_continuation_prompt = manager.get_sparql_continuation_prompt(
+                question,
+                final_prefix
+            )
+            samples.append((final_continuation_prompt, final_continuation))
 
         continuation_prompt = manager.get_sparql_continuation_prompt(
             question,
             last_prefix
         )
-        continuation_target = prefix[len(last_prefix):] + search_token
-        samples.append((continuation_prompt, continuation_target))
+        continuation = prefix[len(last_prefix):] + search_token
+        samples.append((continuation_prompt, continuation))
 
         search_failures = set()
         selection_k = random.randint(
             args.selections_min_k,
             args.selections_max_k
         )
-        search_target, non_matching_ids = get_search_query(
+        search, non_matching_ids = get_search_query(
             index_map[key],
             index,
             selection_k,
@@ -472,8 +473,8 @@ def prepare_stages(
 
         drop_search = random.random() < args.sample_dropout
         if drop_search:
-            search_target = normalize(index.get_name(index_map[key]))
-            search_failures.add(search_target)
+            search = normalize(index.get_name(index_map[key]))
+            search_failures.add(search)
 
         search_prompt, _ = manager.get_search_prompt_and_regex(
             question,
@@ -482,12 +483,12 @@ def prepare_stages(
             failures=search_failures
         )
 
-        samples.append((search_prompt, search_target))
+        samples.append((search_prompt, search))
 
         alts = manager.get_selection_alternatives(
             prefix_raw,
             obj_type,
-            search_target,
+            search,
             selection_k,
             max_candidates=16384
         )
@@ -541,7 +542,7 @@ def prepare_stages(
             question,
             prefix,
             obj_type,
-            search_target,
+            search,
             alts,
             max_aliases=random.randint(
                 args.selections_min_aliases,
@@ -552,15 +553,15 @@ def prepare_stages(
         )
 
         if target_alt is None:
-            select_target = f"{len(alts)}. none"
+            selection = f"{len(alts)}. none"
         else:
             select_idx = alts.index(target_alt)
             select_name = target_alt.label
             if variant:
                 select_name += f" ({variant})"
-            select_target = f"{select_idx + 1}. {select_name}"
+            selection = f"{select_idx + 1}. {select_name}"
 
-        samples.append((select_prompt, select_target))
+        samples.append((select_prompt, selection))
 
     return samples
 
@@ -595,6 +596,7 @@ def prepare_sample(
         sparqls.extend(prepare_stages(
             sample.question,
             raw_sparql,
+            sparql,
             managers,
             args
         ))
