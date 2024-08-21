@@ -62,7 +62,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--properties", type=str, required=True)
     parser.add_argument("--progress", action="store_true")
     sample_group = parser.add_argument_group("samples")
-    sample_group.add_argument_group(
+    sample_group.add_argument(
         "--max-questions",
         type=int,
         default=None
