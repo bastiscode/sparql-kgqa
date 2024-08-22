@@ -1113,7 +1113,7 @@ class WikidataManager(KgManager):
                 wid,
                 sorted(variants),
                 [s for s in syns.split(";") if s != ""],
-                [desc]
+                [desc] if desc != "" else []
             )
             alternatives.append(alternative)
 
