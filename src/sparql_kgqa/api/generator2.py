@@ -275,19 +275,16 @@ class SPARQLGenerator(TextProcessor):
             )
 
         def update_fn(beam: Beam) -> Beam | None:
-            # advance constraint if given
-            if "const" in beam.info:
-                const = beam.info["const"]
-                if const.is_invalid():
-                    # return None if constraint is invalid
-                    # or no tokens have been generated
-                    return None
+            const = beam.info.get("const", None)
+            if const is None:
+                return beam
+            elif const.is_invalid():
+                return None
 
-                # clone constraint and update it
-                const = const.clone()
-                const.next(beam.token_ids[-1])
-                beam.info["const"] = const
-
+            # clone constraint and update it
+            const = const.clone()
+            const.next(beam.token_ids[-1])
+            beam.info["const"] = const
             return beam
 
         logit_fns = [
