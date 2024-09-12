@@ -28,6 +28,7 @@ from sparql_kgqa.model import (
 from sparql_kgqa.sparql.utils import (
     SimilarityIndex,
     load_examples,
+    query_qlever,
 )
 from sparql_kgqa.sparql.utils2 import (
     KgManager,
@@ -116,6 +117,7 @@ class SPARQLGenerator(TextProcessor):
         self._top_p = 0.95
         self._use_cache = False
         self._max_length = None
+        self._max_new_tokens = None
 
         # search index options
         # number of alternatives to select from
@@ -258,7 +260,7 @@ class SPARQLGenerator(TextProcessor):
         self,
         beam: Beam,
         stop_fn: inference_utils.StopFn,
-        max_outputs: int | list[int] | None = None
+        no_sampling: bool = False
     ) -> Generator[Beam, None, Beam]:
         def kwargs_update_fn(
             kwargs: dict[str, Any],
@@ -294,7 +296,7 @@ class SPARQLGenerator(TextProcessor):
             )
         ]
 
-        if self._sampling_strategy == "greedy":
+        if self._sampling_strategy == "greedy" or no_sampling:
             sample_fn = inference_utils.greedy()
         elif self._sampling_strategy == "top_k":
             assert self._top_k >= self._beam_width, \
@@ -322,7 +324,7 @@ class SPARQLGenerator(TextProcessor):
             update_fn=update_fn,
             logit_fns=logit_fns,
             kwargs_update_fn=kwargs_update_fn,
-            max_outputs=max_outputs,
+            max_new_tokens=self._max_new_tokens,
             yield_intermediate=True
         ):
             beam = beams[0][0]
@@ -505,13 +507,60 @@ class SPARQLGenerator(TextProcessor):
     def _check_sparql(
         self,
         question: str,
+        natural_sparql: str,
         sparql: str
     ) -> bool:
         assert self._manager is not None, "kg indices not set"
         # run sparql against endpoint, format result as string
         # and ask the model whether the output makes sense for
         # the given question
-        return True
+        result = self._manager.get_formatted_result(sparql)
+        prompt = f"""\
+Given a question and a SPARQL query together with its execution result, \
+judge whether the SPARQL query makes sense for answering the question.
+Provide a yes or no answer and a short explanation how you come \
+to this conclusion.
+
+Question:
+{question}
+
+SPARQL query over {self._manager.kg}:
+{natural_sparql}
+
+Result:
+{result}
+"""
+        regex = """\
+Answer: (yes|no)
+
+Explanation: [^\\n]{1, 128}
+"""
+        token_ids = self.tokenizer.tokenize(
+            self._chat_format(prompt),
+            self._is_chat
+        ).token_ids
+        beam = Beam(
+            token_ids,
+            info={
+                "const": grammar.RegexConstraint(
+                    regex,
+                    self._continuations
+                ),
+            }
+        )
+
+        *_, beam = self._partial_inference(
+            beam,
+            lambda beam: beam.token_ids[-1] == self._eos_token_id
+        )
+
+        judgement = self.tokenizer.de_tokenize(beam.decoded_token_ids)
+        answer_start = judgement.find("Answer: ")
+        answer = judgement[answer_start:].split("\n", maxsplit=1)[0]
+        explanation_start = judgement.find("Explanation: ")
+        explanation = judgement[explanation_start:].strip()
+        self.logger.debug(f"judgement:\n{prompt}{judgement}")
+        return answer == "yes"
 
     def _continue_sparql(
         self,
@@ -569,7 +618,8 @@ class SPARQLGenerator(TextProcessor):
         last: Beam | None = None
         for output in self._partial_inference(
             beam,
-            stop_fn
+            stop_fn,
+            no_sampling=True  # for sparql continuations turn off sampling
         ):
             self.logger.debug(
                 self.tokenizer.de_tokenize(output.decoded_token_ids)
@@ -730,6 +780,7 @@ class SPARQLGenerator(TextProcessor):
         top_p: float = 0.95,
         beam_width: int = 1,
         max_length: int | None = None,
+        max_new_tokens: int | None = None,
         use_cache: bool = False,
         disable_sparql_constraint: bool = False,
         disable_subgraph_constraint: bool = False,
@@ -748,6 +799,7 @@ class SPARQLGenerator(TextProcessor):
         self._top_k = top_k
         self._top_p = top_p
         self._max_length = max_length
+        self._max_new_tokens = max_new_tokens
         self._use_cache = use_cache
         self._disable_sparql_constraint = disable_sparql_constraint
         self._disable_subgraph_constraint = disable_subgraph_constraint

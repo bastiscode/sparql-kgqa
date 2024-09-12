@@ -20,7 +20,8 @@ from sparql_kgqa.sparql.utils2 import (
     WikidataPropertyMapping,
     clean,
     load_index_and_mapping,
-    run_parallel
+    run_parallel,
+    search_token_from_obj_type
 )
 
 
@@ -307,7 +308,7 @@ def get_search_query(
     # for the different index types
     if isinstance(index, PrefixIndex):
         keywords = set(normalize(name).split())
-        n_syns = random.randint(0, min(2, len(syns)))
+        n_syns = random.randint(0, min(1, len(syns)))
         for syn in random.sample(syns, n_syns):
             keywords.update(normalize(syn).split())
         keywords = list(
@@ -402,13 +403,13 @@ def prepare_stages(
         index = manager.entity_index
         norm = index_map.normalize(iri)
         obj_type = "entity"
-        search_token = "<|kge|>"
         if norm is None or norm[0] not in index_map:
             index_map = manager.property_mapping
             index = manager.property_index
             norm = index_map.normalize(iri)
             obj_type = "property"
-            search_token = "<|kgp|>"
+
+        search_token = search_token_from_obj_type(obj_type)
 
         if norm is None or norm[0] not in index_map:
             continue
@@ -681,13 +682,13 @@ def prepare(args: argparse.Namespace):
                 open(target, "w") as tf, \
                 open(raw, "w") as rf:
             for output in tqdm(
-                run_parallel(
-                    prepare_sample,
-                    ((sample, managers, args, split) for sample in samples),
-                    args.num_workers,
-                ),
-                # (prepare_sample(sample, managers, args, split)
-                #  for sample in samples),
+                # run_parallel(
+                #     prepare_sample,
+                #     ((sample, managers, args, split) for sample in samples),
+                #     args.num_workers,
+                # ),
+                (prepare_sample(sample, managers, args, split)
+                 for sample in samples),
                 desc=f"processing and writing {split} samples",
                 leave=False,
                 total=len(samples),

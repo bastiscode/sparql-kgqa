@@ -12,7 +12,6 @@ from sparql_kgqa import version
 from sparql_kgqa.api.generator2 import SPARQLGenerator
 from sparql_kgqa.api.server2 import SPARQLGenerationServer
 from sparql_kgqa.sparql.utils2 import (
-    Mapping,
     WikidataPropertyMapping,
     load_index_and_mapping
 )
@@ -37,6 +36,7 @@ class SPARQLGenerationCli(TextProcessingCli):
             top_p=self.args.top_p,
             beam_width=self.args.beam_width,
             max_length=self.args.max_length,
+            max_new_tokens=self.args.max_new_tokens,
             use_cache=self.args.kv_cache,
             disable_sparql_constraint=self.args.no_sparql_constraint,
             disable_subgraph_constraint=self.args.no_subgraph_constraint,
@@ -147,6 +147,12 @@ def main():
         type=int,
         default=None,
         help="Maximum supported input/output length in tokens"
+    )
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=None,
+        help="Maximum number of new tokens to generate"
     )
     parser.add_argument(
         "--input-format",

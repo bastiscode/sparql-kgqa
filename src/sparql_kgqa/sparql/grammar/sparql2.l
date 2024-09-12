@@ -20,8 +20,8 @@ PN_LOCAL_ESC '\' ( '_' | '~' | '.' | '-' | '!' | '$' | '&' | "'" | '(' | ')' | '
 // Custom tags
 // KGE         '<|kge|>' .*? '<|kge|>'
 // KGP         '<|kgp|>' .*? '<|kgp|>'
-KGE         '<|kge|>'
-KGP         '<|kgp|>'
+KGE         '<|entity|>'
+KGP         '<|property|>'
 
 // SPARQL keywords
 BASE        (?i)BASE

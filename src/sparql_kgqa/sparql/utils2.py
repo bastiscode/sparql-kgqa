@@ -12,8 +12,10 @@ from text_utils import grammar, tokenization
 from search_index import PrefixIndex, QGramIndex
 from search_index.index import SearchIndex
 from search_index.mapping import Mapping as SearchIndexMapping
+from text_utils.api.table import generate_table
 
 from sparql_kgqa.sparql.utils import (
+    AskResult,
     find_all,
     find,
     parse_to_string,
@@ -288,7 +290,7 @@ class KgManager:
         run it against Qlever and return the entities or
         properties that can come next.
         Assumes that the prefix is a valid SPARQL prefix
-        ending with <|kge|> or <|kgp|>.
+        ending with <|entity|> or <|property|>.
         """
         look_for = ["KGE", "KGP"]
 
@@ -444,13 +446,99 @@ class KgManager:
                 max_retries=max_retries
             )
             assert isinstance(result, list)
-            uris = set(res[0] for res in result)
+            uris = set(result[i][0] for i in range(1, len(result)))
         except Exception as e:
             LOGGER.debug(
                 "querying qlever within autocomplete_prefix "
                 f"failed for prefix '{prefix}': {e}"
             )
         return uris
+
+    def get_formatted_result(
+        self,
+        sparql: str,
+        qlever_endpoint: str | None = None,
+        max_retries: int = 1,
+        max_rows: int = 10,
+        max_columns: int = 5,
+    ) -> str:
+        try:
+            result = query_qlever(
+                sparql,
+                self.parser,
+                self.kg,
+                qlever_endpoint,
+                timeout=10.0,
+                max_retries=max_retries
+            )
+        except Exception as e:
+            LOGGER.debug(
+                f"querying qlever within format_result "
+                f"failed for sparql '{sparql}': {e}"
+            )
+            return f"Query failed with exception: {e}"
+
+        if isinstance(result, AskResult):
+            return "Yes" if result else "No"
+
+        num_rows = len(result)
+        num_columns = len(result[0])
+
+        def format_uri(s: str) -> str:
+            if not s.startswith("<") or not s.endswith(">"):
+                return s
+
+            # try to find in data
+            norm = self.entity_mapping.normalize(s)
+            map = self.entity_mapping
+            index = self.entity_index
+            if norm is None or norm[0] not in map:
+                norm = self.property_mapping.normalize(s)
+                map = self.property_mapping
+                index = self.property_index
+
+            if norm is None or norm[0] not in map:
+                return s
+
+            key, variant = norm
+            label = index.get_name(map[key])
+            if variant is not None:
+                label += f" ({variant})"
+
+            longest = self.find_longest_prefix(s)
+            if longest is not None:
+                short, long = longest
+                s = short + ":" + s[len(long):-1]
+
+            label += f" ({s})"
+            return label
+
+        table = generate_table(
+            [result[0][:max_columns]],
+            [
+                [format_uri(v) for v in res[:max_columns]]
+                for res in result[1:max_rows + 1]
+            ]
+        )
+
+        return f"""\
+Got {num_rows} rows for {num_columns} variables in total, \
+showing the first {max_rows} rows and first {max_columns} variables below:
+{table}
+        """
+
+    def find_longest_prefix(self, iri: str) -> tuple[str, str] | None:
+        return next(
+            iter(sorted(
+                filter(
+                    lambda pair: is_prefix_of_iri(pair[1], iri),
+                    (self.prefixes | self.custom_prefixes).items()
+                ),
+                key=lambda pair: len(pair[1]),
+                reverse=True
+            )),
+            None
+        )
 
     def fix_prefixes(
         self,
@@ -496,15 +584,7 @@ class KgManager:
                 continue
 
             val = iri["value"]
-
-            longest: tuple[str, str] | None = next(iter(sorted(
-                filter(
-                    lambda pair: is_prefix_of_iri(pair[1], val),
-                    prefixes.items()
-                ),
-                key=lambda pair: len(pair[1]),
-                reverse=True
-            )), None)
+            longest = self.find_longest_prefix(val)
             if longest is None:
                 continue
 
@@ -879,8 +959,7 @@ class KgManager:
 
             failure = f"""
 The following {obj_type} alternatives were already tried but unsuccessful. \
-If there is no other sensible {obj_type} alternative to try, {stop_action} \
-to indicate that the search should be stopped at this point:
+If there is no other sensible {obj_type} alternative to try, {stop_action}:
 {failed}
 """
 
@@ -976,8 +1055,7 @@ Selection:
             failed = "\n".join(failures)
             failure = f"""
 The following search queries were already tried but unsuccessful. If there \
-is no other sensible search query to try, output one of these again to \
-indicate that the search should be stopped at this point:
+is no other sensible search query to try, output one of these again:
 {failed}
 """
             regex += "|(?:" + "|".join(re.escape(f) for f in failures) + ")"
@@ -1017,21 +1095,19 @@ SPARQL query:
         examples: list[tuple[str, str]] | None = None,
         failures: set[str] | None = None
     ) -> Chat:
-        if prefix == "":
-            prefix = "Empty prefix"
-
         failure = ""
         if failures:
             failed = "\n".join(failures)
             failure = f"""
 The following continuations were already tried but unsuccessful. If there \
-is no other sensible continuation to try, output one of these again to \
-indicate that the search should be stopped at this point:
+is no other sensible continuation to try, output one of these again:
 {failed}
 """
         prompt = f"""\
-Continue the SPARQL prefix to answer the question until the end of the SPARQL \
-query or the next entity or property index search via <|kge|> or <|kgp|>.
+Continue the SPARQL prefix to answer the question either \
+until the end of the SPARQL query, \
+the next entity (<|entity|>), \
+or the next property (<|property|>).
 
 Question:
 {question.strip()}
@@ -1062,10 +1138,18 @@ Continuation:
             ])
 
         # add actual question
-        messages.append({
-            "role": "user",
-            "text": prompt
-        })
+        messages.extend([
+            {
+                "role": "user",
+                "text": prompt
+            },
+            {
+                "role": "assistant",
+                "text": prefix,
+                "partial": True
+            }
+        ])
+
         return messages
 
 
@@ -1136,21 +1220,12 @@ def run_parallel(
 
 
 def search_token_from_obj_type(obj_type: str) -> str:
-    if obj_type == "entity":
-        return "<|kge|>"
-    elif obj_type == "property":
-        return "<|kgp|>"
-    else:
-        raise ValueError(f"unknown object type '{obj_type}'")
+    return f"<|{obj_type}|>"
 
 
 def obj_type_from_search(token: str) -> str:
-    if token == "<|kge|>":
-        return "entity"
-    elif token == "<|kgp|>":
-        return "property"
-    else:
-        raise ValueError(f"unknown search token '{token}'")
+    assert token.startswith("<|") and token.endswith("|>")
+    return token[2:-2]
 
 
 T = TypeVar("T")

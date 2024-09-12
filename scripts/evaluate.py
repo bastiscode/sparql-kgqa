@@ -32,6 +32,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--qlever-endpoint", type=str, default=None)
     parser.add_argument("-n", "--num-workers", type=int, default=None)
+    parser.add_argument("--prediction-format", type=str,
+                        choices=["text", "jsonl"], default="text")
     return parser.parse_args()
 
 
@@ -48,6 +50,9 @@ def evaluate(args: argparse.Namespace):
     targets = load_text_file(args.target)
     targets = [json.loads(t) for t in targets]
     predictions = load_text_file(args.prediction)
+    if args.prediction_format == "jsonl":
+        predictions = [json.loads(p) for p in predictions]
+
     if not args.allow_subset:
         assert len(targets) == len(predictions), \
             "expected same number of predictions and targets"

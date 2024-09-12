@@ -633,17 +633,14 @@ def query_qlever(
 
     if response.status_code != 200:
         exception = response.json().get("exception", "")
-        raise RuntimeError(
-            f"query '{sparql_query}' failed with "
-            f"status code {response.status_code}:\n{exception}"
-        )
+        raise RuntimeError(exception)
 
     result = response.text.splitlines()
     if select_query is not None:
         # > 1 because of header
         return AskResult(len(result) > 1)
     else:
-        return [result[i].split("\t") for i in range(1, len(result))]
+        return [row.split("\t") for row in result]
 
 
 def query_entities(
