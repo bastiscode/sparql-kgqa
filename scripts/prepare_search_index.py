@@ -2,7 +2,7 @@ import sys
 
 
 def fix(s: str) -> str:
-    return s.replace(r"\n", " ")
+    return s.replace(r"\n", " ").replace(r"\t", " ")
 
 
 def format(s: str) -> str:
@@ -36,7 +36,8 @@ if __name__ == "__main__":
         score = "0" if score == "" else score
 
         infos = [
-            format(info) for info in infos.split(";;;")
+            format(info) for info
+            in format(infos).split(";;;")
             if info != ""
         ]
         print("\t".join([label, score, syns, obj_id] + infos))
