@@ -28,14 +28,13 @@ from sparql_kgqa.model import (
 from sparql_kgqa.sparql.utils import (
     SimilarityIndex,
     load_examples,
-    query_qlever,
 )
 from sparql_kgqa.sparql.utils2 import (
     KgManager,
     Mapping,
     WikidataManager,
     Chat,
-    obj_type_from_search,
+    format_obj_type,
 )
 
 logging.getLogger("requests").setLevel(logging.WARNING)
@@ -115,7 +114,6 @@ class SPARQLGenerator(TextProcessor):
         self._temp = 1.0
         self._top_k = 5
         self._top_p = 0.95
-        self._use_cache = False
         self._max_length = None
         self._max_new_tokens = None
 
@@ -248,34 +246,18 @@ class SPARQLGenerator(TextProcessor):
         **kwargs: Any
     ) -> tuple[torch.Tensor, dict[str, Any]]:
         assert isinstance(self.model, PretrainedDecoder)
-        dec, cache = self.model.decode(
+        dec, _ = self.model.decode(
             token_ids,
             lengths,
-            kwargs.get("kv_cache", None),
-            self._use_cache
         )
-        return dec, {"kv_cache": cache}
+        return dec, {}
 
     def _partial_inference(
         self,
         beam: Beam,
         stop_fn: inference_utils.StopFn,
         no_sampling: bool = False
-    ) -> Generator[Beam, None, Beam]:
-        def kwargs_update_fn(
-            kwargs: dict[str, Any],
-            info: dict[str, Any],
-            mask: torch.Tensor
-        ) -> None:
-            kv_cache = info.get("kv_cache", None)
-            if kv_cache is None:
-                return
-
-            kwargs["kv_cache"] = tuple(
-                tuple(c[mask.to(c.device)] for c in cache)
-                for cache in info["kv_cache"]
-            )
-
+    ) -> Iterator[Beam]:
         def update_fn(beam: Beam) -> Beam | None:
             const = beam.info.get("const", None)
             if const is None:
@@ -323,14 +305,13 @@ class SPARQLGenerator(TextProcessor):
             sample_fn=sample_fn,
             update_fn=update_fn,
             logit_fns=logit_fns,
-            kwargs_update_fn=kwargs_update_fn,
             max_new_tokens=self._max_new_tokens,
             yield_intermediate=True
         ):
             beam = beams[0][0]
             yield beam
 
-        return beam
+        yield beam
 
     def _live_inference(
         self,
@@ -435,7 +416,8 @@ class SPARQLGenerator(TextProcessor):
             if s == "done":
                 accept = self._check_sparql(
                     question,
-                    prefix("natural")
+                    prefix("natural"),
+                    prefix("sparql")
                 )
                 if accept:
                     # breaking early will return final sparql query
@@ -447,27 +429,26 @@ class SPARQLGenerator(TextProcessor):
             elif s == "sparql":
                 # continue with sparql query
                 failed = set(
-                    continuation + search
-                    for continuation, search in failures()
+                    continuation + format_obj_type(obj_type)
+                    for continuation, obj_type in failures()
                 )
-                continuation, search = yield from self._continue_sparql(
+                continuation, obj_type = yield from self._continue_sparql(
                     question,
                     prefix("sparql"),
                     prefix("natural"),
                     failed
                 )
-                if continuation + search in failed:
+                if continuation + format_obj_type(obj_type) in failed:
                     if current:
                         backtrack()
                     else:
                         # cannot backtrack, return empty sparql
                         break
                 else:
-                    advance((continuation, search))
+                    advance((continuation, obj_type))
 
             elif s == "search":
-                _, search = previous()
-                obj_type = obj_type_from_search(search)
+                _, obj_type = previous()
                 failed = set(search_query for _, search_query in failures())
                 search_query = self._generate_search_query(
                     question,
@@ -517,9 +498,9 @@ class SPARQLGenerator(TextProcessor):
         result = self._manager.get_formatted_result(sparql)
         prompt = f"""\
 Given a question and a SPARQL query together with its execution result, \
-judge whether the SPARQL query makes sense for answering the question.
-Provide a yes or no answer and a short explanation how you come \
-to this conclusion.
+judge whether the SPARQL query makes sense for answering the question. \
+Provide a yes or no answer and a short explanation with max. 8 words how you \
+come to this conclusion.
 
 Question:
 {question}
@@ -533,7 +514,7 @@ Result:
         regex = """\
 Answer: (yes|no)
 
-Explanation: [^\\n]{1, 128}
+Explanation: (\\S+ ){0, 4}\\S+
 """
         token_ids = self.tokenizer.tokenize(
             self._chat_format(prompt),
@@ -583,7 +564,7 @@ Explanation: [^\\n]{1, 128}
 
         info = {
             "continuation": "",
-            "search": ""
+            "obj_type": ""
         }
         # add sparql constraint if not disabled
         if not self._disable_sparql_constraint:
@@ -601,9 +582,9 @@ Explanation: [^\\n]{1, 128}
 
         def stop_fn(beam: Beam) -> bool:
             decoded = self.tokenizer.de_tokenize(beam.decoded_token_ids)
+            beam.info["continuation"] = decoded
             assert self._manager is not None, "kg indices not set"
             if eos_stop_fn(beam):
-                beam.info["continuation"] = decoded
                 return True
 
             match = self._manager.search_pattern.search(decoded)
@@ -612,7 +593,7 @@ Explanation: [^\\n]{1, 128}
 
             part = decoded[:match.start()]
             beam.info["continuation"] = part
-            beam.info["search"] = match.group()
+            beam.info["obj_type"] = match.group(1)
             return True
 
         last: Beam | None = None
@@ -629,11 +610,14 @@ Explanation: [^\\n]{1, 128}
 
         assert last is not None, "should not happen"
         cont = last.info["continuation"]
-        search = last.info["search"]
+        obj_type = last.info["obj_type"]
         self.logger.debug(
-            f"continuation:\n{prompt[-1]['text']}{cont + search}"
+            "continuation:\n"
+            f"{prompt[-2]['text']}"
+            f"{prompt[-1]['text']}"
+            f"{cont}{format_obj_type(obj_type)}"
         )
-        return cont, search
+        return cont, obj_type
 
     def _generate_search_query(
         self,
@@ -781,7 +765,6 @@ Explanation: [^\\n]{1, 128}
         beam_width: int = 1,
         max_length: int | None = None,
         max_new_tokens: int | None = None,
-        use_cache: bool = False,
         disable_sparql_constraint: bool = False,
         disable_subgraph_constraint: bool = False,
         num_examples: int = 3,
@@ -800,7 +783,6 @@ Explanation: [^\\n]{1, 128}
         self._top_p = top_p
         self._max_length = max_length
         self._max_new_tokens = max_new_tokens
-        self._use_cache = use_cache
         self._disable_sparql_constraint = disable_sparql_constraint
         self._disable_subgraph_constraint = disable_subgraph_constraint
         self._force_exact = force_exact

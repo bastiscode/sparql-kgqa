@@ -240,7 +240,7 @@ class KgManager:
             sparql_grammar,
             sparql_lexer,
         )
-        self.search_pattern = re.compile(r"<\|kg([ep])\|>")
+        self.search_pattern = re.compile(r"<\|(entity|property)\|>")
 
     def get_constraint(
         self,
@@ -807,7 +807,7 @@ showing the first {max_rows} rows and first {max_columns} variables below:
     ) -> list[Alternative] | None:
         try:
             result = self.autocomplete_prefix(
-                prefix + search_token_from_obj_type(obj_type),
+                prefix + f"<|{obj_type}|>",
                 endpoint,
                 max_candidates + 1
                 if max_candidates is not None else None,
@@ -951,7 +951,7 @@ showing the first {max_rows} rows and first {max_columns} variables below:
 
                 failed.append(fail)
 
-            failed = "\n".join(failed)
+            failed = "\n\n".join(failed)
             if add_none_alternative:
                 stop_action = "select the none alternative"
             else:
@@ -1052,7 +1052,7 @@ Selection:
         regex = r"[a-z0-9 ]{1,128}"
         failure = ""
         if failures:
-            failed = "\n".join(failures)
+            failed = "\n\n".join(failures)
             failure = f"""
 The following search queries were already tried but unsuccessful. If there \
 is no other sensible search query to try, output one of these again:
@@ -1097,7 +1097,7 @@ SPARQL query:
     ) -> Chat:
         failure = ""
         if failures:
-            failed = "\n".join(failures)
+            failed = "\n\n".join(failures)
             failure = f"""
 The following continuations were already tried but unsuccessful. If there \
 is no other sensible continuation to try, output one of these again:
@@ -1219,16 +1219,15 @@ def run_parallel(
             yield future.result()
 
 
-def search_token_from_obj_type(obj_type: str) -> str:
-    return f"<|{obj_type}|>"
-
-
-def obj_type_from_search(token: str) -> str:
-    assert token.startswith("<|") and token.endswith("|>")
-    return token[2:-2]
-
-
 T = TypeVar("T")
+
+
+def format_obj_type(obj_type: str) -> str:
+    assert obj_type in {"", "entity", "property"}
+    if obj_type == "":
+        return ""
+    else:
+        return f"<|{obj_type}|>"
 
 
 def flatten(

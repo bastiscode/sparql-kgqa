@@ -37,7 +37,6 @@ class SPARQLGenerationCli(TextProcessingCli):
             beam_width=self.args.beam_width,
             max_length=self.args.max_length,
             max_new_tokens=self.args.max_new_tokens,
-            use_cache=self.args.kv_cache,
             disable_sparql_constraint=self.args.no_sparql_constraint,
             disable_subgraph_constraint=self.args.no_subgraph_constraint,
             num_examples=self.args.num_examples,
@@ -136,11 +135,6 @@ def main():
         type=float,
         default=1.0,
         help="Temperature to use during sampling"
-    )
-    parser.add_argument(
-        "--kv-cache",
-        action="store_true",
-        help="Whether to use key and value caches during decoding"
     )
     parser.add_argument(
         "--max-length",

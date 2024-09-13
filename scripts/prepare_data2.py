@@ -19,9 +19,9 @@ from sparql_kgqa.sparql.utils2 import (
     WikidataManager,
     WikidataPropertyMapping,
     clean,
+    format_obj_type,
     load_index_and_mapping,
-    run_parallel,
-    search_token_from_obj_type
+    run_parallel
 )
 
 
@@ -409,7 +409,7 @@ def prepare_stages(
             norm = index_map.normalize(iri)
             obj_type = "property"
 
-        search_token = search_token_from_obj_type(obj_type)
+        search_token = format_obj_type(obj_type)
 
         if norm is None or norm[0] not in index_map:
             continue
