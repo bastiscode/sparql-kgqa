@@ -448,7 +448,7 @@ def prepare_stages(
                 final_prefix
             )
             samples.append(
-                (final_continuation_prompt, final_continuation.strip())
+                (final_continuation_prompt, final_continuation)
             )
 
         continuation_prompt = manager.get_sparql_continuation_prompt(
@@ -456,7 +456,7 @@ def prepare_stages(
             last_prefix
         )
         continuation = prefix[len(last_prefix):] + search_token
-        samples.append((continuation_prompt, continuation.strip()))
+        samples.append((continuation_prompt, continuation))
 
         search_failures = set()
         selection_k = random.randint(
