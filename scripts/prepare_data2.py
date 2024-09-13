@@ -320,7 +320,8 @@ def get_search_query(
             )
         )
         random.shuffle(keywords)
-        query = " ".join(keywords)
+        # limit to at most 5 keywords
+        query = " ".join(keywords[:5])
     else:
         assert isinstance(index, QGramIndex)
         syns.append(name)
@@ -723,7 +724,7 @@ def prepare(args: argparse.Namespace):
             f"Processed {len(samples):,} {split} samples with "
             f"{invalid:,} ({invalid / len(samples):.2%}) "
             f"being incomplete or invalid.\n"
-            f"Generated {num_sparqls:,} samples."
+            f"Generated {num_sparqls:,} additional samples."
         )
 
 

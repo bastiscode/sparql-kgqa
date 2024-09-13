@@ -28,7 +28,6 @@ from sparql_kgqa.model import (
 from sparql_kgqa.sparql.utils import (
     SimilarityIndex,
     load_examples,
-    query_qlever,
 )
 from sparql_kgqa.sparql.utils2 import (
     KgManager,
