@@ -1,15 +1,17 @@
 import sys
 
-from sparql_kgqa.sparql.utils2 import clean
+
+def fix(s: str) -> str:
+    return s.replace(r"\n", " ")
 
 
 def format(s: str) -> str:
     if s.startswith('"') and s.endswith('"'):
         # list of literals
-        return clean(s[1:-1])
+        return fix(s[1:-1])
     elif s.startswith('"') and s.endswith('"@en'):
         # literal
-        return clean(s[1:-4])
+        return fix(s[1:-4])
     else:
         return s
 
