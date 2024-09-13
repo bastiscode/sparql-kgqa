@@ -33,11 +33,7 @@ if __name__ == "__main__":
 
         label = format(label)
         syns = format(syns)
+        infos = format(infos)
         score = "0" if score == "" else score
 
-        infos = [
-            format(info) for info
-            in format(infos).split(";;;")
-            if info != ""
-        ]
-        print("\t".join([label, score, syns, obj_id] + infos))
+        print("\t".join([label, score, syns, obj_id, infos]))
