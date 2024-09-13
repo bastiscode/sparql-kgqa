@@ -89,7 +89,7 @@ search-indices: wikidata-data wikidata-search-indices freebase-data freebase-sea
 wikidata-data:
 	# wikidata entities
 	# https://qlever.cs.uni-freiburg.de/wikidata/A8IsDS
-	@mkdir -p data/search-index/wikidata-entities/$(SEARCH_INDEX)
+	@mkdir -p data/search-index/wikidata-entities
 	@curl -s $(WD_URL) -H "Accept: text/tab-separated-values" \
 	--data-urlencode query="PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX skos: <http://www.w3.org/2004/02/skos/core#> PREFIX schema: <http://schema.org/> PREFIX wikibase: <http://wikiba.se/ontology#> PREFIX wd: <http://www.wikidata.org/entity/> PREFIX wdt: <http://www.wikidata.org/prop/direct/> SELECT DISTINCT ?label ?score (GROUP_CONCAT(DISTINCT ?alias; SEPARATOR=\";\") AS ?synonyms) ?id (GROUP_CONCAT(DISTINCT ?info; SEPARATOR=\"\t\") AS ?infos) WHERE { { ?id @en@rdfs:label ?label } MINUS { ?id wdt:P31/wdt:P279* wd:Q17442446 } OPTIONAL { ?id @en@skos:altLabel ?alias } OPTIONAL { ?id ^schema:about/wikibase:sitelinks ?score } OPTIONAL { { ?id @en@schema:description ?info } UNION { ?id wdt:P279 ?subclass_ . ?id @en@rdfs:label ?info } UNION { ?id wdt:P31 ?subclass_ . ?id @en@rdfs:label ?info } UNION { ?id wdt:P106 ?subclass_ . ?id @en@rdfs:label ?info } } } GROUP BY ?label ?score ?id ORDER BY DESC(?score)" \
 	--data-urlencode timeout=$(QLEVER_TIMEOUT) \
@@ -102,7 +102,7 @@ wikidata-data:
 	> data/search-index/wikidata-entities-small/data.tsv
 	# wikidata properties
 	# https://qlever.cs.uni-freiburg.de/wikidata/dAqs2J
-	@mkdir -p data/search-index/wikidata-properties/$(SEARCH_INDEX)
+	@mkdir -p data/search-index/wikidata-properties
 	@curl -s $(WD_URL) -H "Accept: text/tab-separated-values" \
 	--data-urlencode query="PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX skos: <http://www.w3.org/2004/02/skos/core#> PREFIX schema: <http://schema.org/> PREFIX wikibase: <http://wikiba.se/ontology#> PREFIX wd: <http://www.wikidata.org/entity/> PREFIX wdt: <http://www.wikidata.org/prop/direct/> SELECT DISTINCT ?label ?score (GROUP_CONCAT(DISTINCT ?alias; SEPARATOR=\";\") AS ?synonyms) ?id (GROUP_CONCAT(DISTINCT ?info; SEPARATOR=\"\t\") AS ?infos) WHERE { { SELECT ?p (COUNT(?p) AS ?score) WHERE { ?s ?p ?o } GROUP BY ?p } ?id wikibase:directClaim ?p . ?id @en@rdfs:label ?label . OPTIONAL { ?id @en@skos:altLabel ?alias } OPTIONAL { { ?id @en@schema:description ?info } UNION { ?id wdt:P1647 ?sub_ . ?sub_ @en@rdfs:label ?info } } } GROUP BY ?label ?score ?id ORDER BY DESC(?score)" \
 	--data-urlencode timeout=$(QLEVER_TIMEOUT) \
@@ -111,16 +111,19 @@ wikidata-data:
 	> data/search-index/wikidata-properties/data.tsv
 
 wikidata-search-indices:
+	@mkdir -p data/search-index/wikidata-entities/$(SEARCH_INDEX)
 	@python scripts/build_search_index.py \
 	data/search-index/wikidata-entities/data.tsv \
 	data/search-index/wikidata-entities/$(SEARCH_INDEX) \
 	--with-mapping \
 	--type $(SEARCH_INDEX)
+	@mkdir -p data/search-index/wikidata-entities-small/$(SEARCH_INDEX)
 	@python scripts/build_search_index.py \
 	data/search-index/wikidata-entities-small/data.tsv \
 	data/search-index/wikidata-entities-small/$(SEARCH_INDEX) \
 	--with-mapping \
 	--type $(SEARCH_INDEX)
+	@mkdir -p data/search-index/wikidata-properties/$(SEARCH_INDEX)
 	@python scripts/build_search_index.py \
 	data/search-index/wikidata-properties/data.tsv \
 	data/search-index/wikidata-properties/$(SEARCH_INDEX) \
@@ -130,7 +133,7 @@ wikidata-search-indices:
 freebase-data:
 	# freebase entities
 	# https://qlever.cs.uni-freiburg.de/freebase/s4iS7f
-	@mkdir -p data/search-index/freebase-entities/$(SEARCH_INDEX)
+	@mkdir -p data/search-index/freebase-entities
 	@curl -s $(FB_URL) -H "Accept: text/tab-separated-values" \
 	--data-urlencode query="PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX fb: <http://rdf.freebase.com/ns/> PREFIX skos: <http://www.w3.org/2004/02/skos/core#> PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> SELECT DISTINCT ?label ?score (GROUP_CONCAT(DISTINCT ?alias; SEPARATOR=\";\") AS ?synonyms) ?id (GROUP_CONCAT(DISTINCT ?info; SEPARATOR=\"\t\") AS ?infos) WHERE { { SELECT ?id (COUNT(?p) AS ?score) WHERE { ?id ?p ?o } GROUP BY ?id } ?id @en@fb:type.object.name ?label . OPTIONAL { ?id @en@fb:common.topic.alias ?alias } OPTIONAL { { ?id @en@fb:common.topic.description ?info } UNION { ?id fb:common.topic.notable_types ?notable_ . ?notable_ @en@fb:type.object.name ?info } } } GROUP BY ?label ?score ?id ORDER BY DESC(?score)" \
 	--data-urlencode timeout=$(QLEVER_TIMEOUT) \
@@ -139,7 +142,7 @@ freebase-data:
 	> data/search-index/freebase-entities/data.tsv
 	# freebase properties
 	# https://qlever.cs.uni-freiburg.de/freebase/xfgfFv
-	@mkdir -p data/search-index/freebase-properties/$(SEARCH_INDEX)
+	@mkdir -p data/search-index/freebase-properties
 	@curl -s $(FB_URL) -H "Accept: text/tab-separated-values" \
 	--data-urlencode query="PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX fb: <http://rdf.freebase.com/ns/> PREFIX skos: <http://www.w3.org/2004/02/skos/core#> PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> SELECT DISTINCT ?label ?score (GROUP_CONCAT(DISTINCT ?alias; SEPARATOR=\";\") AS ?synonyms) ?id (GROUP_CONCAT(DISTINCT ?info; SEPARATOR=\"\t\") AS ?infos) WHERE { { SELECT ?id (COUNT(?id) AS ?score) WHERE { ?s ?id ?o } GROUP BY ?id } ?id @en@fb:type.object.name ?label . ?id fb:type.object.type fb:type.property . OPTIONAL { ?id @en@fb:common.topic.alias ?alias } OPTIONAL { { ?id fb:type.property.schema ?schema_ . ?schema_ @en@fb:type.object.name ?info } UNION { ?id fb:type.property.expected_type ?type_ . ?type_ @en@rdfs:label ?info } } } GROUP BY ?label ?score ?id ORDER BY DESC(?score)" \
 	--data-urlencode timeout=$(QLEVER_TIMEOUT) \
@@ -148,11 +151,13 @@ freebase-data:
 	> data/search-index/freebase-properties/data.tsv
 
 freebase-search-indices:
+	@mkdir -p data/search-index/freebase-entities/$(SEARCH_INDEX)
 	@python scripts/build_search_index.py \
 	data/search-index/freebase-entities/data.tsv \
 	data/search-index/freebase-entities/$(SEARCH_INDEX) \
 	--with-mapping \
 	--type $(SEARCH_INDEX)
+	@mkdir -p data/search-index/freebase-properties/$(SEARCH_INDEX)
 	@python scripts/build_search_index.py \
 	data/search-index/freebase-properties/data.tsv \
 	data/search-index/freebase-properties/$(SEARCH_INDEX) \
@@ -162,7 +167,7 @@ freebase-search-indices:
 dbpedia-data:
 	# dbpedia entities
 	# https://qlever.cs.uni-freiburg.de/dbpedia/Y3PXkL
-	@mkdir -p data/search-index/dbpedia-entities/$(SEARCH_INDEX)
+	@mkdir -p data/search-index/dbpedia-entities
 	@curl -s $(DBPEDIA_URL) -H "Accept: text/tab-separated-values" \
 	--data-urlencode query="PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX dbo: <http://dbpedia.org/ontology/> PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> PREFIX dbp: <http://dbpedia.org/property/> PREFIX foaf: <http://xmlns.com/foaf/0.1/> SELECT DISTINCT ?label ?score (GROUP_CONCAT(DISTINCT ?alias; SEPARATOR=\";\") AS ?synonyms) ?id (GROUP_CONCAT(DISTINCT ?info; SEPARATOR=\"\t\") AS ?infos) WHERE { { SELECT ?id (COUNT(?id) AS ?score) WHERE { ?id ?p ?o } GROUP BY ?id } ?id @en@rdfs:label ?label . OPTIONAL { { ?id @en@dbp:synonyms ?alias } UNION { ?id @en@dbo:alias ?alias } UNION { ?id @en@dbo:alternativeName ?alias } UNION { ?id @en@foaf:nick ?alias } } OPTIONAL { { ?id @en@rdfs:comment ?info } UNION { ?id rdfs:subClassOf|rdf:type ?type_ . FILTER(STRSTARTS(STR(?type_), \"http://dbpedia.org/ontology/\")) . ?type_ @en@rdfs:label ?type } } } GROUP BY ?label ?score ?id ORDER BY DESC(?score)" \
 	--data-urlencode timeout=$(QLEVER_TIMEOUT) \
@@ -171,7 +176,7 @@ dbpedia-data:
 	> data/search-index/dbpedia-entities/data.tsv
 	# dbpedia properties
 	# https://qlever.cs.uni-freiburg.de/dbpedia/Yo0wIh
-	@mkdir -p data/search-index/dbpedia-properties/$(SEARCH_INDEX)
+	@mkdir -p data/search-index/dbpedia-properties
 	@curl -s $(DBPEDIA_URL) -H "Accept: text/tab-separated-values" \
 	--data-urlencode query="PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX dbo: <http://dbpedia.org/ontology/> PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> PREFIX dbp: <http://dbpedia.org/property/> PREFIX foaf: <http://xmlns.com/foaf/0.1/> SELECT DISTINCT ?label ?score (GROUP_CONCAT(DISTINCT ?alias; SEPARATOR=\";\") AS ?synonyms) ?id (GROUP_CONCAT(DISTINCT ?info; SEPARATOR=\"\t\") AS ?infos) WHERE { { SELECT ?id (COUNT(?id) AS ?score) WHERE { ?s ?id ?o } GROUP BY ?id } ?id @en@rdfs:label ?label . ?id rdf:type rdf:Property . BIND(\"\" AS ?alias) OPTIONAL { { ?id @en@rdfs:comment ?info } UNION { ?id rdfs:subPropertyOf ?type_ . ?type_ @en@rdfs:label ?info } UNION { ?id rdfs:range ?range_ . ?range_ @en@rdfs:label ?info } UNION { ?id rdfs:domain ?domain_ . ?domain_ @en@rdfs:label ?info } } } GROUP BY ?label ?score ?id ORDER BY DESC(?score)" \
 	--data-urlencode timeout=$(QLEVER_TIMEOUT) \
@@ -180,11 +185,13 @@ dbpedia-data:
 	> data/search-index/dbpedia-properties/data.tsv
 
 dbpedia-search-indices:
+	@mkdir -p data/search-index/dbpedia-entities/$(SEARCH_INDEX)
 	@python scripts/build_search_index.py \
 	data/search-index/dbpedia-entities/data.tsv \
 	data/search-index/dbpedia-entities/$(SEARCH_INDEX) \
 	--with-mapping \
 	--type $(SEARCH_INDEX)
+	@mkdir -p data/search-index/dbpedia-properties/$(SEARCH_INDEX)
 	@python scripts/build_search_index.py \
 	data/search-index/dbpedia-properties/data.tsv \
 	data/search-index/dbpedia-properties/$(SEARCH_INDEX) \
