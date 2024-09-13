@@ -302,7 +302,7 @@ def get_search_query(
 ) -> tuple[str, list[int]]:
     data = index.get_row(id)
     name, _, syns, *_ = data.split("\t")
-    syns = [s for s in syns.split(";") if s]
+    syns = [s for s in syns.split(";;;") if s != ""]
 
     # simulate some sensible search behavior
     # for the different index types

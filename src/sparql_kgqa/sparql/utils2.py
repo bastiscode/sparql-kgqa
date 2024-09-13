@@ -77,7 +77,7 @@ class Alternative:
     def get_string(self, max_aliases: int = 5, add_infos: bool = False) -> str:
         s = self.label
         if add_infos and self.infos:
-            info_str = self._clip(", ".join(self.infos))
+            info_str = ", ".join(self._clip(info) for info in self.infos)
             s += f" ({info_str})"
         if self.aliases and max_aliases:
             aliases = random.sample(
@@ -676,7 +676,7 @@ showing the first {max_rows} rows and first {max_columns} variables below:
         if replacement == "synonyms":
             syns = [
                 syn for syn in
-                data.split("\t")[2].split(";")
+                data.split("\t")[2].split(";;;")
                 if syn != ""
             ]
         else:
@@ -1188,7 +1188,7 @@ class WikidataManager(KgManager):
         alternatives: list[Alternative] = []
 
         for line, variants in data:
-            label, _, syns, wid, desc = line.rstrip("\r\n").split("\t")
+            label, _, syns, wid, infos = line.rstrip("\r\n").split("\t")
 
             assert all(alt.identifier != wid for alt in alternatives), \
                 f"duplicate identifier {wid} in data"
@@ -1196,8 +1196,8 @@ class WikidataManager(KgManager):
                 label,
                 wid,
                 sorted(variants),
-                [s for s in syns.split(";") if s != ""],
-                [desc] if desc != "" else []
+                [s for s in syns.split(";;;") if s != ""],
+                [i for i in infos.split(";;;") if i != ""]
             )
             alternatives.append(alternative)
 
