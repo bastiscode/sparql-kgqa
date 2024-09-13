@@ -1,13 +1,15 @@
 import sys
 
+from sparql_kgqa.sparql.utils2 import clean
+
 
 def format(s: str) -> str:
     if s.startswith('"') and s.endswith('"'):
         # list of literals
-        return s[1:-1]
+        return clean(s[1:-1])
     elif s.startswith('"') and s.endswith('"@en'):
         # literal
-        return "".join(s[1:-4])
+        return clean(s[1:-4])
     else:
         return s
 
@@ -21,7 +23,7 @@ if __name__ == "__main__":
     for line in sys.stdin:
         (
             label,
-            count,
+            score,
             syns,
             obj_id,
             *infos
@@ -29,10 +31,9 @@ if __name__ == "__main__":
 
         label = format(label)
         syns = format(syns)
-        count = "0" if count == "" else count
+        score = "0" if score == "" else score
 
         infos = [
-            format(info)
-            for info in infos
+            format(info) for info in infos
         ]
-        print("\t".join([label, count, syns, obj_id] + infos))
+        print("\t".join([label, score, syns, obj_id] + infos))
