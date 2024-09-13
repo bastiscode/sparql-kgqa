@@ -133,7 +133,7 @@ freebase-data:
 	@mkdir -p data/search-index/freebase-entities/$(SEARCH_INDEX)
 	@curl -s $(FB_URL) -H "Accept: text/tab-separated-values" \
 	--data-urlencode query="PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX fb: <http://rdf.freebase.com/ns/> PREFIX skos: <http://www.w3.org/2004/02/skos/core#> PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> SELECT DISTINCT ?label ?score (GROUP_CONCAT(DISTINCT ?alias; SEPARATOR=\";\") AS ?synonyms) ?id (GROUP_CONCAT(DISTINCT ?info; SEPARATOR=\"\t\") AS ?infos) WHERE { { SELECT ?id (COUNT(?p) AS ?score) WHERE { ?id ?p ?o } GROUP BY ?id } ?id @en@fb:type.object.name ?label . OPTIONAL { ?id @en@fb:common.topic.alias ?alias } OPTIONAL { { ?id @en@fb:common.topic.description ?info } UNION { ?id fb:common.topic.notable_types ?notable_ . ?notable_ @en@fb:type.object.name ?info } } } GROUP BY ?label ?score ?id ORDER BY DESC(?score)" \
-	--data-urlencode timeout=$(QLEVER_TIMOUT) \
+	--data-urlencode timeout=$(QLEVER_TIMEOUT) \
 	--data-urlencode access-token=$(FB_ACCESS_TOKEN) \
 	| python scripts/prepare_search_index.py \
 	> data/search-index/freebase-entities/data.tsv
@@ -142,7 +142,7 @@ freebase-data:
 	@mkdir -p data/search-index/freebase-properties/$(SEARCH_INDEX)
 	@curl -s $(FB_URL) -H "Accept: text/tab-separated-values" \
 	--data-urlencode query="PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX fb: <http://rdf.freebase.com/ns/> PREFIX skos: <http://www.w3.org/2004/02/skos/core#> PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> SELECT DISTINCT ?label ?score (GROUP_CONCAT(DISTINCT ?alias; SEPARATOR=\";\") AS ?synonyms) ?id (GROUP_CONCAT(DISTINCT ?info; SEPARATOR=\"\t\") AS ?infos) WHERE { { SELECT ?id (COUNT(?id) AS ?score) WHERE { ?s ?id ?o } GROUP BY ?id } ?id @en@fb:type.object.name ?label . ?id fb:type.object.type fb:type.property . OPTIONAL { ?id @en@fb:common.topic.alias ?alias } OPTIONAL { { ?id fb:type.property.schema ?schema_ . ?schema_ @en@fb:type.object.name ?info } UNION { ?id fb:type.property.expected_type ?type_ . ?type_ @en@rdfs:label ?info } } } GROUP BY ?label ?score ?id ORDER BY DESC(?score)" \
-	--data-urlencode timeout=$(QLEVER_TIMOUT) \
+	--data-urlencode timeout=$(QLEVER_TIMEOUT) \
 	--data-urlencode access-token=$(FB_ACCESS_TOKEN) \
 	| python scripts/prepare_search_index.py \
 	> data/search-index/freebase-properties/data.tsv
