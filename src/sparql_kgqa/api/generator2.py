@@ -541,6 +541,7 @@ Explanation: (\\S+ ){0, 4}\\S+
         explanation_start = judgement.find("Explanation: ")
         explanation = judgement[explanation_start:].strip()
         self.logger.debug(f"judgement:\n{prompt}{judgement}")
+        self.logger.debug(f"answer: {answer}, explanation: {explanation}")
         return answer == "yes"
 
     def _continue_sparql(
