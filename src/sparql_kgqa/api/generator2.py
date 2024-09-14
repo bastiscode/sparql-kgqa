@@ -537,9 +537,11 @@ Explanation: (\\S+ ){0, 4}\\S+
 
         judgement = self.tokenizer.de_tokenize(beam.decoded_token_ids)
         answer_start = judgement.find("Answer: ")
-        answer = judgement[answer_start:].split("\n", maxsplit=1)[0]
+        answer = judgement[answer_start:].split(maxsplit=2)[1].strip()
         explanation_start = judgement.find("Explanation: ")
-        explanation = judgement[explanation_start:].strip()
+        explanation = judgement[
+            explanation_start + len("Explanation: "):
+        ].strip()
         self.logger.debug(f"judgement:\n{prompt}{judgement}")
         self.logger.debug(f"answer: {answer}, explanation: {explanation}")
         return answer == "yes"

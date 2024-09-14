@@ -524,9 +524,10 @@ class KgManager:
         )
 
         return f"""\
-{num_rows:,} row{'s' * (num_rows != 1)} for \
+Got {num_rows:,} row{'s' * (num_rows != 1)} for \
 {num_columns:,} variable{'s' * (num_columns != 1)}, \
-showing the first {max_rows} rows with the first {max_columns} variables below:
+showing the first {max_rows} rows with the first {max_columns} variables \
+at maximum below:
 {table}
         """
 
