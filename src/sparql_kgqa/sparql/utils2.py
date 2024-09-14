@@ -479,10 +479,12 @@ class KgManager:
             return f"Query failed with exception: {e}"
 
         if isinstance(result, AskResult):
-            return "Yes" if result else "No"
+            return str(result)
 
-        num_rows = len(result)
+        num_rows = len(result) - 1
         num_columns = len(result[0])
+        if num_rows == 0:
+            return "Empty"
 
         def format_uri(s: str) -> str:
             if not s.startswith("<") or not s.endswith(">"):
@@ -522,8 +524,9 @@ class KgManager:
         )
 
         return f"""\
-Got {num_rows} rows for {num_columns} variables in total, \
-showing the first {max_rows} rows and first {max_columns} variables below:
+{num_rows:.} row{'s' * (num_rows != 1)} for \
+{num_columns:.} variable{'s' * (num_columns != 1)}, \
+showing the first {max_rows} rows with the first {max_columns} variables below:
 {table}
         """
 
