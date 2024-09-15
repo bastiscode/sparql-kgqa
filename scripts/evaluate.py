@@ -20,8 +20,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input", type=str, default=None)
     parser.add_argument("--target", type=str, required=True)
     parser.add_argument("--prediction", type=str, required=True)
-    parser.add_argument("--save-invalid", type=str, default=None)
-    parser.add_argument("--save-incorrect", type=str, default=None)
+    parser.add_argument("--save-invalid", action="store_true")
+    parser.add_argument("--save-incorrect", action="store_true")
     parser.add_argument("--allow-subset", action="store_true")
     parser.add_argument("--empty-target-invalid", action="store_true")
     parser.add_argument(
@@ -65,11 +65,18 @@ def evaluate(args: argparse.Namespace):
     else:
         inputs = []
 
+    base = os.path.splitext(args.prediction)[0]
     if args.save_invalid:
-        delete_file_or_create_dir(args.save_invalid)
+        invalid_file = f"{base}.invalid.txt"
+        delete_file_or_create_dir(invalid_file)
+    else:
+        invalid_file = ""
 
     if args.save_incorrect:
-        delete_file_or_create_dir(args.save_incorrect)
+        incorrect_file = f"{base}.incorrect.txt"
+        delete_file_or_create_dir(incorrect_file)
+    else:
+        incorrect_file = ""
 
     parser = load_sparql_parser([args.kg])
     f1s = []
@@ -87,7 +94,7 @@ def evaluate(args: argparse.Namespace):
         leave=False
     ):
         if args.save_invalid and f1 is None:
-            with open(args.save_invalid, "a", encoding="utf8") as f:
+            with open(invalid_file, "a", encoding="utf8") as f:
                 f.write(
                     f"{i+1}.\n"
                     f"input : {inputs[i]}\n"
@@ -95,7 +102,7 @@ def evaluate(args: argparse.Namespace):
                     f"target: {targets[i]}\n\n"
                 )
         if args.save_incorrect and f1 is not None and f1 < 1.0:
-            with open(args.save_incorrect, "a", encoding="utf8") as f:
+            with open(incorrect_file, "a", encoding="utf8") as f:
                 f.write(
                     f"{i+1}.\n"
                     f"input : {inputs[i]}\n"
@@ -108,7 +115,7 @@ def evaluate(args: argparse.Namespace):
             f1 = 0.0
         if tgt_inv:
             tgt_invalid += 1
-            f1 = 0.0
+            continue
         f1s.append(f1)
 
     print(
