@@ -131,6 +131,7 @@ class SPARQLGenerator(TextProcessor):
         self._sparql_constraint: None | grammar.LR1Constraint = None
         self._disable_subgraph_constraint = False
         self._disable_sparql_constraint = False
+        self._disable_sparql_judgement = False
         self._manager: None | KgManager = None
         self._is_chat = self.cfg["inference"].get(
             "chat_template", None
@@ -491,6 +492,8 @@ class SPARQLGenerator(TextProcessor):
         sparql: str,
         natural_sparql: str
     ) -> bool:
+        if self._disable_sparql_judgement:
+            return True
         assert self._manager is not None, "kg indices not set"
         prompt, regex = self._manager.get_judgement_prompt_and_regex(
             question,
@@ -752,6 +755,7 @@ class SPARQLGenerator(TextProcessor):
         max_new_tokens: int | None = None,
         disable_sparql_constraint: bool = False,
         disable_subgraph_constraint: bool = False,
+        disable_sparql_judgement: bool = False,
         num_examples: int = 3,
         select_k: int = 8,
         select_max_candidates: int | None = 4096,
@@ -770,6 +774,7 @@ class SPARQLGenerator(TextProcessor):
         self._max_new_tokens = max_new_tokens
         self._disable_sparql_constraint = disable_sparql_constraint
         self._disable_subgraph_constraint = disable_subgraph_constraint
+        self._disable_sparql_judgement = disable_sparql_judgement
         self._force_exact = force_exact
         self._num_examples = num_examples
         self._system_message = system_message

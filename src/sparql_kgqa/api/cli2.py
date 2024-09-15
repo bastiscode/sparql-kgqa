@@ -39,6 +39,7 @@ class SPARQLGenerationCli(TextProcessingCli):
             max_new_tokens=self.args.max_new_tokens,
             disable_sparql_constraint=self.args.no_sparql_constraint,
             disable_subgraph_constraint=self.args.no_subgraph_constraint,
+            disable_sparql_judgement=self.args.no_sparql_judgement,
             num_examples=self.args.num_examples,
             select_k=self.args.select_k,
             select_max_candidates=self.args.select_max_candidates,
@@ -221,6 +222,11 @@ def main():
         "--no-subgraph-constraint",
         action="store_true",
         help="Whether to remove SPARQL subgraph constraint"
+    )
+    parser.add_argument(
+        "--no-sparql-judgement",
+        action="store_true",
+        help="Whether to skip SPARQL judgement step"
     )
     parser.add_argument(
         "--pretty",
