@@ -570,6 +570,27 @@ Explanation: (?:\\w+ ){1, 15}\\w+
 Answer: (?:yes|no)"""
         return prompt, regex
 
+    def parse_judgement(
+        self,
+        judgement: str
+    ) -> tuple[str, bool]:
+        exp = "Explanation: "
+        exp_start = judgement.find(exp)
+        if exp_start == -1:
+            return "", True
+        exp_start += len(exp)
+        exp_end = judgement.find("\n", exp_start)
+        if exp_end == -1:
+            return "", True
+        explanation = judgement[exp_start:exp_end].strip()
+        ans = "Answer: "
+        ans_start = judgement.find(ans, exp_end)
+        if ans_start == -1:
+            return explanation, True
+        ans_start += len(ans)
+        answer = judgement[ans_start:].strip()
+        return explanation, answer == "yes"
+
     def find_longest_prefix(self, iri: str) -> tuple[str, str] | None:
         return next(
             iter(sorted(

@@ -520,16 +520,10 @@ class SPARQLGenerator(TextProcessor):
         )
 
         judgement = self.tokenizer.de_tokenize(beam.decoded_token_ids)
-        exp_start = "Explanation: "
-        exp_start = judgement.find(exp_start) + len(exp_start)
-        exp_end = judgement.find("\n", exp_start)
-        explanation = judgement[exp_start:exp_end].strip()
-        ans = "Answer: "
-        ans_start = judgement.find(ans, exp_end) + len(ans)
-        answer = judgement[ans_start:].strip()
+        explanation, answer = self._manager.parse_judgement(judgement)
         self.logger.debug(f"judgement:\n{prompt}{judgement}")
         self.logger.debug(f"answer: {answer}, explanation: {explanation}")
-        return answer == "yes"
+        return answer
 
     def _continue_sparql(
         self,
