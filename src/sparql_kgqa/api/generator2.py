@@ -414,7 +414,7 @@ class SPARQLGenerator(TextProcessor):
                 f" {previous() if current else 'none'}"
             )
             if s == "done":
-                accept = self._check_sparql(
+                accept = self._judge_sparql(
                     question,
                     prefix("natural"),
                     prefix("sparql")
@@ -485,37 +485,18 @@ class SPARQLGenerator(TextProcessor):
 
         yield prefix("sparql")
 
-    def _check_sparql(
+    def _judge_sparql(
         self,
         question: str,
         natural_sparql: str,
         sparql: str
     ) -> bool:
         assert self._manager is not None, "kg indices not set"
-        # run sparql against endpoint, format result as string
-        # and ask the model whether the output makes sense for
-        # the given question
-        result = self._manager.get_formatted_result(sparql)
-        prompt = f"""\
-Given a question and a SPARQL query together with its execution result, \
-judge whether the SPARQL query makes sense for answering the question. \
-Provide a yes or no answer and a short explanation with max. 8 words how you \
-come to this conclusion.
-
-Question:
-{question}
-
-SPARQL query over {self._manager.kg}:
-{natural_sparql}
-
-Result:
-{result}
-"""
-        regex = """\
-Answer: (yes|no)
-
-Explanation: (\\S+ ){0, 4}\\S+
-"""
+        prompt, regex = self._manager.get_judgement_prompt_and_regex(
+            question,
+            natural_sparql,
+            sparql
+        )
         token_ids = self.tokenizer.tokenize(
             self._chat_format(prompt),
             self._is_chat
@@ -532,16 +513,17 @@ Explanation: (\\S+ ){0, 4}\\S+
 
         *_, beam = self._partial_inference(
             beam,
-            lambda beam: beam.token_ids[-1] == self._eos_token_id
+            lambda beam: beam.token_ids[-1] == self._eos_token_id,
         )
 
         judgement = self.tokenizer.de_tokenize(beam.decoded_token_ids)
-        answer_start = judgement.find("Answer: ")
-        answer = judgement[answer_start:].split(maxsplit=2)[1].strip()
-        explanation_start = judgement.find("Explanation: ")
-        explanation = judgement[
-            explanation_start + len("Explanation: "):
-        ].strip()
+        exp = "Explanation: "
+        exp_start = judgement.find(exp) + len(exp)
+        exp_end = judgement.find("\n", exp_start)
+        explanation = judgement[exp_start:exp_end].strip()
+        ans = "Answer: "
+        ans_start = judgement.find(ans) + len(ans)
+        answer = judgement[ans_start:].strip()
         self.logger.debug(f"judgement:\n{prompt}{judgement}")
         self.logger.debug(f"answer: {answer}, explanation: {explanation}")
         return answer == "yes"

@@ -462,6 +462,7 @@ class KgManager:
         max_rows: int = 10,
         max_columns: int = 5,
     ) -> str:
+        # run sparql against endpoint, format result as string
         try:
             result = query_qlever(
                 sparql,
@@ -526,10 +527,48 @@ class KgManager:
         return f"""\
 Got {num_rows:,} row{'s' * (num_rows != 1)} for \
 {num_columns:,} variable{'s' * (num_columns != 1)}, \
-showing the first {max_rows} rows with the first {max_columns} variables \
+showing the first {max_rows} rows for the first {max_columns} variables \
 at maximum below:
 {table}
-        """
+"""
+
+    def get_judgement_prompt_and_regex(
+        self,
+        question: str,
+        sparql: str,
+        natural_sparql: str,
+        qlever_endpoint: str | None = None,
+        max_retries: int = 1,
+        max_rows: int = 10,
+        max_columns: int = 5,
+    ) -> tuple[str, str]:
+        result = self.get_formatted_result(
+            sparql,
+            qlever_endpoint,
+            max_retries,
+            max_rows,
+            max_columns
+        )
+        prompt = f"""\
+Given a question and a SPARQL query together with its execution result, \
+judge whether the SPARQL query makes sense for answering the question. \
+Provide a short explanation with max. 16 words and a final yes or no answer.
+
+Question:
+{question}
+
+SPARQL query over {self.kg}:
+{natural_sparql}
+
+Result:
+{result}
+"""
+        regex = """\
+Explanation: (\\S+ ){0, 15}\\S+
+
+Answer: (yes|no)
+"""
+        return prompt, regex
 
     def find_longest_prefix(self, iri: str) -> tuple[str, str] | None:
         return next(
