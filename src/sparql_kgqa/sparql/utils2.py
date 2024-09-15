@@ -552,7 +552,8 @@ at maximum below:
         prompt = f"""\
 Given a question and a SPARQL query together with its execution result, \
 judge whether the SPARQL query makes sense for answering the question. \
-Provide a short explanation with max. 16 words and a final yes or no answer.
+Provide a short, high level explanation of at most 16 words and \
+a final yes or no answer.
 
 Question:
 {question}
@@ -564,10 +565,9 @@ Result:
 {result}
 """
         regex = """\
-Explanation: (\\S+ ){0, 15}\\S+
+Explanation: (?:\\w+ ){1, 15}\\w+
 
-Answer: (yes|no)
-"""
+Answer: (?:yes|no)"""
         return prompt, regex
 
     def find_longest_prefix(self, iri: str) -> tuple[str, str] | None:
