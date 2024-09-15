@@ -474,7 +474,7 @@ class KgManager:
             )
         except Exception as e:
             LOGGER.debug(
-                f"querying qlever within format_result "
+                f"querying qlever within get_formatted_result "
                 f"failed for sparql '{sparql}': {e}"
             )
             return f"Query failed with exception: {e}"

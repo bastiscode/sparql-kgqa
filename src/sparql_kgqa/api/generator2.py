@@ -416,8 +416,8 @@ class SPARQLGenerator(TextProcessor):
             if s == "done":
                 accept = self._judge_sparql(
                     question,
-                    prefix("natural"),
-                    prefix("sparql")
+                    prefix("sparql"),
+                    prefix("natural")
                 )
                 if accept:
                     # breaking early will return final sparql query
@@ -488,14 +488,14 @@ class SPARQLGenerator(TextProcessor):
     def _judge_sparql(
         self,
         question: str,
-        natural_sparql: str,
-        sparql: str
+        sparql: str,
+        natural_sparql: str
     ) -> bool:
         assert self._manager is not None, "kg indices not set"
         prompt, regex = self._manager.get_judgement_prompt_and_regex(
             question,
+            sparql,
             natural_sparql,
-            sparql
         )
         token_ids = self.tokenizer.tokenize(
             self._chat_format(prompt),
