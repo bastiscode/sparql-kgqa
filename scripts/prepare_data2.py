@@ -169,26 +169,7 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
                     for q in json.loads(item["question"])
                     if q["language"] == "en"
                 ]
-                # replace entities and properties
-                sparql = re.sub(
-                    r"<http://www.wikidata.org/entity/(Q\d+?)>",
-                    lambda match: "wd:" + match.group(1),
-                    sparql
-                )
 
-                def _rep_prop(m: re.Match) -> str:
-                    pfx = m.group(1)
-                    if pfx == "direct":
-                        pfx = "wdt"
-                    else:
-                        raise RuntimeError(f"unknown prefix {pfx}")
-                    return f"{pfx}:{m.group(2)}"
-
-                sparql = re.sub(
-                    r"<http://www.wikidata.org/prop/(?:(\S+?)/)?(P\d+?)>",
-                    _rep_prop,
-                    sparql
-                )
                 for q in queries:
                     samples.append(Sample(q, sparql))
 
@@ -709,6 +690,7 @@ def prepare(args: argparse.Namespace):
                     assert len(sparqls) == 0
                     inf.write(json.dumps(question) + "\n")
                     tf.write(json.dumps(raw_sparql) + "\n")
+                    continue
 
                 num_sparqls += len(sparqls)
                 for prompt, target in sparqls:
