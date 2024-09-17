@@ -1,5 +1,4 @@
 import argparse
-import itertools
 import random
 import os
 import re
@@ -16,8 +15,8 @@ from sparql_kgqa.sparql.utils import find_all
 from sparql_kgqa.sparql.utils2 import (
     Chat,
     KgManager,
-    WikidataManager,
     WikidataPropertyMapping,
+    get_kg_manager,
     clean,
     format_obj_type,
     load_index_and_mapping,
@@ -194,6 +193,7 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
             output[split] = samples
 
     elif args.mcwq is not None:
+        # todo: load this with kqa datasets
         kg = "wikidata"
         with open(os.path.join(args.mcwq, "dataset.json"), "r") as inf:
             train_data = json.load(inf)
@@ -235,6 +235,26 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
                 sparql, query = line.split("\t")
                 samples.append(Sample(query, sparql))
         output["train"] = samples
+
+    elif args.grail_qa is not None:
+        kg = "freebase"
+        samples = []
+        data = load_dataset(args.grail_qa, "grail_qa")
+
+        output["train"] = [
+            Sample(item["question"], item["sparql_query"])
+            for item in data["train"]
+        ]
+        output["val"] = [
+            Sample(item["question"], item["sparql_query"])
+            for item in data["validation"]
+        ]
+
+        data = load_dataset(args.grail_qa, "grailqa_test_public")
+        output["test"] = [
+            Sample(item["question"], "")
+            for item in data["test"]
+        ]
 
     else:
         raise RuntimeError("unknown dataset")
@@ -602,9 +622,6 @@ def prepare(args: argparse.Namespace):
     random.seed(args.seed)
     kg, data = load_data(args)
 
-    if kg != "wikidata":
-        raise RuntimeError("only wikidata supported for now")
-
     ent_indices = []
     prop_indices = []
     for index_type in ["qgram", "prefix"]:
@@ -615,21 +632,21 @@ def prepare(args: argparse.Namespace):
         prop_index, prop_mapping = load_index_and_mapping(
             args.properties,
             index_type,
-            WikidataPropertyMapping
+            WikidataPropertyMapping if kg == "wikidata" else None
         )
-        assert isinstance(prop_mapping, WikidataPropertyMapping)
         ent_indices.append((ent_index, ent_mapping))
         prop_indices.append((prop_index, prop_mapping))
 
     managers = []
-    for prod in itertools.product(ent_indices, prop_indices):
-        ent_index, ent_mapping = prod[0]
-        prop_index, prop_mapping = prod[1]
-        manager = WikidataManager(
+    for ent, prop in zip(ent_indices, prop_indices):
+        ent_index, ent_mapping = ent
+        prop_index, prop_mapping = prop
+        manager = get_kg_manager(
+            kg,
             ent_index,
             prop_index,
             ent_mapping,
-            prop_mapping
+            prop_mapping,
         )
         managers.append(manager)
 

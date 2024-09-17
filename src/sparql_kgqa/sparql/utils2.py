@@ -71,7 +71,7 @@ class Alternative:
         return f"Alternative({self.label}, {self.identifier}, {self.variants})"
 
     @staticmethod
-    def _clip(s: str, max_len: int = 64) -> str:
+    def _clip(s: str, max_len: int = 128) -> str:
         return s[:max_len] + "..." if len(s) > max_len else s
 
     def get_string(self, max_aliases: int = 5, add_infos: bool = False) -> str:
@@ -79,7 +79,7 @@ class Alternative:
         if add_infos and self.infos:
             info_str = ", ".join(self._clip(info) for info in self.infos)
             s += f" ({info_str})"
-        if self.aliases and max_aliases:
+        if max_aliases and self.aliases:
             aliases = random.sample(
                 self.aliases,
                 min(len(self.aliases), max_aliases)
@@ -625,6 +625,10 @@ Answer: (?:yes|no)"""
             rest_str = ""
 
         prefixes = self.prefixes | self.custom_prefixes
+        reverse_prefixes = {
+            long: short
+            for short, long in prefixes.items()
+        }
 
         prologue = find(parse, "Prologue")
         assert prologue is not None
@@ -664,8 +668,15 @@ Answer: (?:yes|no)"""
             if pfx["value"] == "":
                 continue
 
-            pfx, _ = pfx["value"].split(":", 1)
-            seen.add(pfx)
+            short, val = pfx["value"].split(":", 1)
+            long = exist.get(short, "")
+
+            if reverse_prefixes.get(long, short) != short:
+                # replace existing short forms with our own short form
+                short = reverse_prefixes[long]
+                pfx["value"] = f"{short}:{val}"
+
+            seen.add(short)
 
         prologue["children"] = base_decls
 
@@ -676,6 +687,7 @@ Answer: (?:yes|no)"""
                 long = prefixes[pfx]
             else:
                 continue
+
             prologue["children"].append(
                 {
                     "name": "PrefixDecl",
@@ -855,9 +867,25 @@ Answer: (?:yes|no)"""
 
     def build_alternatives_from_data(
         self,
-        data: list[tuple[str, set[str]]],
+        data: list[tuple[str, set[str]]]
     ) -> list[Alternative]:
-        raise NotImplementedError
+        alternatives: list[Alternative] = []
+
+        for line, variants in data:
+            label, _, syns, id, infos = line.rstrip("\r\n").split("\t")
+
+            assert all(alt.identifier != id for alt in alternatives), \
+                f"duplicate identifier {id} in data"
+            alternative = Alternative(
+                label,
+                id,
+                sorted(variants),
+                [s for s in syns.split(";;;") if s != ""],
+                [i for i in infos.split(";;;") if i != ""]
+            )
+            alternatives.append(alternative)
+
+        return alternatives
 
     def get_selection_alternatives(
         self,
@@ -1217,6 +1245,112 @@ Continuation:
         return messages
 
 
+def get_kg_manager(
+    kg: str,
+    entity_index: SearchIndex,
+    property_index: SearchIndex,
+    entity_mapping: Mapping,
+    property_mapping: Mapping,
+) -> KgManager:
+    if kg == "freebase":
+        return FreebaseManager(
+            entity_index,
+            property_index,
+            entity_mapping,
+            property_mapping
+        )
+    elif kg == "dbpedia":
+        return DBPediaManager(
+            entity_index,
+            property_index,
+            entity_mapping,
+            property_mapping
+        )
+    elif kg == "dblp":
+        return DBLPManager(
+            entity_index,
+            property_index,
+            entity_mapping,
+            property_mapping
+        )
+    elif kg == "wikidata":
+        assert isinstance(property_mapping, WikidataPropertyMapping)
+        return WikidataManager(
+            entity_index,
+            property_index,
+            entity_mapping,
+            property_mapping
+        )
+    else:
+        raise ValueError(f"unknown kg {kg}")
+
+
+class DBLPManager(KgManager):
+    def __init__(
+        self,
+        entity_index: SearchIndex,
+        property_index: SearchIndex,
+        entity_mapping: Mapping,
+        property_mapping: Mapping,
+    ):
+        super().__init__(
+            "dblp",
+            entity_index,
+            property_index,
+            entity_mapping,
+            property_mapping,
+        )
+        # add dblp specific prefixes
+        self.custom_prefixes.update({
+            "dblp": "<https://dblp.org/rdf/schema#",
+            "dblpr": "<https://dblp.org/rec/",
+        })
+
+
+class FreebaseManager(KgManager):
+    def __init__(
+        self,
+        entity_index: SearchIndex,
+        property_index: SearchIndex,
+        entity_mapping: Mapping,
+        property_mapping: Mapping,
+    ):
+        super().__init__(
+            "freebase",
+            entity_index,
+            property_index,
+            entity_mapping,
+            property_mapping,
+        )
+        # add freebase specific prefixes
+        self.custom_prefixes.update({
+            "fb": "<http://rdf.freebase.com/ns/",
+        })
+
+
+class DBPediaManager(KgManager):
+    def __init__(
+        self,
+        entity_index: SearchIndex,
+        property_index: SearchIndex,
+        entity_mapping: Mapping,
+        property_mapping: Mapping,
+    ):
+        super().__init__(
+            "dbpedia",
+            entity_index,
+            property_index,
+            entity_mapping,
+            property_mapping,
+        )
+        # add dbpedia specific prefixes
+        self.custom_prefixes.update({
+            "dbp": "<http://dbpedia.org/property/",
+            "dbo": "<http://dbpedia.org/ontology/",
+            "dbr": "<http://dbpedia.org/resource/",
+        })
+
+
 class WikidataManager(KgManager):
     property_mapping_cls = WikidataPropertyMapping
 
@@ -1244,28 +1378,6 @@ class WikidataManager(KgManager):
                 for long, short in WIKIDATA_PROPERTY_VARIANTS.items()
             }
         })
-
-    def build_alternatives_from_data(
-        self,
-        data: list[tuple[str, set[str]]]
-    ) -> list[Alternative]:
-        alternatives: list[Alternative] = []
-
-        for line, variants in data:
-            label, _, syns, wid, infos = line.rstrip("\r\n").split("\t")
-
-            assert all(alt.identifier != wid for alt in alternatives), \
-                f"duplicate identifier {wid} in data"
-            alternative = Alternative(
-                label,
-                wid,
-                sorted(variants),
-                [s for s in syns.split(";;;") if s != ""],
-                [i for i in infos.split(";;;") if i != ""]
-            )
-            alternatives.append(alternative)
-
-        return alternatives
 
 
 def run_parallel(
@@ -1338,7 +1450,7 @@ def partition_by(
 def load_index_and_mapping(
     index_dir: str,
     index_type: str,
-    mapping_cls: Type[Mapping] = Mapping,
+    mapping_cls: Type[Mapping] | None = None,
     **kwargs: Any
 ) -> tuple[SearchIndex, Mapping]:
     if index_type == "prefix":
@@ -1353,6 +1465,9 @@ def load_index_and_mapping(
         os.path.join(index_dir, index_type),
         **kwargs
     )
+
+    if mapping_cls is None:
+        mapping_cls = Mapping
     mapping = mapping_cls.load(
         index,
         os.path.join(index_dir, index_type, "index.mapping")

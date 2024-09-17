@@ -12,6 +12,9 @@ FB_ACCESS_TOKEN=null
 DBPEDIA_URL=https://qlever.cs.uni-freiburg.de/api/dbpedia
 DBPEDIA_ACCESS_TOKEN=null
 
+DBLP_URL=https://qlever.cs.uni-freiburg.de/api/dblp
+DBLP_ACCESS_TOKEN=null
+
 SEARCH_INDEX=qgram
 
 .PHONY: all data querylogs indices examples
@@ -196,5 +199,40 @@ dbpedia-search-indices:
 	@python scripts/build_search_index.py \
 	data/search-index/dbpedia-properties/data.tsv \
 	data/search-index/dbpedia-properties/$(SEARCH_INDEX) \
+	--with-mapping \
+	--type $(SEARCH_INDEX)
+
+dblp-search-data:
+	# dblp entities
+	# https://qlever.cs.uni-freiburg.de/dblp/tb1FJ8
+	@mkdir -p data/search-index/dblp-entities
+	@curl -s $(DBLP_URL) -H "Accept: text/tab-separated-values" \
+	--data-urlencode query="PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> SELECT DISTINCT ?label ?score (GROUP_CONCAT(DISTINCT ?alias; SEPARATOR=\";;;\") AS ?synonyms) ?id (GROUP_CONCAT(DISTINCT ?info; SEPARATOR=\";;;\") AS ?infos) WHERE { { SELECT ?id (COUNT(?id) AS ?score) WHERE { ?id ?p ?o } GROUP BY ?id } ?id rdfs:label ?label . BIND(\"\" AS ?alias) OPTIONAL { { ?id rdfs:comment ?info } UNION { ?id rdfs:subClassOf|rdf:type ?type_ . FILTER(STRSTARTS(STR(?type_), \"https://dblp.org/\")) . ?type_ rdfs:label ?type } } } GROUP BY ?label ?score ?id ORDER BY DESC(?score)" \
+	--data-urlencode timeout=$(QLEVER_TIMEOUT) \
+	--data-urlencode access-token=$(DBLP_ACCESS_TOKEN) \
+	| python scripts/prepare_search_index.py \
+	> data/search-index/dblp-entities/data.tsv
+	# dblp properties
+	# https://qlever.cs.uni-freiburg.de/dblp/HwqyBj
+	@mkdir -p data/search-index/dblp-properties
+	@curl -s $(DBLP_URL) -H "Accept: text/tab-separated-values" \
+	--data-urlencode query="PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> SELECT DISTINCT ?label ?score (GROUP_CONCAT(DISTINCT ?alias; SEPARATOR=\";;;\") AS ?synonyms) ?id (GROUP_CONCAT(DISTINCT ?info; SEPARATOR=\";;;\") AS ?infos) WHERE { { SELECT ?id (COUNT(?id) AS ?score) WHERE { ?s ?id ?o } GROUP BY ?id } ?id rdfs:label ?label . ?id rdf:type rdf:Property . BIND(\"\" AS ?alias) OPTIONAL { { ?id rdfs:comment ?info } UNION { ?id rdfs:subPropertyOf ?type_ . ?type_ rdfs:label ?info } UNION { ?id rdfs:range ?range_ . ?range_ rdfs:label ?info } UNION { ?id rdfs:domain ?domain_ . ?domain_ rdfs:label ?info } } } GROUP BY ?label ?score ?id ORDER BY DESC(?score)" \
+	--data-urlencode timeout=$(QLEVER_TIMEOUT) \
+	--data-urlencode access-token=$(DBLP_ACCESS_TOKEN) \
+	| python scripts/prepare_search_index.py \
+	--dblp-properties \
+	> data/search-index/dblp-properties/data.tsv
+
+dblp-search-indices:
+	@mkdir -p data/search-index/dblp-entities/$(SEARCH_INDEX)
+	@python scripts/build_search_index.py \
+	data/search-index/dblp-entities/data.tsv \
+	data/search-index/dblp-entities/$(SEARCH_INDEX) \
+	--with-mapping \
+	--type $(SEARCH_INDEX)
+	@mkdir -p data/search-index/dblp-properties/$(SEARCH_INDEX)
+	@python scripts/build_search_index.py \
+	data/search-index/dblp-properties/data.tsv \
+	data/search-index/dblp-properties/$(SEARCH_INDEX) \
 	--with-mapping \
 	--type $(SEARCH_INDEX)
