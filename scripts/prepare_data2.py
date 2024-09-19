@@ -829,7 +829,7 @@ def prepare(args: argparse.Namespace):
     os.makedirs(args.output, exist_ok=True)
 
     if args.num_workers is None:
-        args.num_workers = mp.cpu_count()
+        args.num_workers = min(mp.cpu_count(), 8)
 
     pool = mp.Pool(
         args.num_workers,
