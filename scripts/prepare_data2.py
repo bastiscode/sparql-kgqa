@@ -29,33 +29,36 @@ def parse_args() -> argparse.Namespace:
     data = parser.add_mutually_exclusive_group(required=True)
 
     # wikidata
-    data.add_argument("--wikidata-simple-questions", type=str)
-    data.add_argument("--qald-10", type=str)
-    data.add_argument("--time-questions", type=str)
-    data.add_argument("--cron-questions", type=str)
-    data.add_argument("--mkqa", type=str)
-    data.add_argument("--mintaka", type=str)
-    data.add_argument("--lc-quad2-wikidata", type=str)
+    data.add_argument("--wikidata-simple-questions", action="store_true")
+    data.add_argument("--lc-quad2-wikidata", action="store_true")
+    data.add_argument("--qald-10", action="store_true")
     data.add_argument("--mcwq", type=str)
-    data.add_argument("--qa-wiki", type=str)
     data.add_argument("--kqa-pro", type=str)
+    data.add_argument("--qa-wiki", type=str)
+    data.add_argument("--qlever-wikidata", type=str)
+    # data.add_argument("--time-questions", type=str)
+    # data.add_argument("--cron-questions", type=str)
+    # data.add_argument("--mkqa", type=str)
+    # data.add_argument("--mintaka", type=str)
 
     # freebase
-    data.add_argument("--graph-questions", type=str)
-    data.add_argument("--wqsp", type=str)
-    data.add_argument("--complex-web-questions", type=str)
-    data.add_argument("--freebase-simple-questions", type=str)
-    data.add_argument("--30mqa", type=str)
+    data.add_argument("--grail-qa", action="store_true")
+    data.add_argument("--wqsp", action="store_true")
+    data.add_argument("--cwq", action="store_true")
     data.add_argument("--cfq", type=str)
-    data.add_argument("--grail-qa", type=str)
-    data.add_argument("--freebase-qa", type=str)
+    # data.add_argument("--freebase-simple-questions", type=str)
+    # data.add_argument("--30mqa", type=str)
+    # data.add_argument("--graph-questions", type=str)
 
     # dbpedia
-    data.add_argument("--lc-quad2-dbpedia", type=str)
-    data.add_argument("--qald-9-plus", type=str)
-    data.add_argument("--simple-dbpedia-qa", type=str)
-    data.add_argument("--mlpq", type=str)
-    data.add_argument("--monument", type=str)
+    data.add_argument("--lc-quad1-dbpedia", action="store_true")
+    data.add_argument("--qald-9", action="store_true")
+    # data.add_argument("--simple-dbpedia-qa", type=str)
+    # data.add_argument("--mlpq", type=str)
+    # data.add_argument("--monument", type=str)
+
+    # dblp
+    data.add_argument("--dblp-quad", action="store_true")
 
     parser.add_argument("--output", type=str, required=True)
     parser.add_argument("--entities", type=str, required=True)
@@ -122,9 +125,9 @@ SPLIT_RENAME = {
 
 def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
     output = {}
-    if args.wikidata_simple_questions is not None:
+    if args.wikidata_simple_questions:
         kg = "wikidata"
-        data = load_dataset(args.wikidata_simple_questions)
+        data = load_dataset("third_party/KGQA-datasets/simple_wikidata_qa")
         for split, items in data.items():
             split = SPLIT_RENAME.get(split, split)
             assert split in {"train", "val", "test"}
@@ -154,9 +157,30 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
                 samples.append(Sample(query, sparql))
             output[split] = samples
 
-    elif args.qald_10 is not None:
+    elif args.lc_quad2_wikidata:
         kg = "wikidata"
-        data = load_dataset(args.qald_10)
+        data = load_dataset(
+            "third_party/KGQA-datasets/lcquad_v2",
+            "lcquad2-wikidata"
+        )
+        for split, items in data.items():
+            split = SPLIT_RENAME.get(split, split)
+            assert split in {"train", "val", "test"}
+            samples = []
+            for item in items:
+                queries = [item["question"]]
+                sparql = item["sparql"]
+                for pq in item["paraphrased_question"]:
+                    queries.append(pq)
+                for q in queries:
+                    if q is None or q.strip() == "" or "{" in q or "}" in q:
+                        continue
+                    samples.append(Sample(q, sparql))
+            output[split] = samples
+
+    elif args.qald_10:
+        kg = "wikidata"
+        data = load_dataset("third_party/KGQA-datasets/qald/qald-10.py")
         for split, items in data.items():
             split = SPLIT_RENAME.get(split, split)
             assert split in {"train", "val", "test"}
@@ -174,26 +198,7 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
 
             output[split] = samples
 
-    elif args.lc_quad2_wikidata is not None:
-        kg = "wikidata"
-        data = load_dataset(args.lc_quad2_wikidata, "lcquad2-wikidata")
-        for split, items in data.items():
-            split = SPLIT_RENAME.get(split, split)
-            assert split in {"train", "val", "test"}
-            samples = []
-            for item in items:
-                queries = [item["question"]]
-                sparql = item["sparql"]
-                for pq in item["paraphrased_question"]:
-                    queries.append(pq)
-                for q in queries:
-                    if q is None or q.strip() == "" or "{" in q or "}" in q:
-                        continue
-                    samples.append(Sample(q, sparql))
-            output[split] = samples
-
     elif args.mcwq is not None:
-        # todo: load this with kqa datasets
         kg = "wikidata"
         with open(os.path.join(args.mcwq, "dataset.json"), "r") as inf:
             train_data = json.load(inf)
@@ -226,6 +231,20 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
                 samples.append(Sample(query, sparql))
             output[split] = samples
 
+    elif args.kqa_pro is not None:
+        raise NotImplementedError
+        # kg = "wikidata"
+        # for split in ["train", "val", "test"]:
+        #     file = os.path.join(args.kqa_pro, f"{split}.json")
+        #     with open(file, "r") as inf:
+        #         data = json.load(inf)
+        #
+        #     for item in data:
+        #         query = item["question"]
+        #         sparql = item.get("sparql", "")
+        #         samples.append(Sample(query, sparql))
+        #     output[split] = samples
+
     elif args.qa_wiki is not None:
         kg = "wikidata"
         samples = []
@@ -236,10 +255,22 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
                 samples.append(Sample(query, sparql))
         output["train"] = samples
 
-    elif args.grail_qa is not None:
-        kg = "freebase"
+    elif args.qlever_wikidata is not None:
+        kg = "wikidata"
         samples = []
-        data = load_dataset(args.grail_qa, "grail_qa")
+        with open(args.qlever_wikidata, "r") as inf:
+            for line in inf:
+                line = line.strip()
+                query, sparql = line.split("\t")
+                samples.append(Sample(query, sparql))
+        output["train"] = samples
+
+    elif args.grail_qa:
+        kg = "freebase"
+        data = load_dataset(
+            "third_party/KGQA-datasets/grail_qa",
+            "grail_qa"
+        )
 
         output["train"] = [
             Sample(item["question"], item["sparql_query"])
@@ -250,11 +281,134 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
             for item in data["validation"]
         ]
 
-        data = load_dataset(args.grail_qa, "grailqa_test_public")
+        data = load_dataset(
+            "third_party/KGQA-datasets/grail_qa",
+            "grailqa_test_public"
+        )
         output["test"] = [
             Sample(item["question"], "")
             for item in data["test"]
         ]
+
+    elif args.wqsp:
+        data = load_dataset("third_party/KGQA-datasets/webqsp")
+        kg = "freebase"
+        for split, items in data.items():
+            split = SPLIT_RENAME.get(split, split)
+            assert split in {"train", "val", "test"}
+            samples = []
+            for item in items:
+                for sparql in item["Parses"]["Sparql"]:
+                    samples.append(Sample(
+                        item["RawQuestion"],
+                        sparql
+                    ))
+            output[split] = samples
+
+    elif args.cwq:
+        data = load_dataset(
+            "third_party/KGQA-datasets/complex_web_questions",
+            "complex_web_questions"
+        )
+        kg = "freebase"
+        for split, items in data.items():
+            split = SPLIT_RENAME.get(split, split)
+            assert split in {"train", "val", "test"}
+            samples = []
+            for item in items:
+                samples.append(Sample(
+                    item["question"],
+                    item["sparql"]
+                ))
+            output[split] = samples
+
+        data = load_dataset(
+            "third_party/KGQA-datasets/complex_web_questions",
+            "complexwebquestions_test"
+        )
+        output["test"] = [
+            Sample(item["question"], item["sparql"])
+            for item in data["test"]
+        ]
+
+    elif args.cfq is not None:
+        kg = "freebase"
+        split = os.path.join(args.cfq, "splits", "random_split.json")
+        dataset = os.path.join(args.cfq, "dataset.json")
+        with open(split, "r") as inf:
+            split = json.load(inf)
+
+        with open(dataset, "r") as inf:
+            data = json.load(inf)
+
+        for s in ["train", "dev", "test"]:
+            indices = split[f"{s}Idxs"]
+            s = SPLIT_RENAME.get(s, s)
+            samples = []
+            for idx in indices:
+                item = data[idx]
+                samples.append(Sample(
+                    item["question"],
+                    item["sparql"].replace(" ns:", " fb:")
+                ))
+            output[s] = samples
+
+    elif args.lc_quad1_dbpedia:
+        kg = "dbpedia"
+        data = load_dataset(
+            "third_party/KGQA-datasets/lcquad_v1",
+            "lcquad"
+        )
+        for split, items in data.items():
+            split = SPLIT_RENAME.get(split, split)
+            assert split in {"train", "val", "test"}
+            samples = []
+            for item in items:
+                samples.append(Sample(
+                    item["corrected_question"].replace(" ?", "?"),
+                    item["sparql_query"]
+                ))
+            output[split] = samples
+
+    elif args.qald_9:
+        kg = "dbpedia"
+        data = load_dataset("third_party/KGQA-datasets/qald/qald-9.py")
+        for split, items in data.items():
+            split = SPLIT_RENAME.get(split, split)
+            assert split in {"train", "val", "test"}
+            samples = []
+            for item in items:
+                sparql = item["query"]["sparql"]
+                queries = [
+                    q["string"]
+                    for q in json.loads(item["question"])
+                    if q["language"] == "en"
+                ]
+
+                for q in queries:
+                    samples.append(Sample(q, sparql))
+
+            output[split] = samples
+
+    elif args.dblp_quad:
+        kg = "dblp"
+        data = load_dataset("awalesushil/DBLP-QuAD")
+        for split, items in data.items():
+            split = SPLIT_RENAME.get(split, split)
+            assert split in {"train", "val", "test"}
+            samples = []
+            for item in items:
+                if split != "train" and not item["held_out"]:
+                    continue
+                samples.append(Sample(
+                    item["question"]["string"],
+                    item["query"]["sparql"]
+                ))
+                samples.append(Sample(
+                    item["paraphrased_question"]["string"],
+                    item["query"]["sparql"]
+                ))
+            output[split] = samples
 
     else:
         raise RuntimeError("unknown dataset")
@@ -588,7 +742,7 @@ def prepare_sample(
 ) -> tuple[str, str, list[tuple[str | Chat, str]]] | None:
     # clean sparql in sample
     sample = Sample(
-        sample.question,
+        clean(sample.question),
         clean(sample.sparql),
     )
 
@@ -621,6 +775,8 @@ def prepare_sample(
 def prepare(args: argparse.Namespace):
     random.seed(args.seed)
     kg, data = load_data(args)
+    num_samples = {s: len(samples) for s, samples in data.items()}
+    print(f"Number of raw samples: {num_samples}")
 
     ent_indices = []
     prop_indices = []

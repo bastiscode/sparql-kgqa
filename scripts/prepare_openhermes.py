@@ -13,8 +13,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def prepare(args: argparse.Namespace) -> None:
-    input_file = os.path.join(args.output, "train_input.txt")
-    target_file = os.path.join(args.output, "train_target.txt")
+    input_file = os.path.join(args.output, "train_input.jsonl")
+    target_file = os.path.join(args.output, "train_target.jsonl")
     if os.path.exists(input_file) and os.path.exists(target_file):
         print("already exists")
         return

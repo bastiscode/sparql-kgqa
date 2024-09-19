@@ -50,7 +50,7 @@ data:
 	--properties $(WD_PROP) \
 	--progress
 	@echo "Preparing qa wiki"
-	@python scripts/prepare_data.py \
+	@python scripts/prepare_data2.py \
 	--qa-wiki data/raw/qa_wiki/qa_wiki.tsv \
 	--output data/wikidata-qa-wiki \
 	--entities $(WD_ENT) \
