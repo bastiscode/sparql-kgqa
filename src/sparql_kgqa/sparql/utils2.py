@@ -895,6 +895,7 @@ Answer: (?:yes|no)"""
         k: int,
         max_candidates: int | None = None,
         endpoint: str | None = None,
+        max_retries: int = 1,
         **kwargs: Any
     ) -> list[Alternative] | None:
         try:
@@ -903,6 +904,7 @@ Answer: (?:yes|no)"""
                 endpoint,
                 max_candidates + 1
                 if max_candidates is not None else None,
+                max_retries
             )
         except Exception as e:
             LOGGER.debug(

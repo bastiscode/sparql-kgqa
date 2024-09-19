@@ -1,10 +1,12 @@
 import argparse
+import logging
 import random
 import os
 import re
 import json
 import collections
 from typing import Any
+import multiprocessing as mp
 
 from search_index import PrefixIndex, QGramIndex, normalize
 from search_index.index import SearchIndex
@@ -20,7 +22,6 @@ from sparql_kgqa.sparql.utils2 import (
     clean,
     format_obj_type,
     load_index_and_mapping,
-    run_parallel
 )
 
 
@@ -65,6 +66,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--properties", type=str, required=True)
     parser.add_argument("--progress", action="store_true")
     parser.add_argument("--skip", nargs="+", default=[])
+    parser.add_argument("--qlever-endpoint", type=str, default=None)
     sample_group = parser.add_argument_group("samples")
     sample_group.add_argument(
         "--max-questions",
@@ -655,7 +657,9 @@ def prepare_stages(
             obj_type,
             search,
             selection_k,
-            max_candidates=16384
+            max_candidates=16384,
+            endpoint=args.qlever_endpoint,
+            max_retries=3
         )
         if alts is None:
             alts = []
@@ -736,10 +740,12 @@ def prepare_stages(
 
 def prepare_sample(
     sample: Sample,
-    managers: list[KgManager],
+    # managers: list[KgManager],
     args: argparse.Namespace,
     split: str
 ) -> tuple[str, str, list[tuple[str | Chat, str]]] | None:
+    global managers
+
     # clean sparql in sample
     sample = Sample(
         clean(sample.question),
@@ -772,11 +778,16 @@ def prepare_sample(
     return sample.question, raw_sparql, sparqls
 
 
-def prepare(args: argparse.Namespace):
+def prepare_sample_mp(args: tuple[Sample, argparse.Namespace, str]):
+    return prepare_sample(*args)
+
+
+managers = []
+
+
+def init(kg: str, args: argparse.Namespace):
+    global managers
     random.seed(args.seed)
-    kg, data = load_data(args)
-    num_samples = {s: len(samples) for s, samples in data.items()}
-    print(f"Number of raw samples: {num_samples}")
 
     ent_indices = []
     prop_indices = []
@@ -793,7 +804,6 @@ def prepare(args: argparse.Namespace):
         ent_indices.append((ent_index, ent_mapping))
         prop_indices.append((prop_index, prop_mapping))
 
-    managers = []
     for ent, prop in zip(ent_indices, prop_indices):
         ent_index, ent_mapping = ent
         prop_index, prop_mapping = prop
@@ -806,7 +816,26 @@ def prepare(args: argparse.Namespace):
         )
         managers.append(manager)
 
+
+def prepare(args: argparse.Namespace):
+    logging.basicConfig(
+        format="[%(asctime)s] {%(name)s - %(levelname)s} %(message)s",
+        level=logging.DEBUG
+    )
+    kg, data = load_data(args)
+    num_samples = {s: len(samples) for s, samples in data.items()}
+    print(f"Number of raw samples: {num_samples}")
+
     os.makedirs(args.output, exist_ok=True)
+
+    if args.num_workers is None:
+        args.num_workers = mp.cpu_count()
+
+    pool = mp.Pool(
+        args.num_workers,
+        initializer=init,
+        initargs=(kg, args)
+    )
 
     for split, samples in data.items():
         if split in args.skip:
@@ -837,13 +866,10 @@ def prepare(args: argparse.Namespace):
                 open(target, "w") as tf, \
                 open(raw, "w") as rf:
             for output in tqdm(
-                # run_parallel(
-                #     prepare_sample,
-                #     ((sample, managers, args, split) for sample in samples),
-                #     args.num_workers,
-                # ),
-                (prepare_sample(sample, managers, args, split)
-                 for sample in samples),
+                pool.imap(
+                    prepare_sample_mp,
+                    ((sample, args, split) for sample in samples)
+                ),  # type: ignore
                 desc=f"processing and writing {split} samples",
                 leave=False,
                 total=len(samples),
