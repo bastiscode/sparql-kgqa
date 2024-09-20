@@ -937,8 +937,7 @@ String
 iri
     : 'IRIREF' 
     | PrefixedName
-    | 'KGE'
-    | 'KGP'
+    | 'KGS'
     ;
 
 PrefixedName

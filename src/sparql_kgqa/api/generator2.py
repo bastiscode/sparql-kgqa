@@ -428,40 +428,38 @@ class SPARQLGenerator(TextProcessor):
             elif s == "sparql":
                 # continue with sparql query
                 failed = set(
-                    continuation + format_obj_type(obj_type)
-                    for continuation, obj_type in failures()
+                    continuation + search_token
+                    for continuation, search_token in failures()
                 )
-                continuation, obj_type = yield from self._continue_sparql(
+                continuation, search_token = yield from self._continue_sparql(
                     question,
                     prefix("sparql"),
                     prefix("natural"),
                     failed
                 )
-                if continuation + format_obj_type(obj_type) in failed:
+                if continuation + search_token in failed:
                     if current:
                         backtrack()
                     else:
                         # cannot backtrack, return empty sparql
                         break
                 else:
-                    advance((continuation, obj_type))
+                    advance((continuation, search_token))
 
             elif s == "search":
-                _, obj_type = previous()
-                failed = set(search_query for _, search_query in failures())
+                failed = set(search_query for search_query, _ in failures())
                 search_query = self._generate_search_query(
                     question,
-                    obj_type,
                     prefix("sparql"),
                     failed
                 )
                 if search_query in failed:
                     backtrack()
                 else:
-                    advance((obj_type, search_query))
+                    advance((search_query, ""))
 
             else:
-                obj_type, search_query = previous()
+                search_query, _ = previous()
                 failed = set(
                     identifier
                     for identifier, _ in failures()
@@ -470,7 +468,6 @@ class SPARQLGenerator(TextProcessor):
                     question,
                     prefix("sparql"),
                     prefix("natural"),
-                    obj_type,
                     search_query,
                     failed
                 )
@@ -602,14 +599,12 @@ class SPARQLGenerator(TextProcessor):
     def _generate_search_query(
         self,
         question: str,
-        obj_type: str,
         prefix: str,
         failures: set[str] | None = None
     ) -> str:
         assert self._manager is not None, "kg indices not set"
         prompt, regex = self._manager.get_search_prompt_and_regex(
             question,
-            obj_type,
             prefix,
             failures
         )
@@ -641,7 +636,6 @@ class SPARQLGenerator(TextProcessor):
         question: str,
         sparql_prefix: str,
         natural_prefix: str,
-        obj_type: str,
         search_query: str,
         failures: set[str] | None = None,
     ) -> tuple[str, str] | None:
@@ -649,7 +643,6 @@ class SPARQLGenerator(TextProcessor):
 
         alternatives = self._manager.get_selection_alternatives(
             sparql_prefix,
-            obj_type,
             search_query,
             self._k,
             self._max_candidates
@@ -660,7 +653,6 @@ class SPARQLGenerator(TextProcessor):
         prompt, regex = self._manager.get_selection_prompt_and_regex(
             question,
             natural_prefix,
-            obj_type,
             search_query,
             alternatives,
             max_aliases=self._max_aliases,

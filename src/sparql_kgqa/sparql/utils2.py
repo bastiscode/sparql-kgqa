@@ -45,6 +45,18 @@ def load_sparql_grammar() -> tuple[str, str]:
     return sparql_grammar, sparql_lexer
 
 
+def load_iri_and_literal_grammar() -> tuple[str, str]:
+    iri_and_literal_grammar = resources.read_text(
+        "sparql_kgqa.sparql.grammar",
+        "iri_literal.y"
+    )
+    iri_and_literal_lexer = resources.read_text(
+        "sparql_kgqa.sparql.grammar",
+        "iri_literal.l"
+    )
+    return iri_and_literal_grammar, iri_and_literal_lexer
+
+
 def is_prefix_of_iri(prefix: str, iri: str) -> bool:
     # find / necessary becuase some prefixes are prefixes of each other,
     # e.g. <http://www.wikidata.org/entity/
@@ -57,12 +69,14 @@ class Alternative:
         self,
         label: str,
         identifier: str,
+        short_identifier: str | None = None,
         variants: list[str] | None = None,
         aliases: list[str] | None = None,
         infos: list[str] | None = None
     ) -> None:
         self.label = label
         self.identifier = identifier
+        self.short_identifier = short_identifier
         self.aliases = aliases
         self.variants = variants
         self.infos = infos
@@ -86,8 +100,13 @@ class Alternative:
             )
             alias_str = ", ".join(aliases)
             s += f", also known as {alias_str}"
-        if self.variants:
+
+        if self.short_identifier and self.variants:
+            s += f" ({self.short_identifier}, {'|'.join(self.variants)})"
+        elif self.variants:
             s += f" ({'|'.join(self.variants)})"
+        elif self.short_identifier:
+            s += f" ({self.short_identifier})"
         return s
 
     def get_regex(self) -> str:
@@ -240,7 +259,12 @@ class KgManager:
             sparql_grammar,
             sparql_lexer,
         )
-        self.search_pattern = re.compile(r"<\|(entity|property)\|>")
+        literal_grammar, literal_lexer = load_iri_and_literal_grammar()
+        self.iri_literal_parser = grammar.LR1Parser(
+            literal_grammar,
+            literal_lexer
+        )
+        self.search_pattern = re.compile(r"<\|search\|>")
 
     def get_constraint(
         self,
@@ -287,13 +311,11 @@ class KgManager:
     ) -> set[str] | None:
         """
         Autocomplete the SPARQL prefix,
-        run it against Qlever and return the entities or
-        properties that can come next.
+        run it against Qlever and return the IRIs
+        and literals that can come next.
         Assumes that the prefix is a valid SPARQL prefix
-        ending with <|entity|> or <|property|>.
+        ending with <|search|>
         """
-        look_for = ["KGE", "KGP"]
-
         parse, _ = self.parser.prefix_parse(
             prefix.encode(),
             skip_empty=False,
@@ -352,11 +374,11 @@ class KgManager:
         var = uuid.uuid4().hex
         assert len(second["children"]) == 3
         prop, obj, _ = second["children"]
-        if subj["name"] in look_for:
+        if subj["name"] == "<|search|>":
             # subject can be anything
             return None
 
-        elif prop["name"] in look_for:
+        elif prop["name"] == "<|search|>":
             # property
             prop["name"] = "VAR1"
             prop["value"] = f"?{var}"
@@ -364,7 +386,7 @@ class KgManager:
             obj_var = uuid.uuid4().hex
             obj["value"] = f"?{obj_var}"
 
-        elif obj["name"] in look_for:
+        elif obj["name"] == "<|search|>":
             # object
             obj["name"] = "VAR1"
             obj["value"] = f"?{var}"
@@ -578,25 +600,35 @@ Answer: (?:yes|no)"""
         exp_start = judgement.find(exp)
         if exp_start == -1:
             return "", True
+
         exp_start += len(exp)
         exp_end = judgement.find("\n", exp_start)
         if exp_end == -1:
             return "", True
+
         explanation = judgement[exp_start:exp_end].strip()
         ans = "Answer: "
         ans_start = judgement.find(ans, exp_end)
         if ans_start == -1:
             return explanation, True
+
         ans_start += len(ans)
         answer = judgement[ans_start:].strip()
         return explanation, answer == "yes"
 
-    def find_longest_prefix(self, iri: str) -> tuple[str, str] | None:
+    def find_longest_prefix(
+        self,
+        iri: str,
+        prefixes: dict[str, str] | None = None
+    ) -> tuple[str, str] | None:
         return next(
             iter(sorted(
                 filter(
                     lambda pair: is_prefix_of_iri(pair[1], iri),
-                    (self.prefixes | self.custom_prefixes).items()
+                    (
+                        prefixes
+                        or (self.prefixes | self.custom_prefixes)
+                    ).items()
                 ),
                 key=lambda pair: len(pair[1]),
                 reverse=True
@@ -701,11 +733,7 @@ Answer: (?:yes|no)"""
 
         return parse_to_string(parse) + rest_str
 
-    def replace_iri(
-        self,
-        parse: dict[str, Any],
-        replacement: str = "label"
-    ) -> bool:
+    def replace_iri(self, parse: dict[str, Any]) -> bool:
         assert parse["name"] == "iri", "obj is not an iri parse tree"
         child = parse["children"][0]
         is_in_kg = False
@@ -714,22 +742,27 @@ Answer: (?:yes|no)"""
             start, end = child["byte_span"]
             if start == end:
                 return False
+
             val = child["value"]
             # convert to long form
             pfx, val = val.split(":", 1)
             if pfx not in self.custom_prefixes:
                 return False
+
             val = self.custom_prefixes[pfx] + val + ">"
             is_in_kg = True
+
         elif child["name"] == "IRIREF":
             start, end = child["byte_span"]
             if start == end:
                 return False
+
             val = child["value"]
-            is_in_kg = next(filter(
-                lambda pfx: is_prefix_of_iri(pfx, val),
-                self.custom_prefixes.values()
-            ), None) is not None
+            is_in_kg = self.find_longest_prefix(
+                val,
+                self.custom_prefixes
+            ) is not None
+
         else:
             return False
 
@@ -748,37 +781,20 @@ Answer: (?:yes|no)"""
             return True
 
         key, variant = norm
-        data = index.get_row(map[key])
-        if replacement == "synonyms":
-            syns = [
-                syn for syn in
-                data.split("\t")[2].split(";;;")
-                if syn != ""
-            ]
-        else:
-            syns = []
-        syns.append(data.split("\t")[0])
-
-        label = random.choice(syns)
+        label = index.get_name(map[key])
         if variant is not None:
             label += f" ({variant})"
 
         child["name"] = "IRIREF"
         child.pop("children", None)
-        child["value"] = "<iri>"
         child["value"] = f"<{label}>"
         return False
 
     def replace_iris(
         self,
         sparql: str,
-        replacement: str = "label",
         is_prefix: bool = False
     ) -> tuple[str, bool]:
-        assert replacement in [
-            "label",
-            "synonyms"
-        ]
 
         if is_prefix:
             parse, rest = self.parser.prefix_parse(
@@ -797,7 +813,7 @@ Answer: (?:yes|no)"""
         incomplete = False
 
         for obj in find_all(parse, "iri", skip={"Prologue"}):
-            iri_incomplete = self.replace_iri(obj, replacement)
+            iri_incomplete = self.replace_iri(obj)
             incomplete |= iri_incomplete
 
         if not incomplete:
@@ -865,9 +881,9 @@ Answer: (?:yes|no)"""
 
         return parse_to_string(parse)
 
-    def build_alternatives_from_data(
+    def build_alternatives(
         self,
-        data: list[tuple[str, set[str]]]
+        data: list[tuple[str, set[str]]],
     ) -> list[Alternative]:
         alternatives: list[Alternative] = []
 
@@ -881,9 +897,9 @@ Answer: (?:yes|no)"""
             alternative = Alternative(
                 label,
                 id,
-                sorted(variants),
-                [s for s in syns.split(";;;") if s != ""],
-                [i for i in infos.split(";;;") if i != ""]
+                variants=sorted(variants),
+                aliases=[s for s in syns.split(";;;") if s != ""],
+                infos=[i for i in infos.split(";;;") if i != ""]
             )
             alternatives.append(alternative)
 
@@ -892,17 +908,16 @@ Answer: (?:yes|no)"""
     def get_selection_alternatives(
         self,
         prefix: str,
-        obj_type: str,
         search: str,
         k: int,
         max_candidates: int | None = None,
         endpoint: str | None = None,
         max_retries: int = 1,
         **kwargs: Any
-    ) -> list[Alternative] | None:
+    ) -> dict[str, list[Alternative]] | None:
         try:
             result = self.autocomplete_prefix(
-                prefix + f"<|{obj_type}|>",
+                prefix + "<|search|>",
                 endpoint,
                 max_candidates + 1
                 if max_candidates is not None else None,
@@ -915,125 +930,238 @@ Answer: (?:yes|no)"""
             )
             return None
 
-        if obj_type == "entity":
-            index = self.entity_index
-            map = self.entity_mapping
-        else:
-            index = self.property_index
-            map = self.property_mapping
+        indices = [
+            ("entity", self.entity_index, self.entity_mapping),
+            ("property", self.property_index, self.property_mapping)
+        ]
+        all_alternatives = {}
 
-        data: list[tuple[str, set[str]]] = []
         if result is None or len(result) > (max_candidates or len(result)):
             # select result being None means that there is no way
             # to constrain / filter the knowledge graph with the
             # current prefix, just search in the full index
             # with the guess;
             # we also do this if the number of results is greater
-            # than max_results, because creating an extra qgram index
+            # than max_results, because creating an extra index
             # for that would be too expensive
-            for id, _ in index.find_matches(search, **kwargs)[:k]:
-                data.append((index.get_row(id), map.default_variants()))
+            for index_type, index, map in indices:
+                data: list[tuple[str, set[str]]] = []
+                for id, _ in index.find_matches(search, **kwargs)[:k]:
+                    data.append((index.get_row(id), map.default_variants()))
+                all_alternatives[index_type] = self.build_alternatives(data)
 
-            return self.build_alternatives_from_data(data)
+            return all_alternatives
 
-        id_map = {}
-        for iri in result:
-            norm = map.normalize(iri)
-            if norm is None:
+        seen = set()
+        for index_type, index, map in indices:
+            data: list[tuple[str, set[str]]] = []
+            id_map = {}
+            for iri in result:
+                norm = map.normalize(iri)
+                if norm is None:
+                    continue
+
+                iri, variant = norm
+                if iri not in map:
+                    continue
+
+                id = map[iri]
+                if id not in id_map:
+                    id_map[id] = set()
+
+                if variant is not None:
+                    id_map[id].add(variant)
+
+                seen.add(iri)
+
+            if k < len(result):
+                # build sub index and search in it
+                sub_index = index.sub_index_by_ids(list(id_map))
+                for id, _ in sub_index.find_matches(search, **kwargs)[:k]:
+                    data.append((sub_index.get_row(id), id_map[id]))
+
+            else:
+                # we have less than or equal k results, just get all of them
+                for id, variants in id_map.items():
+                    data.append((index.get_row(id), variants))
+
+            all_alternatives[index_type] = self.build_alternatives(data)
+
+        def format_str(parse: dict) -> str:
+            if not parse["name"].startswith("STRING"):
+                return parse["value"]
+
+            if "LONG" in parse["name"]:
+                return parse["value"][3:-3]
+            return parse["value"][1:-1]
+
+        def format_iri(iri: str) -> str:
+            longest = self.find_longest_prefix(iri, self.prefixes)
+            if longest is None:
+                return iri
+
+            short, long = longest
+            return short + ":" + iri[len(long):-1]
+
+        other_alternatives = []
+        literal_alternatives = []
+        for item in result - seen:
+            try:
+                parse = self.iri_literal_parser.parse(
+                    item,
+                    skip_empty=True,
+                    collapse_single=True
+                )
+            except Exception:
                 continue
 
-            iri, variant = norm
-            if iri not in map:
-                continue
+            if parse["name"] == "IRIREF":
+                formatted = format_iri(parse["value"])
+                if formatted == item:
+                    continue
 
-            id = map[iri]
-            if id not in id_map:
-                id_map[id] = set()
+                other_alternatives.append(Alternative(
+                    formatted,
+                    item
+                ))
 
-            if variant is not None:
-                id_map[id].add(variant)
+            elif parse["name"].startswith("STRING"):
+                literal_alternatives.append(Alternative(
+                    format_str(parse["value"]),
+                    item
+                ))
 
-        if k < len(result):
-            # build sub index and search in it
-            sub_index = index.sub_index_by_ids(list(id_map))
-            for id, _ in sub_index.find_matches(search, **kwargs)[:k]:
-                data.append((sub_index.get_row(id), id_map[id]))
+            elif parse["name"] == "RDFLiteral":
+                if len(parse["children"]) == 2:
+                    # langtag
+                    s, langtag = parse["children"]
+                    literal_alternatives.append(Alternative(
+                        format_str(s),
+                        item,
+                        short_identifier=langtag["value"]
+                    ))
 
-        else:
-            # we have less than or equal k results, just get all of them
-            for id, variants in id_map.items():
-                data.append((index.get_row(id), variants))
+                elif len(parse["children"]) == 3:
+                    # datatype
+                    s, _, datatype = parse["children"]
 
-        return self.build_alternatives_from_data(data)
+                    literal_alternatives.append(Alternative(
+                        format_str(s),
+                        item,
+                        short_identifier=format_iri(datatype["value"])
+                    ))
+
+            elif parse["name"] in [
+                "INTEGER",
+                "DECIMAL",
+                "DOUBLE",
+                "true",
+                "false"
+            ]:
+                literal_alternatives.append(Alternative(
+                    item,
+                    item
+                ))
+
+        all_alternatives["other"] = other_alternatives
+        all_alternatives["literal"] = literal_alternatives
+        return all_alternatives
 
     def get_selection_prompt_and_regex(
         self,
         question: str,
         prefix: str,
-        obj_type: str,
         search_query: str,
-        alternatives: list[Alternative],
-        add_none_alternative: bool = True,
+        all_alternatives: dict[str, list[Alternative]],
         max_aliases: int = 5,
         add_infos: bool = False,
-        failures: set[str] | None = None
+        failures: set[tuple[str, str]] | None = None
     ) -> tuple[str, str]:
-        assert obj_type in {"entity", "property"}
-        prefix = prefix + "<...>"
+        prefix = prefix + "..."
 
-        counts = Counter(
-            alternative.label.lower()
-            for alternative in alternatives
-        )
-        alt_strings = []
-        alt_regexes = []
-        for i, alternative in enumerate(alternatives):
-            i_str = f"{i + 1}. "
-            alt_strings.append(i_str + alternative.get_string(
-                max_aliases,
-                # add info to non unique labels
-                add_infos or counts[alternative.label.lower()] > 1
-            ))
-            r = re.escape(i_str + alternative.label)
-            if alternative.variants:
-                r += re.escape(" (") \
-                    + "(?:" \
-                    + "|".join(re.escape(v) for v in alternative.variants) \
-                    + ")" \
-                    + re.escape(")")
-            alt_regexes.append(r)
+        all_alts = []
+        alt_idx = 0
+        obj_types = ["entity", "property", "other", "literal"]
+        for obj_type in obj_types:
+            alternatives = all_alternatives.get(obj_type, None)
+            if alternatives is None:
+                continue
 
-        if add_none_alternative:
-            alt_strings.append(
-                f"{len(alternatives) + 1}. none "
-                f"(if no other {obj_type} fits well enough)"
+            counts = Counter(
+                alternative.label.lower()
+                for alternative in alternatives
             )
-            alt_regexes.append(re.escape(f"{len(alternatives) + 1}. none"))
+            alt_strings = []
+            alt_regexes = []
+            for alternative in alternatives:
+                alt_idx_str = f"{alt_idx + 1}. "
+                alt_strings.append(alt_idx_str + alternative.get_string(
+                    max_aliases,
+                    # add info to non unique labels
+                    add_infos or counts[alternative.label.lower()] > 1
+                ))
+                r = re.escape(alt_idx_str + alternative.label)
+                if alternative.variants:
+                    vars = "|".join(
+                        re.escape(v)
+                        for v in alternative.variants
+                    )
+                    r += re.escape(" (") \
+                        + "(?:" + vars + ")" \
+                        + re.escape(")")
+                alt_regexes.append(r)
 
-        alt_string = "\n".join(alt_strings)
+            alt_idx += 1
+
+            all_alts.append((obj_type, (alt_strings, alt_regexes)))
+
+        num_alts = sum(len(alts) for _, (alts, _) in all_alts)
+
+        alt_string = "\n\n".join(
+            f"{obj_type.capitalize()} alternatives:\n" +
+            "\n".join(alt_strings)
+            for obj_type, (alt_strings, _) in all_alts
+        )
+        alt_regex = "(?:" + "|".join(
+            regex
+            for _, (_, regexes) in all_alts
+            for regex in regexes
+        )
+        alt_string += f"\n\n{num_alts + 1}. none " \
+            "(if no other alternative fits well enough)"
+        alt_regex += "|" * (num_alts > 0) + re.escape(f"{num_alts + 1}. none")
+        alt_regex += ")"
 
         failure = ""
         if failures:
-            if obj_type == "entity":
-                map = self.entity_mapping
-            else:
-                map = self.property_mapping
-
             failed = []
-            for iri in failures:
-                norm = map.normalize(iri)
-                assert norm is not None, \
-                    f"normalizing {iri} failed"
-                key, variant = norm
+            for obj_type, iri in failures:
+                key = iri
+                variant = None
+                if obj_type == "entity":
+                    norm = self.entity_mapping.normalize(iri)
+                    assert norm is not None, \
+                        f"normalizing {iri} failed"
+                    key, variant = norm
+                elif obj_type == "property":
+                    norm = self.property_mapping.normalize(iri)
+                    assert norm is not None, \
+                        f"normalizing {iri} failed"
+                    key, variant = norm
+
+                offset = sum(
+                    len(alts)
+                    for _, (alts, _) in all_alts[:obj_types.index(obj_type)]
+                )
                 nxt = next(
-                    (alt for alt in enumerate(alternatives)
+                    (alt for alt in enumerate(all_alternatives[obj_type])
                      if alt[1].identifier == key),
                     None
                 )
                 assert nxt is not None, \
                     f"could not find failed alternative {key}"
-                i, alt = nxt
-                fail = f"{i + 1}. {alt.label}"
+                idx, alt = nxt
+                fail = f"{offset + idx + 1}. {alt.label}"
                 if variant is not None:
                     assert variant in (alt.variants or []), \
                         f"variant {variant} not in {alt.variants}"
@@ -1042,21 +1170,17 @@ Answer: (?:yes|no)"""
                 failed.append(fail)
 
             failed = "\n\n".join(failed)
-            if add_none_alternative:
-                stop_action = "select the none alternative"
-            else:
-                stop_action = "output one of these again"
 
             failure = f"""
-The following {obj_type} alternatives were already tried but unsuccessful. \
-If there is no other sensible {obj_type} alternative to try, {stop_action}:
+The following alternatives were already tried but unsuccessful. \
+If there is no other sensible alternative to try, select the none alternative:
 {failed}
 """
 
         prompt = f"""\
-Select the most fitting {obj_type} alternative to continue the SPARQL \
+Select the most fitting alternative to continue the SPARQL \
 query with. The question to be answered, the current SPARQL prefix, the \
-list of possible {obj_type} alternatives and the index search query that \
+list possible alternatives and the search query that \
 returned these alternatives are given below.
 
 Question:
@@ -1065,15 +1189,14 @@ Question:
 SPARQL prefix over {self.kg}:
 {prefix}
 
-{obj_type.capitalize()} index search query:
+Search query:
 {search_query}
 
-{obj_type.capitalize()} alternatives:
 {alt_string}
 {failure}
 Selection:
 """
-        return prompt, "(?:" + "|".join(alt_regexes) + ")"
+        return prompt, alt_regex
 
     def parse_selection(
         self,
@@ -1112,30 +1235,21 @@ Selection:
     def get_search_prompt_and_regex(
         self,
         question: str,
-        obj_type: str,
         prefix: str,
         failures: set[str] | None = None
     ) -> tuple[str, str]:
-        assert obj_type in {"entity", "property"}
-        prefix = prefix + "<...>"
+        prefix = prefix + "..."
 
-        if obj_type == "entity":
-            index = self.entity_index
-            obj_type_plural = "entities"
-        else:
-            index = self.property_index
-            obj_type_plural = "properties"
-
-        if isinstance(index, PrefixIndex):
-            index_info = "keyword prefix index"
+        if isinstance(self.entity_index, PrefixIndex):
+            index_info = "keyword prefix"
             dist_info = "number of keyword matches"
         else:
-            assert isinstance(index, QGramIndex)
-            if index.distance == "ied":
+            assert isinstance(self.entity_index, QGramIndex)
+            if self.entity_index.distance == "ied":
                 dist = "substring"
             else:
                 dist = "prefix"
-            index_info = "character-level n-gram index"
+            index_info = "character-level n-gram"
             dist_info = f"{dist} distance"
 
         # only lowercase ascii + space, non-empty, up to 128 characters
@@ -1151,11 +1265,11 @@ is no other sensible search query to try, output one of these again:
             regex += "|(?:" + "|".join(re.escape(f) for f in failures) + ")"
 
         prompt = f"""\
-Generate a search query for the next {obj_type} to continue the SPARQL \
-query with. The search query will be executed over a {index_info} containing \
-possible next {obj_type_plural}. It should be short and concise, retrieving \
-{obj_type_plural} by {dist_info}. The question to be answered and \
-the current SPARQL prefix are given below.
+Generate a search query for the next IRI or literal to continue the SPARQL \
+query with. The search query will be executed over {index_info} indices \
+containing candidate IRIs and literals. It should be short and \
+concise, retrieving candidates by {dist_info}. The question to be answered \
+and the current SPARQL prefix are given below.
 
 Question:
 {question.strip()}
@@ -1163,7 +1277,7 @@ Question:
 SPARQL prefix over {self.kg}:
 {prefix}
 {failure}
-{obj_type.capitalize()} index search query:
+Search query:
 """
         return prompt, regex
 
@@ -1195,9 +1309,8 @@ is no other sensible continuation to try, output one of these again:
 """
         prompt = f"""\
 Continue the SPARQL prefix to answer the question either \
-until the end of the SPARQL query, \
-the next entity (<|entity|>), \
-or the next property (<|property|>).
+until the end of the SPARQL query or the next {self.kg} \
+knowledge graph search via <|search|>.
 
 Question:
 {question.strip()}
