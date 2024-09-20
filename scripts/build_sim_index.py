@@ -4,7 +4,7 @@ import pprint
 import json
 import time
 
-from sparql_kgqa import nn_index
+from sparql_kgqa.sim_index import SimilarityIndex
 
 
 def parse_args() -> argparse.Namespace:
@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
 
 def build(args: argparse.Namespace) -> None:
     if not os.path.exists(args.out) or args.overwrite:
-        index = nn_index.NnIndex(args.device)
+        index = SimilarityIndex(args.device)
         for d in args.data:
             print(f"Adding data from {d}")
             with open(d, "r") as inf:
@@ -69,7 +69,7 @@ def build(args: argparse.Namespace) -> None:
         print(f"Saved index in {end - start:.2f} seconds")
         del index
 
-    index = nn_index.NnIndex(args.device)
+    index = SimilarityIndex(args.device)
     start = time.perf_counter()
     index.load(args.out)
     end = time.perf_counter()

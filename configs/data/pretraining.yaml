@@ -1,2 +1,2 @@
-# - file(datasets/query_logs/robotic.yaml)
 - file(datasets/query_logs/organic.yaml)
+- file(datasets/open-hermes-2.5/train.yaml)

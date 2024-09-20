@@ -27,8 +27,8 @@ from sparql_kgqa.model import (
     model_from_config,
     peft_model_from_config
 )
+from sparql_kgqa.sim_index import SimilarityIndex
 from sparql_kgqa.sparql.utils import (
-    SimilarityIndex,
     load_examples,
     prettify,
     replace_entities_and_properties,
@@ -167,7 +167,7 @@ class SPARQLGenerator(TextProcessor):
     ) -> data.InferenceData:
         if not preprocessed:
             if examples is None and self._example_index is not None:
-                examples = self._example_index.top_k(
+                examples = self._example_index.find_matches(
                     text,
                     self._num_examples
                 )  # type: ignore
@@ -462,8 +462,11 @@ class SPARQLGenerator(TextProcessor):
     ) -> None:
         if example_index is not None:
             if isinstance(example_index, str):
-                example_index = SimilarityIndex.load(example_index)
-            self._example_index = example_index
+                sim_index = SimilarityIndex()
+                sim_index.load(example_index)
+                self._example_index = sim_index
+            else:
+                self._example_index = example_index
             self._examples = None
 
         elif examples is not None:

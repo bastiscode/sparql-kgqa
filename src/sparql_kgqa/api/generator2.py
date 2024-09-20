@@ -25,10 +25,8 @@ from sparql_kgqa.model import (
     model_from_config,
     peft_model_from_config
 )
-from sparql_kgqa.sparql.utils import (
-    SimilarityIndex,
-    load_examples,
-)
+from sparql_kgqa.sparql.utils import load_examples
+from sparql_kgqa.sim_index import SimilarityIndex
 from sparql_kgqa.sparql.utils2 import (
     KgManager,
     Mapping,

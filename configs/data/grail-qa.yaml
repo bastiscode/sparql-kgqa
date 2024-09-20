@@ -1,2 +1,1 @@
 - file(datasets/grail-qa/train.yaml)
-- file(datasets/grail-qa/val.yaml)

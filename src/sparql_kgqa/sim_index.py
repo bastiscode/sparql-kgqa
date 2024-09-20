@@ -3,7 +3,7 @@ from sentence_transformers import SentenceTransformer
 from sentence_transformers.util import dot_score
 
 
-class NnIndex:
+class SimilarityIndex:
     def __init__(
         self,
         device: str = "cpu",

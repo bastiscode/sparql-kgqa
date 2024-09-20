@@ -530,19 +530,20 @@ def ask_to_select(
         # ask query has a var, convert to select
         ask_query["name"] = "SelectQuery"
         # replace ASK terminal with SelectClause
-        sel_clause: list[dict[str, Any]] = [{
-            'name': 'SELECT',
-            'value': 'SELECT',
-        }]
-        if distinct:
-            sel_clause.append({
+        sel_clause = [
+            {
+                'name': 'SELECT',
+                'value': 'SELECT',
+            },
+            {
                 'name': 'DISTINCT',
-                'value': 'DISTINCT'
-            })
-        sel_clause.append({
-            'name': 'Var',
-            'value': var
-        })
+                'value': 'DISTINCT' * distinct
+            },
+            {
+                'name': 'Var',
+                'value': var
+            }
+        ]
         ask_query["children"][0] = {
             'name': 'SelectClause',
             'children': sel_clause
@@ -589,12 +590,15 @@ def ask_to_select(
                 'value': 'SELECT',
             },
             {
+                'name': 'DISTINCT',
+                'value': 'DISTINCT' * distinct
+            },
+            {
                 'name': 'Var',
                 'value': var
             }
         ],
     }
-
     return parse_to_string(parse)
 
 
@@ -1109,96 +1113,3 @@ def subgraph_constraint(
     )
     assert isinstance(result, list)
     return [r[0] for r in result]
-
-
-class SimilarityIndex:
-    def __init__(self):
-        from sentence_transformers import SentenceTransformer
-        self.model = SentenceTransformer("all-mpnet-base-v2")
-        self.dim = 768
-        self.embeddings = torch.zeros(0, self.dim, dtype=torch.float)
-        self.data = []
-        self.seen = set()
-
-    def add(
-        self,
-        examples: Examples,
-        batch_size: int = 32,
-        show_progress: bool = False
-    ):
-        unseen_examples = []
-        for query, sparql in examples:
-            sample = (query.lower(), sparql)
-            if sample in self.seen:
-                continue
-            unseen_examples.append(sample)
-            self.seen.add(sample)
-
-        embeddings = self.model.encode(
-            [query for query, _ in unseen_examples],
-            batch_size=batch_size,
-            convert_to_numpy=False,
-            convert_to_tensor=True,
-            show_progress_bar=show_progress
-        )
-        assert isinstance(embeddings, torch.Tensor)
-        self.embeddings = torch.cat([
-            self.embeddings,
-            embeddings.to(self.embeddings.device)
-        ])
-        self.data.extend(unseen_examples)
-        assert len(self.data) == self.embeddings.shape[0] \
-            and len(self.data) == len(self.seen)
-
-    def save(self, path: str):
-        torch.save(
-            {
-                "embeddings": self.embeddings,
-                "data": self.data
-            },
-            path
-        )
-
-    @staticmethod
-    def load(path: str) -> "SimilarityIndex":
-        index = SimilarityIndex()
-        data = torch.load(path)
-        index.embeddings = data["embeddings"]
-        index.data = data["data"]
-        index.seen = set(index.data)
-        return index
-
-    def top_k(
-        self,
-        query: str | list[str],
-        k: int = 5,
-        batch_size: int = 32
-    ) -> Examples | list[Examples]:
-        is_batched = True
-        if isinstance(query, str):
-            is_batched = False
-            query = [query]
-
-        # lowercase to be consistent with the embeddings
-        query = [q.lower() for q in query]
-
-        query_embedding = self.model.encode(
-            query,
-            batch_size=batch_size,
-            convert_to_numpy=False,
-            convert_to_tensor=True
-        )
-        assert isinstance(query_embedding, torch.Tensor)
-        similarities = self.model.similarity(
-            query_embedding.to(self.embeddings.device),
-            self.embeddings
-        )
-        top_k = torch.topk(similarities, min(k, similarities.shape[-1]))
-        top_k_samples = [
-            [self.data[i] for i in indices]
-            for indices in top_k.indices.tolist()
-        ]
-        if is_batched:
-            return top_k_samples
-        else:
-            return top_k_samples[0]

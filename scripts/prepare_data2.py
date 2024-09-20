@@ -820,7 +820,7 @@ def init(kg: str, args: argparse.Namespace):
 def prepare(args: argparse.Namespace):
     logging.basicConfig(
         format="[%(asctime)s] {%(name)s - %(levelname)s} %(message)s",
-        level=logging.DEBUG
+        level=logging.INFO
     )
     kg, data = load_data(args)
     num_samples = {s: len(samples) for s, samples in data.items()}
@@ -831,6 +831,7 @@ def prepare(args: argparse.Namespace):
     if args.num_workers is None:
         args.num_workers = min(mp.cpu_count(), 8)
 
+    print(f"Starting {args.num_workers} workers")
     pool = mp.Pool(
         args.num_workers,
         initializer=init,

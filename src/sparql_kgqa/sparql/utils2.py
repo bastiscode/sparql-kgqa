@@ -874,8 +874,10 @@ Answer: (?:yes|no)"""
         for line, variants in data:
             label, _, syns, id, infos = line.rstrip("\r\n").split("\t")
 
-            assert all(alt.identifier != id for alt in alternatives), \
-                f"duplicate identifier {id} in data"
+            assert all(
+                alt.identifier != id
+                for alt in alternatives
+            ), f"duplicate identifier {id} in data"
             alternative = Alternative(
                 label,
                 id,
@@ -932,41 +934,35 @@ Answer: (?:yes|no)"""
             for id, _ in index.find_matches(search, **kwargs)[:k]:
                 data.append((index.get_row(id), map.default_variants()))
 
-        elif k < len(result):
-            # build a sub index and find matches in it
-            id_map = {}
-            for iri in result:
-                norm = map.normalize(iri)
-                if norm is None:
-                    continue
-                iri, variant = norm
-                if iri not in map:
-                    continue
+            return self.build_alternatives_from_data(data)
 
-                id = map[iri]
-                if id not in id_map:
-                    id_map[id] = set()
+        id_map = {}
+        for iri in result:
+            norm = map.normalize(iri)
+            if norm is None:
+                continue
 
-                if variant is not None:
-                    id_map[id].add(variant)
+            iri, variant = norm
+            if iri not in map:
+                continue
 
+            id = map[iri]
+            if id not in id_map:
+                id_map[id] = set()
+
+            if variant is not None:
+                id_map[id].add(variant)
+
+        if k < len(result):
+            # build sub index and search in it
             sub_index = index.sub_index_by_ids(list(id_map))
             for id, _ in sub_index.find_matches(search, **kwargs)[:k]:
                 data.append((sub_index.get_row(id), id_map[id]))
 
         else:
-            # we have less than k result, just get all of them
-            for iri in result:
-                norm = map.normalize(iri)
-                if norm is None:
-                    continue
-                iri, variant = norm
-                if iri not in map:
-                    continue
-                data.append((
-                    index.get_row(map[iri]),
-                    set() if variant is None else {variant}
-                ))
+            # we have less than or equal k results, just get all of them
+            for id, variants in id_map.items():
+                data.append((index.get_row(id), variants))
 
         return self.build_alternatives_from_data(data)
 

@@ -24,9 +24,7 @@ def prepare(args: argparse.Namespace) -> None:
     with open(input_file, "w") as input_f, open(target_file, "w") as target_f:
         for sample in tqdm(dataset, "preparing OpenHermes 2.5", leave=False):
             assert isinstance(sample, dict)
-            if sample["system_prompt"] is not None:
-                continue
-            elif len(sample["conversations"]) < 2:
+            if len(sample["conversations"]) < 2:
                 continue
 
             chat = []
