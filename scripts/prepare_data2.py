@@ -80,11 +80,6 @@ def parse_args() -> argparse.Namespace:
         default=1
     )
     sample_group.add_argument(
-        "--sample-dropout",
-        type=float,
-        default=0.1
-    )
-    sample_group.add_argument(
         "--selections-min-k",
         type=int,
         default=8
@@ -581,6 +576,16 @@ def prepare_stages(
         if processed is not None
     ]
 
+    # randomly drop items with type other or literal
+    # such that some continuations are trained to
+    # predict them directly rather than searching for them
+    items = [
+        (item, processed)
+        for item, processed in items
+        if processed[0] not in ["other", "literal"]
+        or random.random() > 0.2
+    ]
+
     samples = []
     for item_idx in random.sample(
         list(range(len(items))),
@@ -593,8 +598,12 @@ def prepare_stages(
         assert end >= start, "invalid span"
         obj_type, identifier, variant, label, syns = processed
 
-        prefix_raw = sparql_encoded[:start].decode()
         try:
+            prefix_raw = manager.fix_prefixes(
+                sparql_encoded[:start].decode(),
+                is_prefix=True,
+                remove_known=True,
+            )
             prefix, _ = manager.replace_iris(
                 prefix_raw,
                 is_prefix=True
@@ -605,18 +614,36 @@ def prepare_stages(
         if item_idx > 0:
             last, _ = items[item_idx - 1]
             (_, last_end) = span(last)
-            last_prefix_raw = sparql_encoded[:last_end].decode()
+            assert last_end < start, "invalid item order"
+            last_prefix_raw = manager.fix_prefixes(
+                sparql_encoded[:last_end].decode(),
+                is_prefix=True,
+                remove_known=True
+            )
             last_prefix, _ = manager.replace_iris(
                 last_prefix_raw,
                 is_prefix=True
             )
         else:
             last_prefix = ""
+            last_end = 0
+
+        continuation = sparql_encoded[last_end:start].decode() + SEARCH_TOKEN
+        continuation_prompt = manager.get_sparql_continuation_prompt(
+            question,
+            last_prefix
+        )
+        samples.append((continuation_prompt, continuation))
 
         if item_idx == len(items) - 1:
             # add additional continuation sample for the end of the query
-            final_prefix, _ = manager.replace_iris(
+            final_prefix_raw = manager.fix_prefixes(
                 sparql_encoded[:end].decode(),
+                is_prefix=True,
+                remove_known=True
+            )
+            final_prefix, _ = manager.replace_iris(
+                final_prefix_raw,
                 is_prefix=True
             )
             final_continuation = sparql_encoded[end:].decode()
@@ -625,13 +652,6 @@ def prepare_stages(
                 final_prefix
             )
             samples.append((final_continuation_prompt, final_continuation))
-
-        continuation_prompt = manager.get_sparql_continuation_prompt(
-            question,
-            last_prefix
-        )
-        continuation = prefix[len(last_prefix):] + SEARCH_TOKEN
-        samples.append((continuation_prompt, continuation))
 
         random.shuffle(syns)
         all_syns = [label] + syns
@@ -687,14 +707,14 @@ def prepare_stages(
             alt
             for alt in alts.get(obj_type, [])
             if (alt.identifier == identifier
-                or (obj_type == "literal" and alt.label == label))
+                or (obj_type in ["literal", "other"] and alt.label == label))
             and (variant is None or variant in (alt.variants or []))
         ]
         target_alt = random.choice(target_alts) if target_alts else None
 
         select_failures = set()
 
-        drop_alt = random.random() < args.sample_dropout
+        drop_alt = random.random() < 0.1
         if target_alt is not None and drop_alt:
             # differentiate between dropping the target from
             # the list of alternatives entirely or only adding the
@@ -777,7 +797,10 @@ def prepare_sample(
     manager = random.choice(managers)
 
     try:
-        raw_sparql = manager.fix_prefixes(sample.sparql)
+        raw_sparql = manager.fix_prefixes(
+            sample.sparql,
+            remove_known=True
+        )
     except Exception:
         return None
 

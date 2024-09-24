@@ -638,7 +638,8 @@ Answer: (?:yes|no)"""
     def fix_prefixes(
         self,
         sparql: str,
-        is_prefix: bool = False
+        is_prefix: bool = False,
+        remove_known: bool = False
     ) -> str:
         if is_prefix:
             parse, rest = self.parser.prefix_parse(
@@ -673,6 +674,7 @@ Answer: (?:yes|no)"""
             second = prefix_decl["children"][2]["value"]
             if first == "" or second == "":
                 continue
+
             short = first.split(":", 1)[0]
             long = second[:-1]
             exist[short] = long
@@ -712,10 +714,12 @@ Answer: (?:yes|no)"""
         prologue["children"] = base_decls
 
         for pfx in seen:
-            if pfx in exist:
-                long = exist[pfx]
-            elif pfx in prefixes:
+            if pfx in prefixes:
+                if remove_known:
+                    continue
                 long = prefixes[pfx]
+            elif pfx in exist:
+                long = exist[pfx]
             else:
                 continue
 
