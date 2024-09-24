@@ -662,7 +662,7 @@ def prepare_stages(
             for obj_type, obj_alts in alts.items()
             for alt in obj_alts
             if alt.identifier == identifier
-            and (variant is None or variant in alt.variants)
+            and (variant is None or variant in (alt.variants or []))
         ]
         target_alt = random.choice(target_alts) if target_alts else None
 
