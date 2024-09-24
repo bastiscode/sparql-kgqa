@@ -504,11 +504,11 @@ def prepare_stages(
         if obj["name"] in ["RDFLiteral", "NumericLiteral"]:
             child = obj["children"][0]["children"][0]
             label = child["value"].strip("'").strip('"')
-            return label, None, label, []
+            return "literal", label, None, label, []
 
         if obj["name"] == "BooleanLiteral":
             label = obj["children"][0]["children"][0]
-            return label, None, label, []
+            return "literal", label, None, label, []
 
         if obj["name"] != "iri":
             return None
@@ -523,7 +523,7 @@ def prepare_stages(
 
         pfx, val = child["value"].split(":", 1)
         if pfx in manager.prefixes:
-            return child["value"], None, child["value"], []
+            return "other", child["value"], None, child["value"], []
 
         elif pfx in manager.custom_prefixes:
             # check whether the iri is a valid entity or property
@@ -549,7 +549,8 @@ def prepare_stages(
             if not matching:
                 return None
 
-            return next(val for val in matching.values())
+            obj_type, nxt = next(val for val in matching.items())
+            return obj_type, *nxt
 
     # get all items in triples
     items = [
@@ -581,7 +582,7 @@ def prepare_stages(
 
         start, end = span(item)
         assert end >= start, "invalid span"
-        identifier, variant, label, syns = processed
+        obj_type, identifier, variant, label, syns = processed
 
         prefix_raw = sparql_encoded[:start].decode()
         try:
@@ -665,9 +666,8 @@ def prepare_stages(
             alts = {}
 
         target_alts = [
-            (obj_type, alt)
-            for obj_type, obj_alts in alts.items()
-            for alt in obj_alts
+            alt
+            for alt in alts[obj_type]
             if alt.identifier == identifier
             and (variant is None or variant in (alt.variants or []))
         ]
@@ -680,23 +680,22 @@ def prepare_stages(
             # differentiate between dropping the target from
             # the list of alternatives entirely or only adding the
             # variant to previous fails
-            target_obj_type, target_alternative = target_alt
             if random.random() < 0.5:
-                alts[target_obj_type].remove(target_alternative)
+                alts[obj_type].remove(target_alt)
             else:
-                select_failures.add((target_obj_type, identifier, variant))
+                select_failures.add((obj_type, identifier, variant))
 
             target_alt = None
 
         alts_to_fail = [
             (obj_type, alt.identifier, var)
-            for obj_type, obj_alts in alts.items()
+            for alt_obj_type, obj_alts in alts.items()
             for alt in obj_alts
             for var in (alt.variants or [None])
             if (target_alt is None
-                or alt.identifier != target_alt[1].identifier
+                or alt.identifier != target_alt.identifier
                 or var != variant)
-            and (target_alt is None or obj_type == target_alt[0])
+            and (target_alt is None or obj_type == alt_obj_type)
         ]
 
         num_select_failures = random.sample(
@@ -728,11 +727,11 @@ def prepare_stages(
             selection = f"{num_alts}. none"
         else:
             offset = sum(
-                len(alts[obj_type])
-                for obj_type in OBJ_TYPES[:OBJ_TYPES.index(target_alt[0])]
+                len(alts.get(t, []))
+                for t in OBJ_TYPES[:OBJ_TYPES.index(obj_type)]
             )
-            select_idx = offset + alts[target_alt[0]].index(target_alt[1])
-            select_name = target_alt[1].label
+            select_idx = offset + alts[obj_type].index(target_alt)
+            select_name = target_alt.label
             if variant:
                 select_name += f" ({variant})"
             selection = f"{select_idx + 1}. {select_name}"
