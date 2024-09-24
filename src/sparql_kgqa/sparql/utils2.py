@@ -732,10 +732,13 @@ Answer: (?:yes|no)"""
 
         return parse_to_string(parse) + rest_str
 
-    def replace_iri(self, parse: dict[str, Any]) -> bool:
+    def replace_iri(
+        self,
+        parse: dict[str, Any],
+        with_iri: bool = True
+    ) -> bool:
         assert parse["name"] == "iri", "obj is not an iri parse tree"
         child = parse["children"][0]
-        is_in_kg = False
         if child["name"] == "PrefixedName":
             child = child["children"][0]
             start, end = child["byte_span"]
@@ -744,35 +747,36 @@ Answer: (?:yes|no)"""
 
             val = child["value"]
             # convert to long form
-            pfx, val = val.split(":", 1)
-            if pfx not in self.custom_prefixes:
+            short, val = val.split(":", 1)
+            if short not in self.custom_prefixes:
                 return False
 
-            val = self.custom_prefixes[pfx] + val + ">"
-            is_in_kg = True
+            iri = self.custom_prefixes[short] + val + ">"
 
         elif child["name"] == "IRIREF":
             start, end = child["byte_span"]
             if start == end:
                 return False
 
-            val = child["value"]
-            is_in_kg = self.find_longest_prefix(
-                val,
+            iri = child["value"]
+            longest = self.find_longest_prefix(
+                iri,
                 self.custom_prefixes
-            ) is not None
+            )
+            if longest is None:
+                return False
+
+            short, long = longest
+            val = iri[len(long):-1]
 
         else:
             return False
 
-        if not is_in_kg:
-            return False
-
-        norm = self.entity_mapping.normalize(val)
+        norm = self.entity_mapping.normalize(iri)
         map = self.entity_mapping
         index = self.entity_index
         if norm is None or norm[0] not in map:
-            norm = self.property_mapping.normalize(val)
+            norm = self.property_mapping.normalize(iri)
             map = self.property_mapping
             index = self.property_index
 
@@ -781,7 +785,10 @@ Answer: (?:yes|no)"""
 
         key, variant = norm
         label = index.get_name(map[key])
-        if variant is not None:
+
+        if with_iri:
+            label += f" ({short}:{val})"
+        elif variant:
             label += f" ({variant})"
 
         child["name"] = "IRIREF"
@@ -792,7 +799,8 @@ Answer: (?:yes|no)"""
     def replace_iris(
         self,
         sparql: str,
-        is_prefix: bool = False
+        is_prefix: bool = False,
+        with_iri: bool = True
     ) -> tuple[str, bool]:
 
         if is_prefix:
@@ -809,10 +817,11 @@ Answer: (?:yes|no)"""
                 collapse_single=False
             )
             rest_str = ""
+
         incomplete = False
 
         for obj in find_all(parse, "iri", skip={"Prologue"}):
-            iri_incomplete = self.replace_iri(obj)
+            iri_incomplete = self.replace_iri(obj, with_iri)
             incomplete |= iri_incomplete
 
         if not incomplete:

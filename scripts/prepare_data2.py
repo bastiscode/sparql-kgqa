@@ -737,7 +737,6 @@ def prepare_stages(
 
 def prepare_sample(
     sample: Sample,
-    # managers: list[KgManager],
     args: argparse.Namespace,
     split: str
 ) -> tuple[str, str, list[tuple[str | Chat, str]]] | None:
@@ -760,7 +759,10 @@ def prepare_sample(
         return sample.question, raw_sparql, []
 
     prompt = manager.get_sparql_prompt(sample.question)
-    sparql, inc = manager.replace_iris(raw_sparql)
+    sparql, inc = manager.replace_iris(
+        raw_sparql,
+        with_iri=False
+    )
     if inc:
         return None
 
@@ -779,7 +781,7 @@ def prepare_sample_mp(args: tuple[Sample, argparse.Namespace, str]):
     return prepare_sample(*args)
 
 
-managers = []
+managers: list[KgManager] = []
 
 
 def init(kg: str, args: argparse.Namespace):
