@@ -504,11 +504,11 @@ def prepare_stages(
         if obj["name"] in ["RDFLiteral", "NumericLiteral"]:
             child = obj["children"][0]["children"][0]
             label = child["value"].strip("'").strip('"')
-            return label, None, label, [], None
+            return label, None, label, []
 
         if obj["name"] == "BooleanLiteral":
             label = obj["children"][0]["children"][0]
-            return label, None, label, [], None
+            return label, None, label, []
 
         if obj["name"] != "iri":
             return None
@@ -523,7 +523,7 @@ def prepare_stages(
 
         pfx, val = child["value"].split(":", 1)
         if pfx in manager.prefixes:
-            return child["value"], None, child["value"], [], None
+            return child["value"], None, child["value"], []
 
         elif pfx in manager.custom_prefixes:
             # check whether the iri is a valid entity or property
@@ -549,8 +549,7 @@ def prepare_stages(
             if not matching:
                 return None
 
-            nxt = next(val for val in matching.values())
-            return *nxt, {"matching": list(matching)}
+            return next(val for val in matching.values())
 
     items = [
         (item, map_item(item))
@@ -577,13 +576,16 @@ def prepare_stages(
 
         start, end = span(item)
         assert end >= start, "invalid span"
-        identifier, variant, label, syns, info = processed
+        identifier, variant, label, syns = processed
 
         prefix_raw = sparql_encoded[:start].decode()
-        prefix, _ = manager.replace_iris(
-            prefix_raw,
-            is_prefix=True
-        )
+        try:
+            prefix, _ = manager.replace_iris(
+                prefix_raw,
+                is_prefix=True
+            )
+        except Exception:
+            continue
 
         if item_idx > 0:
             last, _ = items[item_idx - 1]
