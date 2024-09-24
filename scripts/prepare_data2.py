@@ -551,14 +551,19 @@ def prepare_stages(
 
             return next(val for val in matching.values())
 
+    # get all items in triples
     items = [
         (item, map_item(item))
-        for item in find_all(
+        for triple in find_all(
             parse,
+            name="TriplesSameSubjectPath"
+        )
+        for item in find_all(
+            triple,
             name={"iri", "RDFLiteral", "NumericLiteral", "BooleanLiteral"},
-            skip={"Prologue"}
         )
     ]
+
     # filter out invalid items
     items = [
         (item, processed)
