@@ -32,7 +32,6 @@ from sparql_kgqa.sparql.utils2 import (
     Mapping,
     WikidataManager,
     Chat,
-    format_obj_type,
 )
 
 logging.getLogger("requests").setLevel(logging.WARNING)
@@ -637,8 +636,8 @@ class SPARQLGenerator(TextProcessor):
         sparql_prefix: str,
         natural_prefix: str,
         search_query: str,
-        failures: set[str] | None = None,
-    ) -> tuple[str, str] | None:
+        failures: set[tuple[str, str, str | None]] | None = None,
+    ) -> tuple[tuple[str, str, str | None], str] | None:
         assert self._manager is not None, "kg indices not set"
 
         alternatives = self._manager.get_selection_alternatives(
@@ -682,7 +681,6 @@ class SPARQLGenerator(TextProcessor):
         self.logger.debug(f"selection:\n{prompt}{selected}")
         return self._manager.parse_selection(
             alternatives,
-            obj_type,
             selected
         )
 

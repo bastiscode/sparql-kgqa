@@ -1,4 +1,6 @@
 from collections import Counter
+import time
+import tempfile
 import os
 import random
 import logging
@@ -27,6 +29,9 @@ from sparql_kgqa.sparql.utils import (
 LOGGER = logging.getLogger(__name__)
 CLEAN_PATTERN = re.compile(r"\s+", flags=re.MULTILINE)
 Chat = list[dict[str, str]]
+
+OBJ_TYPES = ["entity", "property", "other", "literal"]
+SEARCH_TOKEN = "<|search|>"
 
 
 def clean(s: str) -> str:
@@ -250,19 +255,15 @@ class KgManager:
         property_mapping: Mapping,
     ):
         self.kg = kg
+        assert entity_index.get_type() == property_index.get_type(), \
+            "entity and property index types do not match"
         self.entity_index = entity_index
         self.property_index = property_index
         self.entity_mapping = entity_mapping
         self.property_mapping = property_mapping
-        sparql_grammar, sparql_lexer = load_sparql_grammar()
-        self.parser = grammar.LR1Parser(
-            sparql_grammar,
-            sparql_lexer,
-        )
-        literal_grammar, literal_lexer = load_iri_and_literal_grammar()
+        self.parser = grammar.LR1Parser(*load_sparql_grammar())
         self.iri_literal_parser = grammar.LR1Parser(
-            literal_grammar,
-            literal_lexer
+            *load_iri_and_literal_grammar()
         )
         self.search_pattern = re.compile(r"<\|search\|>")
 
@@ -271,10 +272,8 @@ class KgManager:
         continuations: list[bytes],
         exact: bool
     ) -> grammar.LR1Constraint:
-        sparql_grammar, sparql_lexer = load_sparql_grammar()
         return grammar.LR1Constraint(
-            sparql_grammar,
-            sparql_lexer,
+            *load_sparql_grammar(),
             continuations,
             exact
         )
@@ -374,11 +373,11 @@ class KgManager:
         var = uuid.uuid4().hex
         assert len(second["children"]) == 3
         prop, obj, _ = second["children"]
-        if subj["name"] == "<|search|>":
+        if subj["name"] == "KGS":
             # subject can be anything
             return None
 
-        elif prop["name"] == "<|search|>":
+        elif prop["name"] == "KGS":
             # property
             prop["name"] = "VAR1"
             prop["value"] = f"?{var}"
@@ -386,7 +385,7 @@ class KgManager:
             obj_var = uuid.uuid4().hex
             obj["value"] = f"?{obj_var}"
 
-        elif obj["name"] == "<|search|>":
+        elif obj["name"] == "KGS":
             # object
             obj["name"] = "VAR1"
             obj["value"] = f"?{var}"
@@ -883,7 +882,7 @@ Answer: (?:yes|no)"""
 
     def build_alternatives(
         self,
-        data: list[tuple[str, set[str]]],
+        data: list[tuple[str, set[str] | None]],
     ) -> list[Alternative]:
         alternatives: list[Alternative] = []
 
@@ -897,7 +896,7 @@ Answer: (?:yes|no)"""
             alternative = Alternative(
                 label,
                 id,
-                variants=sorted(variants),
+                variants=sorted(variants) if variants else None,
                 aliases=[s for s in syns.split(";;;") if s != ""],
                 infos=[i for i in infos.split(";;;") if i != ""]
             )
@@ -917,7 +916,7 @@ Answer: (?:yes|no)"""
     ) -> dict[str, list[Alternative]] | None:
         try:
             result = self.autocomplete_prefix(
-                prefix + "<|search|>",
+                prefix + SEARCH_TOKEN,
                 endpoint,
                 max_candidates + 1
                 if max_candidates is not None else None,
@@ -930,10 +929,8 @@ Answer: (?:yes|no)"""
             )
             return None
 
-        indices = [
-            ("entity", self.entity_index, self.entity_mapping),
-            ("property", self.property_index, self.property_mapping)
-        ]
+        LOGGER.debug(f"Got {len(result or set())} results for prefix {prefix}")
+
         all_alternatives = {}
 
         if result is None or len(result) > (max_candidates or len(result)):
@@ -944,127 +941,229 @@ Answer: (?:yes|no)"""
             # we also do this if the number of results is greater
             # than max_results, because creating an extra index
             # for that would be too expensive
-            for index_type, index, map in indices:
-                data: list[tuple[str, set[str]]] = []
+            for index_type, index, map in [
+                ("entity", self.entity_index, self.entity_mapping),
+                ("property", self.property_index, self.property_mapping)
+            ]:
+                data: list[tuple[str, set[str] | None]] = []
+                matching = set()
                 for id, _ in index.find_matches(search, **kwargs)[:k]:
+                    matching.add(id)
                     data.append((index.get_row(id), map.default_variants()))
+
+                id = 0
+                while len(data) < k and id < len(index):
+                    # fill remaining positions with popular non-matching
+                    # entities or properties
+                    if id in matching:
+                        id += 1
+                        continue
+
+                    data.append((index.get_row(id), map.default_variants()))
+                    id += 1
+
                 all_alternatives[index_type] = self.build_alternatives(data)
 
             return all_alternatives
 
-        seen = set()
-        for index_type, index, map in indices:
-            data: list[tuple[str, set[str]]] = []
-            id_map = {}
-            for iri in result:
-                norm = map.normalize(iri)
-                if norm is None:
-                    continue
-
-                iri, variant = norm
-                if iri not in map:
-                    continue
-
-                id = map[iri]
-                if id not in id_map:
-                    id_map[id] = set()
-
-                if variant is not None:
-                    id_map[id].add(variant)
-
-                seen.add(iri)
-
-            if k < len(result):
-                # build sub index and search in it
-                sub_index = index.sub_index_by_ids(list(id_map))
-                for id, _ in sub_index.find_matches(search, **kwargs)[:k]:
-                    data.append((sub_index.get_row(id), id_map[id]))
-
-            else:
-                # we have less than or equal k results, just get all of them
-                for id, variants in id_map.items():
-                    data.append((index.get_row(id), variants))
-
-            all_alternatives[index_type] = self.build_alternatives(data)
-
-        def format_str(parse: dict) -> str:
-            if not parse["name"].startswith("STRING"):
-                return parse["value"]
-
-            if "LONG" in parse["name"]:
-                return parse["value"][3:-3]
-            return parse["value"][1:-1]
-
-        def format_iri(iri: str) -> str:
+        def format_iri(iri: str) -> str | None:
             longest = self.find_longest_prefix(iri, self.prefixes)
             if longest is None:
-                return iri
+                return None
 
             short, long = longest
             return short + ":" + iri[len(long):-1]
 
-        other_alternatives = []
-        literal_alternatives = []
-        for item in result - seen:
+        def format_string_literal(parse: dict) -> str:
+            match parse["name"]:
+                case "STRING_LITERAL_LONG1" | "STRING_LITERAL_LONG2":
+                    return parse["value"][3:-3]
+                case "STRING_LITERAL1" | "STRING_LITERAL2":
+                    return parse["value"][1:-1]
+                case _:
+                    return parse["value"]
+
+        entities = {}
+        properties = {}
+        others = []
+        literals = []
+
+        # split result into entities, properties, other iris
+        # and literals
+        start = time.perf_counter()
+        for res in result:
             try:
                 parse = self.iri_literal_parser.parse(
-                    item,
+                    res,
                     skip_empty=True,
                     collapse_single=True
                 )
             except Exception:
                 continue
 
-            if parse["name"] == "IRIREF":
-                formatted = format_iri(parse["value"])
-                if formatted == item:
+            match parse["name"]:
+                case "IRIREF":
+                    unmatched = True
+                    for id_map, map in [
+                        (entities, self.entity_mapping),
+                        (properties, self.property_mapping)
+                    ]:
+                        norm = map.normalize(res)
+                        if norm is None:
+                            continue
+
+                        iri, variant = norm
+                        if iri not in map:
+                            continue
+
+                        id = map[iri]
+                        if id not in id_map:
+                            id_map[id] = set()
+
+                        if variant is not None:
+                            id_map[id].add(variant)
+
+                        unmatched = False
+
+                    if not unmatched:
+                        continue
+
+                    label = format_iri(res)
+                    if label is not None:
+                        others.append((
+                            res,
+                            label,
+                            ""
+                        ))
+
+                case lit if lit.startswith("STRING"):
+                    format_string_literal(parse)
+                    literals.append((
+                        res,
+                        format_string_literal(parse),
+                        ""
+                    ))
+
+                case "RDFLiteral":
+                    if len(parse["children"]) == 2:
+                        # langtag
+                        s, langtag = parse["children"]
+                        if not langtag["value"].startswith("@en"):
+                            continue
+                        literals.append((
+                            res,
+                            format_string_literal(s),
+                            langtag["value"]
+                        ))
+
+                    elif len(parse["children"]) == 3:
+                        # datatype
+                        s, _, datatype = parse["children"]
+                        literals.append((
+                            res,
+                            format_string_literal(s),
+                            format_iri(datatype["value"])
+                            or datatype["value"]
+                        ))
+
+                case "INTEGER" | "DECIMAL" | "DOUBLE" | "true" | "false":
+                    literals.append((res, res, ""))
+
+                case _:
                     continue
 
-                other_alternatives.append(Alternative(
-                    formatted,
-                    item
-                ))
+        end = time.perf_counter()
+        LOGGER.debug(
+            f"parsing {len(result):,} results "
+            f"took {1000 * (end - start):.2f}ms"
+        )
 
-            elif parse["name"].startswith("STRING"):
-                literal_alternatives.append(Alternative(
-                    format_str(parse["value"]),
-                    item
-                ))
+        start = time.perf_counter()
+        for index_type, id_map, index in [
+            ("entity", entities, self.entity_index),
+            ("property", properties, self.property_index)
+        ]:
+            data: list[tuple[str, set[str] | None]] = []
 
-            elif parse["name"] == "RDFLiteral":
-                if len(parse["children"]) == 2:
-                    # langtag
-                    s, langtag = parse["children"]
-                    literal_alternatives.append(Alternative(
-                        format_str(s),
-                        item,
-                        short_identifier=langtag["value"]
-                    ))
+            # build sub index and search in it
+            matching = set()
+            sub_index = index.sub_index_by_ids(list(id_map))
+            for id, _ in sub_index.find_matches(search, **kwargs)[:k]:
+                matching.add(id)
+                data.append((sub_index.get_row(id), id_map[id]))
 
-                elif len(parse["children"]) == 3:
-                    # datatype
-                    s, _, datatype = parse["children"]
+            # fill alternatives with popular non-matching entities
+            # or properties; lower ids mean higher scores, so just
+            # iterate over sorted id_map keys while ignoring already
+            # machted ids, and breaking when reaching k total datapoints
+            for id in sorted(id_map):
+                if len(data) >= k:
+                    break
+                elif id in matching:
+                    continue
 
-                    literal_alternatives.append(Alternative(
-                        format_str(s),
-                        item,
-                        short_identifier=format_iri(datatype["value"])
-                    ))
+                data.append((index.get_row(id), id_map[id]))
 
-            elif parse["name"] in [
-                "INTEGER",
-                "DECIMAL",
-                "DOUBLE",
-                "true",
-                "false"
+            all_alternatives[index_type] = self.build_alternatives(data)
+
+        end = time.perf_counter()
+        LOGGER.debug(
+            f"preparing entities and properties "
+            f"took {1000 * (end - start):.2f}ms"
+        )
+
+        start = time.perf_counter()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            for index_type, raw in [
+                ("other", others),
+                ("literal", literals)
             ]:
-                literal_alternatives.append(Alternative(
-                    item,
-                    item
-                ))
+                # build index and search in it
+                data: list[tuple[str, set[str] | None]] = []
 
-        all_alternatives["other"] = other_alternatives
-        all_alternatives["literal"] = literal_alternatives
+                data_file = os.path.join(temp_dir, f"{index_type}_data.tsv")
+                index_dir = os.path.join(temp_dir, f"{index_type}_index")
+                os.makedirs(index_dir, exist_ok=True)
+                LOGGER.debug(
+                    f"building temporary {index_type} index in {temp_dir} "
+                    f"with data at {data_file} and index in {index_dir}"
+                )
+
+                # write raw data to temp file in temp dir
+                with open(data_file, "w") as f:
+                    f.write("label\tscore\tsynonyms\tid\tinfos\n")
+                    for res, label, info in raw:
+                        f.write(f"{label}\t0\t\t{res}\t{info}\n")
+
+                QGramIndex.build(
+                    data_file,
+                    index_dir,
+                )
+                index = QGramIndex.load(data_file, index_dir)
+                matching = set()
+                for id, _ in index.find_matches(search, **kwargs)[:k]:
+                    matching.add(id)
+                    data.append((index.get_row(id), None))
+
+                # fill alternatives with non-matching other iris
+                # or literals
+                id = 0
+                while len(data) < k and id < len(index):
+                    if id in matching:
+                        id += 1
+                        continue
+
+                    data.append((index.get_row(id), None))
+                    id += 1
+
+                all_alternatives[index_type] = self.build_alternatives(data)
+
+        end = time.perf_counter()
+        LOGGER.debug(
+            f"preparing other iris and literals "
+            f"took {1000 * (end - start):.2f}ms"
+        )
+
         return all_alternatives
 
     def get_selection_prompt_and_regex(
@@ -1075,16 +1174,15 @@ Answer: (?:yes|no)"""
         all_alternatives: dict[str, list[Alternative]],
         max_aliases: int = 5,
         add_infos: bool = False,
-        failures: set[tuple[str, str]] | None = None
+        failures: set[tuple[str, str, str | None]] | None = None
     ) -> tuple[str, str]:
         prefix = prefix + "..."
 
         all_alts = []
         alt_idx = 0
-        obj_types = ["entity", "property", "other", "literal"]
-        for obj_type in obj_types:
+        for obj_type in OBJ_TYPES:
             alternatives = all_alternatives.get(obj_type, None)
-            if alternatives is None:
+            if not alternatives:
                 continue
 
             counts = Counter(
@@ -1111,7 +1209,7 @@ Answer: (?:yes|no)"""
                         + re.escape(")")
                 alt_regexes.append(r)
 
-            alt_idx += 1
+                alt_idx += 1
 
             all_alts.append((obj_type, (alt_strings, alt_regexes)))
 
@@ -1135,31 +1233,19 @@ Answer: (?:yes|no)"""
         failure = ""
         if failures:
             failed = []
-            for obj_type, iri in failures:
-                key = iri
-                variant = None
-                if obj_type == "entity":
-                    norm = self.entity_mapping.normalize(iri)
-                    assert norm is not None, \
-                        f"normalizing {iri} failed"
-                    key, variant = norm
-                elif obj_type == "property":
-                    norm = self.property_mapping.normalize(iri)
-                    assert norm is not None, \
-                        f"normalizing {iri} failed"
-                    key, variant = norm
-
+            for obj_type, identifier, variant in failures:
                 offset = sum(
                     len(alts)
-                    for _, (alts, _) in all_alts[:obj_types.index(obj_type)]
+                    for _, (alts, _) in all_alts[:OBJ_TYPES.index(obj_type)]
                 )
                 nxt = next(
                     (alt for alt in enumerate(all_alternatives[obj_type])
-                     if alt[1].identifier == key),
+                     if alt[1].identifier == identifier),
                     None
                 )
-                assert nxt is not None, \
-                    f"could not find failed alternative {key}"
+                if nxt is None:
+                    continue
+
                 idx, alt = nxt
                 fail = f"{offset + idx + 1}. {alt.label}"
                 if variant is not None:
@@ -1180,7 +1266,7 @@ If there is no other sensible alternative to try, select the none alternative:
         prompt = f"""\
 Select the most fitting alternative to continue the SPARQL \
 query with. The question to be answered, the current SPARQL prefix, the \
-list possible alternatives and the search query that \
+list of possible alternatives and the search query that \
 returned these alternatives are given below.
 
 Question:
@@ -1200,37 +1286,55 @@ Selection:
 
     def parse_selection(
         self,
-        alternatives: list[Alternative],
-        obj_type: str,
+        alternatives: dict[str, list[Alternative]],
         result: str
-    ) -> tuple[str, str] | None:
+    ) -> tuple[tuple[str, str, str | None], str] | None:
         num, name = result.split(".", 1)
         idx = int(num) - 1
         name = name[1:]
-        if idx >= len(alternatives):
+        num_alts = sum(len(alt) for alt in alternatives.values())
+        if idx >= num_alts:
             # the none alternative was selected
             return None
 
-        alternative = alternatives[idx]
+        offset = 0
+        obj_type = OBJ_TYPES[0]
+        for obj_type in OBJ_TYPES:
+            obj_alts = len(alternatives.get(obj_type, []))
+            if offset <= idx < obj_alts:
+                break
+            offset += obj_alts
+
+        alternative = alternatives[obj_type][idx - offset]
+        identifier = alternative.identifier
         variant = None
         if not alternative.variants:
             # no variants to parse
             variant = None
+
         else:
             # parse variant
             # + 4 to account for ". " and opening " ("
             # - 1 to account for closing ")"
             variant = result[len(num) + len(alternative.label) + 4:-1]
 
-        name = f"<{name}>"
-        if obj_type == "entity":
-            map = self.entity_mapping
-        else:
-            map = self.property_mapping
+        denorm = None
+        if obj_type == "property":
+            denorm = self.property_mapping.denormalize(identifier, variant)
+            assert denorm is not None, "should not happen"
 
-        denorm = map.denormalize(alternative.identifier, variant)
-        assert denorm is not None, "denormalization failed"
-        return denorm, name
+        elif obj_type == "entity":
+            denorm = self.entity_mapping.denormalize(identifier, variant)
+            assert denorm is not None, "should not happen"
+
+        if denorm is not None:
+            longest = self.find_longest_prefix(denorm, self.custom_prefixes)
+            assert longest is not None, "should not happen"
+            short, long = longest
+            val = denorm[len(long):-1]
+            name = f"<{name} ({short}:{val})>"
+
+        return (obj_type, identifier, variant), name
 
     def get_search_prompt_and_regex(
         self,
@@ -1310,7 +1414,7 @@ is no other sensible continuation to try, output one of these again:
         prompt = f"""\
 Continue the SPARQL prefix to answer the question either \
 until the end of the SPARQL query or the next {self.kg} \
-knowledge graph search via <|search|>.
+knowledge graph search via {SEARCH_TOKEN}.
 
 Question:
 {question.strip()}
@@ -1507,14 +1611,6 @@ def run_parallel(
 
 
 T = TypeVar("T")
-
-
-def format_obj_type(obj_type: str) -> str:
-    assert obj_type in {"", "entity", "property"}
-    if obj_type == "":
-        return ""
-    else:
-        return f"<|{obj_type}|>"
 
 
 def flatten(

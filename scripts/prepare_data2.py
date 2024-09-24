@@ -1,26 +1,26 @@
 import argparse
+import sys
 import logging
 import random
 import os
 import re
 import json
 import collections
-from typing import Any
 import multiprocessing as mp
 
-from search_index import PrefixIndex, QGramIndex, normalize
-from search_index.index import SearchIndex
+from search_index import normalize
 from tqdm import tqdm
 from datasets import load_dataset
 
 from sparql_kgqa.sparql.utils import find_all
 from sparql_kgqa.sparql.utils2 import (
+    SEARCH_TOKEN,
+    OBJ_TYPES,
     Chat,
     KgManager,
     WikidataPropertyMapping,
     get_kg_manager,
     clean,
-    format_obj_type,
     load_index_and_mapping,
 )
 
@@ -86,12 +86,12 @@ def parse_args() -> argparse.Namespace:
     sample_group.add_argument(
         "--selections-min-k",
         type=int,
-        default=4
+        default=8
     )
     sample_group.add_argument(
         "--selections-max-k",
         type=int,
-        default=16
+        default=32
     )
     sample_group.add_argument(
         "--selections-min-aliases",
@@ -444,65 +444,26 @@ STOP = [
 ]
 
 
-def filter_stopwords(words: list[str]) -> list[str]:
-    return [
-        word for word in words
-        if word not in STOP
-    ]
-
-
-def get_search_query(
-    id: int,
-    index: SearchIndex,
-    k: int,
-    return_non_matching_ids: bool = False
-) -> tuple[str, list[int]]:
-    data = index.get_row(id)
-    name, _, syns, *_ = data.split("\t")
-    syns = [s for s in syns.split(";;;") if s != ""]
-
-    # simulate some sensible search behavior
-    # for the different index types
-    if isinstance(index, PrefixIndex):
-        keywords = set(normalize(name).split())
-        n_syns = random.randint(0, min(1, len(syns)))
-        for syn in random.sample(syns, n_syns):
-            keywords.update(normalize(syn).split())
+def get_search_query(name: str, index_type: str) -> str:
+    keywords = normalize(name).split()
+    if index_type == "prefix":
         keywords = list(
-            k for k in keywords
+            k for k in set(keywords)
             if k not in STOP
             and not any(
-                k.startswith(other) for other in keywords
-                if k != other
+                k.startswith(other) and k != other
+                for other in keywords
             )
         )
-        random.shuffle(keywords)
         # limit to at most 5 keywords
-        query = " ".join(keywords[:5])
-    else:
-        assert isinstance(index, QGramIndex)
-        syns.append(name)
-        # make label equally likely to be selected
-        # as all other synonyms
-        if len(syns) > 1:
-            counts = [1] * len(syns)
-            counts[-1] = len(syns) - 1
-        else:
-            counts = [1]
-        query = normalize(random.sample(syns, 1, counts=counts)[0])
+        keywords = random.sample(keywords, min(5, len(keywords)))
 
-    non_matching_ids = []
-    if not return_non_matching_ids:
-        return query, non_matching_ids
+    elif index_type == "qgram" and len(keywords) > 3:
+        start = random.randint(0, len(keywords) - 3)
+        end = random.randint(start + 3, len(keywords))
+        keywords = keywords[start:end]
 
-    matches = index.find_matches(query)
-    for match_id, _ in matches[:k]:
-        if id == match_id:
-            continue
-
-        non_matching_ids.append(match_id)
-
-    return query, non_matching_ids
+    return " ".join(keywords)
 
 
 def prepare_stages(
@@ -519,30 +480,92 @@ def prepare_stages(
         collapse_single=False
     )
 
-    def map_item(obj) -> tuple[Any, str, str, tuple[int, int]] | None:
+    mappings = {
+        "entity": manager.entity_mapping,
+        "property": manager.property_mapping
+    }
+    indices = {
+        "entity": manager.entity_index,
+        "property": manager.property_index
+    }
+
+    def span(obj, start=sys.maxsize, end=0) -> tuple[int, int]:
+        if "children" in obj:
+            for child in obj["children"]:
+                start, end = span(child, start, end)
+            return start, end
+
+        f, t = obj["byte_span"]
+        return min(start, f), max(end, t)
+
+    def map_item(obj):
+        # return tuple with identifier, variant, label, synonyms
+        # and additional info
+        if obj["name"] in ["RDFLiteral", "NumericLiteral"]:
+            child = obj["children"][0]["children"][0]
+            label = child["value"].strip("'").strip('"')
+            return label, None, label, [], None
+
+        if obj["name"] == "BooleanLiteral":
+            label = obj["children"][0]["children"][0]
+            return label, None, label, [], None
+
         if obj["name"] != "iri":
             return None
+
         child = obj["children"][0]
         if child["name"] != "PrefixedName":
             return None
+
         child = child["children"][0]
         if child["name"] != "PNAME_LN":
             return None
-        pfx, val = child["value"].split(":", 1)
-        return obj, pfx, val, child["byte_span"]
 
-    items = list(filter(
-        lambda item: item is not None
-        and item[1] in manager.custom_prefixes,
-        map(
-            map_item,
-            find_all(
-                parse,
-                name="iri",
-                skip={"Prologue"}
-            )
+        pfx, val = child["value"].split(":", 1)
+        if pfx in manager.prefixes:
+            return child["value"], None, child["value"], [], None
+
+        elif pfx in manager.custom_prefixes:
+            # check whether the iri is a valid entity or property
+            long = manager.custom_prefixes[pfx]
+            iri = long + val + ">"
+
+            matching = {}
+            for obj_type in ["entity", "property"]:
+                map = mappings[obj_type]
+                index = indices[obj_type]
+                norm = map.normalize(iri)
+                if norm is None or norm[0] not in map:
+                    continue
+
+                id = map[norm[0]]
+                label = index.get_name(id)
+                syns = [
+                    s for s in index.get_val(id, 2).split(";;;")
+                    if s != ""
+                ]
+                matching[obj_type] = (*norm, label, syns)
+
+            if not matching:
+                return None
+
+            nxt = next(val for val in matching.values())
+            return *nxt, {"matching": list(matching)}
+
+    items = [
+        (item, map_item(item))
+        for item in find_all(
+            parse,
+            name={"iri", "RDFLiteral", "NumericLiteral", "BooleanLiteral"},
+            skip={"Prologue"}
         )
-    ))
+    ]
+    # filter out invalid items
+    items = [
+        (item, processed)
+        for item, processed in items
+        if processed is not None
+    ]
 
     samples = []
     for item_idx in random.sample(
@@ -550,42 +573,22 @@ def prepare_stages(
         min(len(items), args.samples_per_question)
     ):
         manager = random.choice(managers)
-        item = items[item_idx]
-        assert item is not None
+        item, processed = items[item_idx]
 
-        item, pfx, iri, (start, end) = item
-        long = manager.custom_prefixes[pfx]
-        iri = long + iri + ">"
+        start, end = span(item)
+        assert end >= start, "invalid span"
+        identifier, variant, label, syns, info = processed
 
-        index_map = manager.entity_mapping
-        index = manager.entity_index
-        norm = index_map.normalize(iri)
-        obj_type = "entity"
-        if norm is None or norm[0] not in index_map:
-            index_map = manager.property_mapping
-            index = manager.property_index
-            norm = index_map.normalize(iri)
-            obj_type = "property"
-
-        search_token = format_obj_type(obj_type)
-
-        if norm is None or norm[0] not in index_map:
-            continue
-
-        key, variant = norm
-
-        prefix_raw = sparql_encoded[:start].decode(errors="replace")
+        prefix_raw = sparql_encoded[:start].decode()
         prefix, _ = manager.replace_iris(
             prefix_raw,
             is_prefix=True
         )
 
         if item_idx > 0:
-            last = items[item_idx - 1]
-            assert last is not None
-            *_, (_, last_end) = last
-            last_prefix_raw = sparql_encoded[:last_end].decode(
-                errors="replace")
+            last, _ = items[item_idx - 1]
+            (_, last_end) = span(last)
+            last_prefix_raw = sparql_encoded[:last_end].decode()
             last_prefix, _ = manager.replace_iris(
                 last_prefix_raw,
                 is_prefix=True
@@ -596,65 +599,55 @@ def prepare_stages(
         if item_idx == len(items) - 1:
             # add additional continuation sample for the end of the query
             final_prefix, _ = manager.replace_iris(
-                sparql_encoded[:end].decode(errors="replace"),
+                sparql_encoded[:end].decode(),
                 is_prefix=True
             )
-            final_continuation = sparql_encoded[end:].decode(errors="ignore")
+            final_continuation = sparql_encoded[end:].decode()
             final_continuation_prompt = manager.get_sparql_continuation_prompt(
                 question,
                 final_prefix
             )
-            samples.append(
-                (final_continuation_prompt, final_continuation)
-            )
+            samples.append((final_continuation_prompt, final_continuation))
 
         continuation_prompt = manager.get_sparql_continuation_prompt(
             question,
             last_prefix
         )
-        continuation = prefix[len(last_prefix):] + search_token
+        continuation = prefix[len(last_prefix):] + SEARCH_TOKEN
         samples.append((continuation_prompt, continuation))
 
-        search_failures = set()
-        selection_k = random.randint(
-            args.selections_min_k,
-            args.selections_max_k
-        )
-        search, non_matching_ids = get_search_query(
-            index_map[key],
-            index,
-            selection_k,
-            return_non_matching_ids=True
-        )
-        num_search_failures = min(
-            random.randint(0, 3),
-            len(non_matching_ids)
-        )
-        for id in random.sample(non_matching_ids, num_search_failures):
-            search_fail, *_ = get_search_query(
-                id,
-                index,
-                selection_k
-            )
-            search_failures.add(search_fail)
+        random.shuffle(syns)
+        all_syns = [label] + syns
 
-        drop_search = random.random() < args.sample_dropout
-        if drop_search:
-            search = normalize(index.get_name(index_map[key]))
-            search_failures.add(search)
+        search_failures = set()
+        num_search_failures = random.sample(
+            list(range(len(all_syns) + 1)),
+            1,
+            counts=list(range(len(all_syns) + 1, 0, -1))
+        )[0]
+        for i in range(num_search_failures):
+            search_failures.add(get_search_query(
+                all_syns[i],
+                manager.entity_index.get_type()
+            ))
+
+        search = all_syns[min(num_search_failures, len(all_syns) - 1)]
 
         search_prompt, _ = manager.get_search_prompt_and_regex(
             question,
-            obj_type,
             prefix,
             failures=search_failures
         )
 
         samples.append((search_prompt, search))
 
+        selection_k = random.randint(
+            args.selections_min_k,
+            args.selections_max_k
+        )
+
         alts = manager.get_selection_alternatives(
             prefix_raw,
-            obj_type,
             search,
             selection_k,
             max_candidates=16384,
@@ -662,14 +655,16 @@ def prepare_stages(
             max_retries=3
         )
         if alts is None:
-            alts = []
+            alts = {}
 
-        target_alt = next(
-            (alt for alt in alts
-             if alt.identifier == key
-             and variant in (alt.variants or [None])),
-            None
-        )
+        target_alts = [
+            (obj_type, alt)
+            for obj_type, obj_alts in alts.items()
+            for alt in obj_alts
+            if alt.identifier == identifier
+            and (variant is None or variant in alt.variants)
+        ]
+        target_alt = random.choice(target_alts) if target_alts else None
 
         select_failures = set()
 
@@ -678,42 +673,39 @@ def prepare_stages(
             # differentiate between dropping the target from
             # the list of alternatives entirely or only adding the
             # variant to previous fails
+            target_obj_type, target_alternative = target_alt
             if random.random() < 0.5:
-                alts.remove(target_alt)
+                alts[target_obj_type].remove(target_alternative)
             else:
-                select_failures.add(iri)
+                select_failures.add((target_obj_type, identifier, variant))
 
             target_alt = None
 
-        other_alts = [
-            (alt.identifier, var)
-            for alt in alts
+        alts_to_fail = [
+            (obj_type, alt.identifier, var)
+            for obj_type, obj_alts in alts.items()
+            for alt in obj_alts
             for var in (alt.variants or [None])
-            if target_alt is None
-            or alt.identifier != target_alt.identifier
-            or var != variant
+            if (target_alt is None
+                or alt.identifier != target_alt[1].identifier
+                or var != variant)
+            and (target_alt is None or obj_type == target_alt[0])
         ]
 
-        if other_alts:
-            counts = [
-                max(1, int(index.get_val(index_map[id], 1)))
-                for id, _ in other_alts
-            ]
-            num_select_failures = random.randint(0, 3 - len(select_failures))
-            failed = random.sample(
-                other_alts,
-                min(len(other_alts), num_select_failures),
-                counts=counts
-            )
-            select_failures.update(
-                index_map.denormalize(*fail)
-                for fail in failed
-            )
+        num_select_failures = random.sample(
+            list(range(3 - len(select_failures) + 1)),
+            1,
+            counts=list(range(3 - len(select_failures) + 1, 0, -1))
+        )[0]
+        failed = random.sample(
+            alts_to_fail,
+            min(len(alts_to_fail), num_select_failures),
+        )
+        select_failures.update(set(failed))
 
         select_prompt, _ = manager.get_selection_prompt_and_regex(
             question,
             prefix,
-            obj_type,
             search,
             alts,
             max_aliases=random.randint(
@@ -724,11 +716,16 @@ def prepare_stages(
             failures=select_failures
         )
 
+        num_alts = sum(len(obj_alts) for obj_alts in alts.values())
         if target_alt is None:
-            selection = f"{len(alts)}. none"
+            selection = f"{num_alts}. none"
         else:
-            select_idx = alts.index(target_alt)
-            select_name = target_alt.label
+            offset = sum(
+                len(alts[obj_type])
+                for obj_type in OBJ_TYPES[:OBJ_TYPES.index(target_alt[0])]
+            )
+            select_idx = offset + alts[target_alt[0]].index(target_alt[1])
+            select_name = target_alt[1].label
             if variant:
                 select_name += f" ({variant})"
             selection = f"{select_idx + 1}. {select_name}"

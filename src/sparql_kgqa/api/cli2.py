@@ -49,19 +49,17 @@ class SPARQLGenerationCli(TextProcessingCli):
             force_exact=self.args.force_exact,
         )
 
-        ent_dir, ent_type = self.args.entities
-        prop_dir, prop_type = self.args.properties
-
         ent_index, ent_mapping = load_index_and_mapping(
-            ent_dir,
-            ent_type
+            self.args.entities,
+            self.args.index_type,
         )
+        is_wikidata = self.args.knowledge_graph == "wikidata"
         prop_index, prop_mapping = load_index_and_mapping(
-            prop_dir,
-            prop_type,
+            self.args.properties,
+            self.args.index_type,
             # wikidata properties need special mapping
             # because of wdt, p, ps, pq, ... variants
-            WikidataPropertyMapping,
+            WikidataPropertyMapping if is_wikidata else None,
         )
 
         gen.set_kg_indices(
@@ -173,18 +171,21 @@ def main():
     parser.add_argument(
         "--entities",
         type=str,
-        nargs=2,
-        metavar=("DIR", "TYPE"),
         required=True,
-        help="Directory and type of entities index"
+        help="Directory of entity index"
     )
     parser.add_argument(
         "--properties",
         type=str,
-        nargs=2,
-        metavar=("DIR", "TYPE"),
         required=True,
-        help="Directory and type of properties index"
+        help="Directory of property index"
+    )
+    parser.add_argument(
+        "--index-type",
+        type=str,
+        required=True,
+        choices=["prefix", "qgram"],
+        help="Index type to use for entity and property indices"
     )
     parser.add_argument(
         "--system-message",
