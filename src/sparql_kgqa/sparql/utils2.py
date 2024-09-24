@@ -87,7 +87,7 @@ class Alternative:
         self.infos = infos
 
     def __repr__(self) -> str:
-        return f"Alternative({self.label}, {self.identifier}, {self.variants})"
+        return f"Alternative('{self.label}', '{self.identifier}')"
 
     @staticmethod
     def _clip(s: str, max_len: int = 128) -> str:
@@ -1046,7 +1046,6 @@ Answer: (?:yes|no)"""
                         ))
 
                 case lit if lit.startswith("STRING"):
-                    format_string_literal(parse)
                     literals.append((
                         res,
                         format_string_literal(parse),
@@ -1180,29 +1179,33 @@ Answer: (?:yes|no)"""
         question: str,
         prefix: str,
         search_query: str,
-        all_alternatives: dict[str, list[Alternative]],
+        alternatives: dict[str, list[Alternative]],
         max_aliases: int = 5,
         add_infos: bool = False,
         failures: set[tuple[str, str, str | None]] | None = None
     ) -> tuple[str, str]:
         prefix = prefix + "..."
 
-        all_alts = []
+        alt_strings = {}
+        alt_regexes = {}
         alt_idx = 0
         for obj_type in OBJ_TYPES:
-            alternatives = all_alternatives.get(obj_type, None)
-            if not alternatives:
+            if obj_type not in alternatives:
+                continue
+
+            alts = alternatives[obj_type]
+            if len(alts) == 0:
                 continue
 
             counts = Counter(
                 alternative.label.lower()
-                for alternative in alternatives
+                for alternative in alts
             )
-            alt_strings = []
-            alt_regexes = []
-            for alternative in alternatives:
+            strings = []
+            regexes = []
+            for alternative in alts:
                 alt_idx_str = f"{alt_idx + 1}. "
-                alt_strings.append(alt_idx_str + alternative.get_string(
+                strings.append(alt_idx_str + alternative.get_string(
                     max_aliases,
                     # add info to non unique labels
                     add_infos or counts[alternative.label.lower()] > 1
@@ -1216,24 +1219,28 @@ Answer: (?:yes|no)"""
                     r += re.escape(" (") \
                         + "(?:" + vars + ")" \
                         + re.escape(")")
-                alt_regexes.append(r)
+                regexes.append(r)
 
                 alt_idx += 1
 
-            all_alts.append((obj_type, (alt_strings, alt_regexes)))
-
-        num_alts = sum(len(alts) for _, (alts, _) in all_alts)
+            alt_strings[obj_type] = strings
+            alt_regexes[obj_type] = regexes
 
         alt_string = "\n\n".join(
             f"{obj_type.capitalize()} alternatives:\n" +
-            "\n".join(alt_strings)
-            for obj_type, (alt_strings, _) in all_alts
+            "\n".join(alt_strings[obj_type])
+            for obj_type in OBJ_TYPES
+            if obj_type in alt_strings
         )
         alt_regex = "(?:" + "|".join(
             regex
-            for _, (_, regexes) in all_alts
-            for regex in regexes
+            for obj_type in OBJ_TYPES
+            if obj_type in alt_regexes
+            for regex in alt_regexes[obj_type]
         )
+
+        # none alternative
+        num_alts = sum(len(alts) for alts in alternatives.values())
         alt_string += f"\n\n{num_alts + 1}. none " \
             "(if no other alternative fits well enough)"
         alt_regex += "|" * (num_alts > 0) + re.escape(f"{num_alts + 1}. none")
@@ -1243,12 +1250,11 @@ Answer: (?:yes|no)"""
         if failures:
             failed = []
             for obj_type, identifier, variant in failures:
-                offset = sum(
-                    len(alts)
-                    for _, (alts, _) in all_alts[:OBJ_TYPES.index(obj_type)]
-                )
+                if obj_type not in alternatives:
+                    continue
+
                 nxt = next(
-                    (alt for alt in enumerate(all_alternatives[obj_type])
+                    (alt for alt in enumerate(alternatives[obj_type])
                      if alt[1].identifier == identifier),
                     None
                 )
@@ -1256,6 +1262,11 @@ Answer: (?:yes|no)"""
                     continue
 
                 idx, alt = nxt
+                offset = sum(
+                    len(alternatives[obj_type])
+                    for obj_type in OBJ_TYPES[:OBJ_TYPES.index(obj_type)]
+                    if obj_type in alternatives
+                )
                 fail = f"{offset + idx + 1}. {alt.label}"
                 if variant is not None:
                     assert variant in (alt.variants or []), \
@@ -1301,7 +1312,7 @@ Selection:
         num, name = result.split(".", 1)
         idx = int(num) - 1
         name = name[1:]
-        num_alts = sum(len(alt) for alt in alternatives.values())
+        num_alts = sum(len(alts) for alts in alternatives.values())
         if idx >= num_alts:
             # the none alternative was selected
             return None

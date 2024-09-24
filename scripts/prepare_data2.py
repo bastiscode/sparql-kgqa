@@ -22,6 +22,7 @@ from sparql_kgqa.sparql.utils2 import (
     get_kg_manager,
     clean,
     load_index_and_mapping,
+    partition_by,
 )
 
 
@@ -444,9 +445,12 @@ STOP = [
 ]
 
 
-def get_search_query(name: str, index_type: str) -> str:
+def get_search_query(question: str, name: str, index_type: str) -> str:
     keywords = normalize(name).split()
+
     if index_type == "prefix":
+        # special handling of prefix index
+        qn = normalize(question)
         keywords = list(
             k for k in set(keywords)
             if k not in STOP
@@ -455,13 +459,18 @@ def get_search_query(name: str, index_type: str) -> str:
                 for other in keywords
             )
         )
-        # limit to at most 5 keywords
-        keywords = random.sample(keywords, min(5, len(keywords)))
+        matching, non_matching = partition_by(
+            keywords,
+            lambda kw: kw in qn
+        )
+        random.shuffle(matching)
+        random.shuffle(non_matching)
+        keywords = matching + non_matching
 
-    elif index_type == "qgram" and len(keywords) > 3:
-        start = random.randint(0, len(keywords) - 3)
-        end = random.randint(start + 3, len(keywords))
-        keywords = keywords[start:end]
+    # assuming more important keywords are at the beginning
+    # limit the number of keywords to 3-5
+    end = random.randint(3, max(3, min(len(keywords), 5)))
+    keywords = keywords[:end]
 
     return " ".join(keywords)
 
@@ -635,11 +644,20 @@ def prepare_stages(
         )[0]
         for i in range(num_search_failures):
             search_failures.add(get_search_query(
+                question,
                 all_syns[i],
                 manager.entity_index.get_type()
             ))
 
-        search = all_syns[min(num_search_failures, len(all_syns) - 1)]
+        if num_search_failures >= len(all_syns):
+            search_fail_list = list(search_failures)
+            search = random.choice(search_fail_list)
+        else:
+            search = get_search_query(
+                question,
+                all_syns[num_search_failures],
+                manager.entity_index.get_type()
+            )
 
         search_prompt, _ = manager.get_search_prompt_and_regex(
             question,
@@ -667,8 +685,9 @@ def prepare_stages(
 
         target_alts = [
             alt
-            for alt in alts[obj_type]
-            if alt.identifier == identifier
+            for alt in alts.get(obj_type, [])
+            if (alt.identifier == identifier
+                or (obj_type == "literal" and alt.label == label))
             and (variant is None or variant in (alt.variants or []))
         ]
         target_alt = random.choice(target_alts) if target_alts else None
@@ -722,13 +741,14 @@ def prepare_stages(
             failures=select_failures
         )
 
-        num_alts = sum(len(obj_alts) for obj_alts in alts.values())
+        num_alts = sum(len(a) for a in alts.values())
         if target_alt is None:
-            selection = f"{num_alts}. none"
+            selection = f"{num_alts + 1}. none"
         else:
             offset = sum(
-                len(alts.get(t, []))
-                for t in OBJ_TYPES[:OBJ_TYPES.index(obj_type)]
+                len(alts[obj_type])
+                for obj_type in OBJ_TYPES[:OBJ_TYPES.index(obj_type)]
+                if obj_type in alts
             )
             select_idx = offset + alts[obj_type].index(target_alt)
             select_name = target_alt.label
