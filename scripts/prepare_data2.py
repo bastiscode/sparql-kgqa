@@ -795,16 +795,20 @@ def prepare_sample(
     )
 
     manager = random.choice(managers)
+    is_test = split == "test"
 
     try:
-        raw_sparql = manager.fix_prefixes(
-            sample.sparql,
-            remove_known=True
-        )
+        if is_test and sample.sparql == "":
+            raw_sparql = sample.sparql
+        else:
+            raw_sparql = manager.fix_prefixes(
+                sample.sparql,
+                remove_known=True
+            )
     except Exception:
         return None
 
-    if split == "test":
+    if is_test:
         return sample.question, raw_sparql, []
 
     prompt = manager.get_sparql_prompt(sample.question)
