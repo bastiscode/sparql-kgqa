@@ -12,6 +12,7 @@ from sparql_kgqa.sparql.utils2 import (
     KgManager,
     WikidataManager,
     WikidataPropertyMapping,
+    get_kg_manager,
     load_index_and_mapping
 )
 
@@ -98,18 +99,17 @@ def prepare(args: argparse.Namespace):
             )
             return
 
-    ent_dir, ent_type = args.entities
-    ent_index, ent_mapping = load_index_and_mapping(ent_dir, ent_type)
-
-    prop_dir, prop_type = args.properties
+    ent_index, ent_mapping = load_index_and_mapping(
+        args.entities,
+        args.index_type
+    )
     prop_index, prop_mapping = load_index_and_mapping(
-        prop_dir,
-        prop_type,
+        args.properties,
+        args.index_type,
         WikidataPropertyMapping
     )
-    assert isinstance(prop_mapping, WikidataPropertyMapping)
-
-    manager = WikidataManager(
+    manager = get_kg_manager(
+        "wikidata",
         ent_index,
         prop_index,
         ent_mapping,
@@ -192,8 +192,9 @@ def parse_args() -> argparse.Namespace:
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--organic-only", action="store_true")
     source.add_argument("--robotic-only", action="store_true")
-    parser.add_argument("--entities", type=str, nargs=2, required=True)
-    parser.add_argument("--properties", type=str, nargs=2, required=True)
+    parser.add_argument("--entities", type=str, required=True)
+    parser.add_argument("--properties", type=str, required=True)
+    parser.add_argument("--index-type", type=str, default="prefix")
     parser.add_argument("--rec-limit", type=int, default=10000)
     return parser.parse_args()
 
