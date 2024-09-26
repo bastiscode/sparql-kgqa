@@ -860,7 +860,7 @@ def prepare_sample(
                 sample.sparql,
                 remove_known=not is_test
             )
-    except:
+    except Exception:
         return None
 
     if is_test:

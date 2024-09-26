@@ -739,7 +739,6 @@ Answer: (?:yes|no)"""
             )
         else:
             return identifier
-         
 
     def fix_prefixes(
         self,
@@ -795,6 +794,8 @@ Answer: (?:yes|no)"""
                 continue
 
             pfx, _ = short.split(":", 1)
+            iri["value"] = short
+            iri["name"] = "PNAME_NS"
             seen.add(pfx)
 
         for pfx in find_all(
