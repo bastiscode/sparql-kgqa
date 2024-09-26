@@ -571,22 +571,21 @@ def prepare_stages(
         if obj["name"] != "iri":
             return None
 
+        short = None
         child = obj["children"][0]
         if child["name"] == "PrefixedName":
-            pfx, val = child["children"][0]["value"].split(":", 1)
+            short = child["children"][0]["value"]
 
         elif child["name"] == "IRIREF":
             short = manager.format_iri(child["value"])
-            if short is None:
-                return None
 
-            pfx, val = short.split(":", 1)
-
-        else:
+        if short is None:
             return None
 
+        pfx, val = short.split(":", 1)
+
         if pfx in manager.prefixes:
-            return "other", child["value"], None, child["value"], []
+            return "other", short, None, short, []
 
         elif pfx in manager.custom_prefixes:
             # check whether the iri is a valid entity or property
@@ -859,24 +858,24 @@ def prepare_sample(
 
     try:
         if is_test and sample.sparql == "":
-            raw_sparql = sample.sparql
-        else:
-            raw_sparql = manager.fix_prefixes(
-                sample.sparql,
-                remove_known=not is_test
-            )
+            return sample.question, sample.sparql, []
+
+        raw_sparql = manager.fix_prefixes(
+            sample.sparql,
+            remove_known=not is_test
+        )
+        if is_test:
+            return sample.question, raw_sparql, []
+
+        prompt = manager.get_sparql_prompt(sample.question)
+        sparql, inc = manager.replace_iris(
+            raw_sparql,
+            with_iri=False
+        )
+        if inc:
+            return None
+
     except Exception:
-        return None
-
-    if is_test:
-        return sample.question, raw_sparql, []
-
-    prompt = manager.get_sparql_prompt(sample.question)
-    sparql, inc = manager.replace_iris(
-        raw_sparql,
-        with_iri=False
-    )
-    if inc:
         return None
 
     sparqls: list[tuple[str | Chat, str]] = [(prompt, sparql)]

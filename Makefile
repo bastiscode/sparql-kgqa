@@ -87,12 +87,13 @@ wikidata-data:
 	--progress \
 	-n $(NUM_PROCESSES)
 	@python scripts/prepare_data2.py \
-	--qlever-wikidata data/raw/qlever-wikidata \
+	--qlever-wikidata data/raw/qlever_wikidata/data.tsv \
 	--output data/wikidata-qlever-wikidata \
 	--entities $(WD_ENT) \
 	--properties $(WD_PROP) \
 	--progress \
 	-n $(NUM_PROCESSES)
+	@mkdir -p data/wikidata-query-logs
 	@python scripts/prepare_wikidata_query_logs.py \
 	--files data/raw/wikidata-query-logs/*.tsv \
 	--output-dir data/wikidata-query-logs \

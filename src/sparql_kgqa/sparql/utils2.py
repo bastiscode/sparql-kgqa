@@ -719,9 +719,8 @@ Answer: (?:yes|no)"""
 
         # check if no bad characters are in the short form
         # by url encoding it and checking if it is still the same
-        short = short + ":" + val
-        if not safe or quote_plus(short) == short:
-            return short
+        if not safe or quote_plus(val) == val:
+            return short + ":" + val
         else:
             return None
 
