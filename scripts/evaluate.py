@@ -5,14 +5,17 @@ import json
 from tqdm import tqdm
 
 from text_utils.io import load_text_file
+from text_utils import grammar
 
 
 from sparql_kgqa.sparql.utils import (
     QLEVER_URLS,
-    calc_f1,
-    load_sparql_parser
+    calc_f1
 )
-from sparql_kgqa.sparql.utils2 import run_parallel
+from sparql_kgqa.sparql.utils2 import (
+    run_parallel,
+    load_sparql_grammar,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -78,7 +81,9 @@ def evaluate(args: argparse.Namespace):
     else:
         incorrect_file = ""
 
-    parser = load_sparql_parser([args.kg])
+    gram, lex = load_sparql_grammar()
+    parser = grammar.LR1Parser(gram, lex)
+
     f1s = []
     pred_invalid = 0
     tgt_invalid = 0

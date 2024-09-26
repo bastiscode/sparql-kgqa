@@ -8,9 +8,8 @@ import copy
 import requests
 from collections import Counter
 from importlib import resources
-from typing import Any, Iterator
+from typing import Iterator
 
-import torch
 from tqdm import tqdm
 
 from text_utils import grammar

@@ -335,7 +335,8 @@ class SPARQLGenerator(TextProcessor):
             beam.info["const"] = self._sparql_constraint.clone()
 
         memo: dict[tuple[tuple[str, str], ...], list] = {}
-        current: list[tuple[str, str]] = []
+        current: list = []
+        states: list[str] = ["sparql", "search", "select"]
 
         def advance(value):
             current.append(value)
@@ -352,18 +353,25 @@ class SPARQLGenerator(TextProcessor):
         def failures() -> list:
             return memo.get(tuple(current), [])
 
-        def prefix(type: str) -> str:
-            assert type in {"natural", "sparql"}
+        def prefix(typ: str) -> str:
+            assert self._manager is not None, "kg indices not set"
+            assert typ in {"natural", "sparql"}
             pfx = ""
-            for i, (first, second) in enumerate(current):
+            for i, val in enumerate(current):
                 s = state(i)
                 if s == "sparql":
-                    pfx += " " * (i > 0) + first
-                elif s == "select":
-                    pfx += first if type == "sparql" else second
-                else:
-                    # skip search, done and None states
-                    continue
+                    pfx += " " * (i > 0) + val[0]
+                elif s == "select" and typ == "natural":
+                    pfx += val[0]
+                elif s == "select" and typ == "sparql":
+                    obj_type, identifier, variant = val[1]
+                    iri = self._manager.denormalize_selection(
+                        obj_type,
+                        identifier,
+                        variant
+                    )
+                    pfx += iri or identifier
+                # skip search, done and none states
             return pfx
 
         def state(idx: int | None = None) -> str | None:
@@ -374,7 +382,7 @@ class SPARQLGenerator(TextProcessor):
             # - done (same as sparql but with empty search token)
             # - search (generating search query)
             # - select (selecting alternative)
-            if len(failures()) >= self._max_failures:
+            if len(failures()) > self._max_failures:
                 return None
 
             # always return current state if not specific idx
@@ -382,19 +390,18 @@ class SPARQLGenerator(TextProcessor):
             if idx is None:
                 idx = len(current)
 
-            names = ["sparql", "search", "select"]
-            name = names[idx % len(names)]
-            if name != "search":
+            name = states[idx % len(states)]
+            if name != "search" or idx == 0:
                 return name
 
             # last one was sparql, if sparql produced empty
             # search token (finished sparql query) we are done
-            _, search = previous()
+            _, search = previous(idx - 1)
             return "done" if search == "" else name
 
-        def previous() -> tuple[str, str]:
+        def previous(idx: int | None = None) -> Any:
             assert current, "no previous state"
-            return current[-1]
+            return current[idx if idx is not None else -1]
 
         # init state
         s = state()
@@ -446,7 +453,7 @@ class SPARQLGenerator(TextProcessor):
                     advance((continuation, search_token))
 
             elif s == "search":
-                failed = set(search_query for search_query, _ in failures())
+                failed = set(failures())
                 search_query = self._generate_search_query(
                     question,
                     prefix("sparql"),
@@ -455,11 +462,11 @@ class SPARQLGenerator(TextProcessor):
                 if search_query in failed:
                     backtrack()
                 else:
-                    advance((search_query, ""))
+                    advance(search_query)
 
             else:
-                search_query, _ = previous()
-                failed = set(failures())
+                search_query = previous()
+                failed = set(selection for _, selection in failures())
                 selection = self._select_alternative(
                     question,
                     prefix("sparql"),
@@ -467,7 +474,7 @@ class SPARQLGenerator(TextProcessor):
                     search_query,
                     failed
                 )
-                if selection is None or selection[0] in failed:
+                if selection is None or selection[1] in failed:
                     backtrack()
                 else:
                     advance(selection)
@@ -535,10 +542,7 @@ class SPARQLGenerator(TextProcessor):
             self._is_chat
         ).token_ids
 
-        info = {
-            "continuation": "",
-            "obj_type": ""
-        }
+        info = {"continuation": "", "search_token": ""}
         # add sparql constraint if not disabled
         if not self._disable_sparql_constraint:
             const = self._sparql_constraint.clone()
@@ -566,7 +570,7 @@ class SPARQLGenerator(TextProcessor):
 
             part = decoded[:match.start()]
             beam.info["continuation"] = part
-            beam.info["obj_type"] = match.group(1)
+            beam.info["search_token"] = match.group(0)
             return True
 
         last: Beam | None = None
@@ -583,14 +587,14 @@ class SPARQLGenerator(TextProcessor):
 
         assert last is not None, "should not happen"
         cont = last.info["continuation"]
-        obj_type = last.info["obj_type"]
+        search_token = last.info["search_token"]
         self.logger.debug(
             "continuation:\n"
             f"{prompt[-2]['text']}"
             f"{prompt[-1]['text']}"
-            f"{cont}{format_obj_type(obj_type)}"
+            f"{cont}{search_token}"
         )
-        return cont, obj_type
+        return cont, search_token
 
     def _generate_search_query(
         self,
@@ -634,7 +638,7 @@ class SPARQLGenerator(TextProcessor):
         natural_prefix: str,
         search_query: str,
         failures: set[tuple[str, str, str | None]] | None = None,
-    ) -> tuple[tuple[str, str, str | None], str] | None:
+    ) -> tuple[str, tuple[str, str, str | None]] | None:
         assert self._manager is not None, "kg indices not set"
 
         alternatives = self._manager.get_selection_alternatives(

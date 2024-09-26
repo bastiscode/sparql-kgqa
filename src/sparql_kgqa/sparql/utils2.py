@@ -721,6 +721,26 @@ Answer: (?:yes|no)"""
         else:
             return literal.strip('"')
 
+    def denormalize_selection(
+        self,
+        obj_type: str,
+        identifier: str,
+        variant: str | None
+    ) -> str | None:
+        if obj_type == "entity":
+            return self.entity_mapping.denormalize(
+                identifier,
+                variant
+            )
+        elif obj_type == "property":
+            return self.property_mapping.denormalize(
+                identifier,
+                variant
+            )
+        else:
+            return identifier
+         
+
     def fix_prefixes(
         self,
         sparql: str,
@@ -1253,7 +1273,7 @@ Answer: (?:yes|no)"""
         # none alternative
         num_alts = sum(len(alts) for alts in alternatives.values())
         alt_string = "0. none (if no other alternative fits well enough)" + \
-            "\n\n" * (num_alts > 0)
+            "\n\n" * (num_alts > 0) + alt_string
         alt_regex += "|" * (num_alts > 0) + re.escape("0. none")
         alt_regex += ")"
 
@@ -1318,20 +1338,21 @@ Selection:
         self,
         alternatives: dict[str, list[Alternative]],
         result: str
-    ) -> tuple[tuple[str, str, str | None], str] | None:
-        num, name = result.split(".", 1)
-        idx = int(num) - 1
-        name = name[1:]
-        num_alts = sum(len(alts) for alts in alternatives.values())
-        if idx >= num_alts:
+    ) -> tuple[str, tuple[str, str, str | None]] | None:
+        num, name = result.split(". ", 1)
+        idx = int(num)
+        if idx == 0:
             # the none alternative was selected
             return None
+
+        # convert selection index to offset
+        idx -= 1
 
         offset = 0
         obj_type = OBJ_TYPES[0]
         for obj_type in OBJ_TYPES:
             obj_alts = len(alternatives.get(obj_type, []))
-            if offset <= idx < obj_alts:
+            if offset <= idx < offset + obj_alts:
                 break
             offset += obj_alts
 
@@ -1348,21 +1369,17 @@ Selection:
             # - 1 to account for closing ")"
             variant = result[len(num) + len(alternative.get_label()) + 4:-1]
 
-        denorm = None
-        if obj_type == "property":
-            denorm = self.property_mapping.denormalize(identifier, variant)
-            assert denorm is not None, "should not happen"
-
-        elif obj_type == "entity":
-            denorm = self.entity_mapping.denormalize(identifier, variant)
-            assert denorm is not None, "should not happen"
-
+        denorm = self.denormalize_selection(
+            obj_type,
+            identifier,
+            variant
+        )
         if denorm is not None:
             short = self.format_iri(denorm, self.custom_prefixes)
             assert short is not None, "should not happen"
             name = f"<{name} ({short})>"
 
-        return (obj_type, identifier, variant), name
+        return name, (obj_type, identifier, variant)
 
     def get_search_prompt_and_regex(
         self,
