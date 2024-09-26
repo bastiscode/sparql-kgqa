@@ -51,7 +51,7 @@ wikidata-data:
 	--progress \
 	-n $(NUM_PROCESSES)
 	@python scripts/prepare_data2.py \
-	--qald-10
+	--qald-10 \
 	--output data/wikidata-qald10 \
 	--entities $(WD_ENT) \
 	--properties $(WD_PROP) \
