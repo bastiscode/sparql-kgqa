@@ -1,4 +1,5 @@
 from collections import Counter
+from urllib.parse import quote_plus
 import time
 import tempfile
 import os
@@ -669,7 +670,7 @@ Answer: (?:yes|no)"""
 
         match parse["name"]:
             case "IRIREF":
-                short = self.format_iri(data, prefixes)
+                short = self.format_iri(data, prefixes, safe=False)
                 if short is None:
                     return None
 
@@ -706,14 +707,23 @@ Answer: (?:yes|no)"""
     def format_iri(
         self,
         iri: str,
-        prefixes: dict[str, str] | None = None
+        prefixes: dict[str, str] | None = None,
+        safe: bool = False
     ) -> str | None:
         longest = self.find_longest_prefix(iri, prefixes)
         if longest is None:
             return iri
 
         short, long = longest
-        return short + ":" + iri[len(long):-1]
+        val = iri[len(long):-1]
+
+        # check if no bad characters are in the short form
+        # by url encoding it and checking if it is still the same
+        short = short + ":" + val
+        if not safe or quote_plus(short) == short:
+            return short
+        else:
+            return None
 
     def format_string_literal(self, literal: str) -> str:
         if literal.startswith("'"):
@@ -789,7 +799,7 @@ Answer: (?:yes|no)"""
             if iri["value"] == "":
                 continue
 
-            short = self.format_iri(iri["value"])
+            short = self.format_iri(iri["value"], safe=True)
             if short is None:
                 continue
 

@@ -18,8 +18,6 @@ PN_LOCAL_ESC '\' ( '_' | '~' | '.' | '-' | '!' | '$' | '&' | "'" | '(' | ')' | '
 %%
 
 // Custom tags
-// KGE         '<|kge|>' .*? '<|kge|>'
-// KGP         '<|kgp|>' .*? '<|kgp|>'
 KGS         '<|search|>'
 
 // SPARQL keywords

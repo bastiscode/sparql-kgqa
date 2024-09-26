@@ -572,14 +572,19 @@ def prepare_stages(
             return None
 
         child = obj["children"][0]
-        if child["name"] != "PrefixedName":
+        if child["name"] == "PrefixedName":
+            pfx, val = child["children"][0]["value"].split(":", 1)
+
+        elif child["name"] == "IRIREF":
+            short = manager.format_iri(child["value"])
+            if short is None:
+                return None
+
+            pfx, val = short.split(":", 1)
+
+        else:
             return None
 
-        child = child["children"][0]
-        if child["name"] != "PNAME_LN":
-            return None
-
-        pfx, val = child["value"].split(":", 1)
         if pfx in manager.prefixes:
             return "other", child["value"], None, child["value"], []
 
