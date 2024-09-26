@@ -34,7 +34,9 @@ def parse_args() -> argparse.Namespace:
     data.add_argument("--wikidata-simple-questions", action="store_true")
     data.add_argument("--lc-quad2-wikidata", action="store_true")
     data.add_argument("--qald-10", action="store_true")
+    data.add_argument("--qald-7", type=str)
     data.add_argument("--mcwq", type=str)
+    data.add_argument("--wikisp", type=str)
     data.add_argument("--kqa-pro", type=str)
     data.add_argument("--qa-wiki", type=str)
     data.add_argument("--qlever-wikidata", type=str)
@@ -67,17 +69,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--properties", type=str, required=True)
     parser.add_argument("--progress", action="store_true")
     parser.add_argument("--skip", nargs="+", default=[])
+    parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--qlever-endpoint", type=str, default=None)
     sample_group = parser.add_argument_group("samples")
     sample_group.add_argument(
-        "--max-questions",
+        "--max-samples",
         type=int,
         default=None
     )
     sample_group.add_argument(
-        "--samples-per-question",
+        "--stages-per-sample",
         type=int,
-        default=1
+        default=None
     )
     sample_group.add_argument(
         "--selections-min-k",
@@ -87,7 +90,7 @@ def parse_args() -> argparse.Namespace:
     sample_group.add_argument(
         "--selections-max-k",
         type=int,
-        default=32
+        default=16
     )
     sample_group.add_argument(
         "--selections-min-aliases",
@@ -97,12 +100,7 @@ def parse_args() -> argparse.Namespace:
     sample_group.add_argument(
         "--selections-max-aliases",
         type=int,
-        default=8
-    )
-    sample_group.add_argument(
-        "--selections-add-info-p",
-        type=float,
-        default=0.1
+        default=5
     )
     parser.add_argument("--seed", type=int, default=22)
     parser.add_argument("-n", "--num-workers", type=int, default=None)
@@ -119,6 +117,23 @@ SPLIT_RENAME = {
     "valid": "val",
     "validation": "val",
 }
+
+COMMON_SPARQL_KEYWORDS = [
+    "PREFIX", "SELECT", "DISTINCT", "WHERE", "FILTER", "ORDER", "LIMIT",
+    "OFFSET", "OPTIONAL", "UNION", "GROUP", "HAVING", "VALUES"
+]
+
+
+def clean_sparql_for_wqsp_and_cwq(sparql: str) -> str:
+    lines = []
+    for line in sparql.splitlines():
+        comment = line.find("#")
+        if comment != -1:
+            line = line[:comment]
+        line = line.replace(" OR ", " || ")
+        lines.append(line)
+
+    return "\n".join(line for line in lines if line.strip())
 
 
 def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
@@ -196,6 +211,30 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
 
             output[split] = samples
 
+    elif args.qald_7 is not None:
+        kg = "wikidata"
+        with open(
+            os.path.join(args.qald_7, "qald-7-train-en-wikidata.json"),
+            "r"
+        ) as inf:
+            train = json.load(inf)
+
+        with open(
+            os.path.join(args.qald_7, "qald-7-test-en-wikidata.json"),
+            "r"
+        ) as inf:
+            test = json.load(inf)
+
+        for data, split in [(train, "train"), (test, "test")]:
+            samples = []
+            for item in data["questions"]:
+                for q in item["question"]:
+                    if q["language"] != "en":
+                        continue
+                    sparql = item["query"]["sparql"]
+                    samples.append(Sample(q["string"], sparql))
+            output[split] = samples
+
     elif args.mcwq is not None:
         kg = "wikidata"
         with open(os.path.join(args.mcwq, "dataset.json"), "r") as inf:
@@ -225,6 +264,21 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
                     lambda m: m.group(1) + " ",
                     query
                 )
+                sparql = item["sparql"]
+                samples.append(Sample(query, sparql))
+            output[split] = samples
+
+    elif args.wikisp is not None:
+        kg = "wikidata"
+        for split in ["train", "dev", "test"]:
+            file = os.path.join(args.wikisp, f"{split}.json")
+            split = SPLIT_RENAME.get(split, split)
+            with open(file, "r") as inf:
+                data = json.load(inf)
+
+            samples = []
+            for item in data:
+                query = item["utterance"]
                 sparql = item["sparql"]
                 samples.append(Sample(query, sparql))
             output[split] = samples
@@ -299,7 +353,7 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
                 for sparql in item["Parses"]["Sparql"]:
                     samples.append(Sample(
                         item["RawQuestion"],
-                        sparql
+                        clean_sparql_for_wqsp_and_cwq(sparql)
                     ))
             output[split] = samples
 
@@ -316,7 +370,7 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
             for item in items:
                 samples.append(Sample(
                     item["question"],
-                    item["sparql"]
+                    clean_sparql_for_wqsp_and_cwq(item["sparql"])
                 ))
             output[split] = samples
 
@@ -589,7 +643,7 @@ def prepare_stages(
     samples = []
     for item_idx in random.sample(
         list(range(len(items))),
-        min(len(items), args.samples_per_question)
+        min(len(items), args.stages_per_sample)
     ):
         manager = random.choice(managers)
         item, processed = items[item_idx]
@@ -597,6 +651,7 @@ def prepare_stages(
         start, end = span(item)
         assert end >= start, "invalid span"
         obj_type, identifier, variant, label, syns = processed
+        is_lit_or_other = obj_type in ["literal", "other"]
 
         try:
             prefix_raw = manager.fix_prefixes(
@@ -608,50 +663,51 @@ def prepare_stages(
                 prefix_raw,
                 is_prefix=True
             )
+
+            if item_idx > 0:
+                last, _ = items[item_idx - 1]
+                (_, last_end) = span(last)
+                assert last_end < start, "invalid item order"
+                last_prefix_raw = manager.fix_prefixes(
+                    sparql_encoded[:last_end].decode(),
+                    is_prefix=True,
+                    remove_known=True
+                )
+                last_prefix, _ = manager.replace_iris(
+                    last_prefix_raw,
+                    is_prefix=True
+                )
+            else:
+                last_prefix = ""
+                last_end = 0
+
+            cont = sparql_encoded[last_end:start].decode() + SEARCH_TOKEN
+            cont_prompt = manager.get_sparql_continuation_prompt(
+                question,
+                last_prefix
+            )
+            samples.append((cont_prompt, cont))
+
+            if item_idx == len(items) - 1:
+                # add additional continuation sample for the end of the query
+                final_prefix_raw = manager.fix_prefixes(
+                    sparql_encoded[:end].decode(),
+                    is_prefix=True,
+                    remove_known=True
+                )
+                final_prefix, _ = manager.replace_iris(
+                    final_prefix_raw,
+                    is_prefix=True
+                )
+                final_cont = sparql_encoded[end:].decode()
+                final_cont_prompt = manager.get_sparql_continuation_prompt(
+                    question,
+                    final_prefix
+                )
+                samples.append((final_cont_prompt, final_cont))
+
         except Exception:
             continue
-
-        if item_idx > 0:
-            last, _ = items[item_idx - 1]
-            (_, last_end) = span(last)
-            assert last_end < start, "invalid item order"
-            last_prefix_raw = manager.fix_prefixes(
-                sparql_encoded[:last_end].decode(),
-                is_prefix=True,
-                remove_known=True
-            )
-            last_prefix, _ = manager.replace_iris(
-                last_prefix_raw,
-                is_prefix=True
-            )
-        else:
-            last_prefix = ""
-            last_end = 0
-
-        continuation = sparql_encoded[last_end:start].decode() + SEARCH_TOKEN
-        continuation_prompt = manager.get_sparql_continuation_prompt(
-            question,
-            last_prefix
-        )
-        samples.append((continuation_prompt, continuation))
-
-        if item_idx == len(items) - 1:
-            # add additional continuation sample for the end of the query
-            final_prefix_raw = manager.fix_prefixes(
-                sparql_encoded[:end].decode(),
-                is_prefix=True,
-                remove_known=True
-            )
-            final_prefix, _ = manager.replace_iris(
-                final_prefix_raw,
-                is_prefix=True
-            )
-            final_continuation = sparql_encoded[end:].decode()
-            final_continuation_prompt = manager.get_sparql_continuation_prompt(
-                question,
-                final_prefix
-            )
-            samples.append((final_continuation_prompt, final_continuation))
 
         random.shuffle(syns)
         all_syns = [label] + syns
@@ -684,7 +740,6 @@ def prepare_stages(
             prefix,
             failures=search_failures
         )
-
         samples.append((search_prompt, search))
 
         selection_k = random.randint(
@@ -701,13 +756,17 @@ def prepare_stages(
             max_retries=3
         )
         if alts is None:
+            if is_lit_or_other:
+                # this only makes sense if there are actually alternatives
+                continue
+
             alts = {}
 
         target_alts = [
             alt
             for alt in alts.get(obj_type, [])
             if (alt.identifier == identifier
-                or (obj_type in ["literal", "other"] and alt.label == label))
+                or (is_lit_or_other and alt.label == label))
             and (variant is None or variant in (alt.variants or []))
         ]
         target_alt = random.choice(target_alts) if target_alts else None
@@ -757,13 +816,12 @@ def prepare_stages(
                 args.selections_min_aliases,
                 args.selections_max_aliases
             ),
-            add_infos=random.random() < args.selections_add_info_p,
+            add_infos=random.random() < 0.1,
             failures=select_failures
         )
 
-        num_alts = sum(len(a) for a in alts.values())
         if target_alt is None:
-            selection = f"{num_alts + 1}. none"
+            selection = "0. none"
         else:
             offset = sum(
                 len(alts[obj_type])
@@ -771,10 +829,7 @@ def prepare_stages(
                 if obj_type in alts
             )
             select_idx = offset + alts[obj_type].index(target_alt)
-            select_name = target_alt.label
-            if variant:
-                select_name += f" ({variant})"
-            selection = f"{select_idx + 1}. {select_name}"
+            selection = f"{select_idx + 1}. {target_alt.get_label(variant)}"
 
         samples.append((select_prompt, selection))
 
@@ -803,9 +858,9 @@ def prepare_sample(
         else:
             raw_sparql = manager.fix_prefixes(
                 sample.sparql,
-                remove_known=True
+                remove_known=not is_test
             )
-    except Exception:
+    except:
         return None
 
     if is_test:
@@ -881,7 +936,7 @@ def prepare(args: argparse.Namespace):
     os.makedirs(args.output, exist_ok=True)
 
     if args.num_workers is None:
-        args.num_workers = min(mp.cpu_count(), 8)
+        args.num_workers = min(mp.cpu_count(), 4)
 
     print(f"Starting {args.num_workers} workers")
     pool = mp.Pool(
@@ -890,21 +945,40 @@ def prepare(args: argparse.Namespace):
         initargs=(kg, args)
     )
 
+    if args.stages_per_sample is None:
+        train_samples = num_samples["train"]
+        # determine dynamically based on the number of training samples
+        # < 1000: 8x stages
+        # < 10000: 4x stages
+        # < 100000: 2x stages
+        # >= 100000: 1x stage
+        if train_samples < 1000:
+            args.stages_per_sample = 8
+        elif train_samples < 10000:
+            args.stages_per_sample = 4
+        elif train_samples < 100000:
+            args.stages_per_sample = 2
+        else:
+            args.stages_per_sample = 1
+
     for split, samples in data.items():
         if split in args.skip:
             print(f"skipping {split} split")
             continue
 
-        if args.max_questions is not None:
+        if args.max_samples is not None:
             samples = random.sample(
                 samples,
-                min(len(samples), args.max_questions)
+                min(len(samples), args.max_samples)
             )
 
         input = os.path.join(
             args.output,
             f"{split}_input.jsonl"
         )
+        if os.path.exists(input) and not args.overwrite:
+            print(f"skipping {split} split because it already exists")
+            continue
         target = os.path.join(
             args.output,
             f"{split}_target.jsonl"

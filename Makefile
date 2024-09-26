@@ -1,91 +1,168 @@
-WD_ENT=data/kg-index/wikidata-entities
-WD_PROP=data/kg-index/wikidata-properties
-
-QLEVER_TIMEOUT=1h
+WD_ENT=data/search-index/wikidata-entities-small
+WD_PROP=data/search-index/wikidata-properties
 
 WD_URL=https://qlever.cs.uni-freiburg.de/api/wikidata
 WD_ACCESS_TOKEN=null
+WD_QUERY_LOG_SOURCE=organic
+
+FB_ENT=data/search-index/freebase-entities
+FB_PROP=data/search-index/freebase-properties
 
 FB_URL=https://qlever.cs.uni-freiburg.de/api/freebase
 FB_ACCESS_TOKEN=null
 
+DBPEDIA_ENT=data/search-index/dbpedia-entities
+DBPEDIA_PROP=data/search-index/dbpedia-properties
+
 DBPEDIA_URL=https://qlever.cs.uni-freiburg.de/api/dbpedia
 DBPEDIA_ACCESS_TOKEN=null
+
+DBLP_ENT=data/search-index/dblp-entities
+DBLP_PROP=data/search-index/dblp-properties
 
 DBLP_URL=https://qlever.cs.uni-freiburg.de/api/dblp
 DBLP_ACCESS_TOKEN=null
 
+NUM_PROCESSES=4
+
+QLEVER_TIMEOUT=1h
+
 SEARCH_INDEX=qgram
 
-.PHONY: all data querylogs indices examples
-all: data querylogs indices examples
+all: search-data search-indices other-data wikidata-data freebase-data dbpedia-data dblp-data example-indices
 
-data:
-	@echo "Preparing simple questions"
-	@python scripts/prepare_data.py \
-	--wikidata-simple-questions third_party/KGQA-datasets/simple_wikidata_qa \
+other-data:
+	@mkdir -p data/open-hermes-2.5
+	@python scripts/prepare_openhermes.py data/open-hermes-2.5
+
+wikidata-data:
+	@python scripts/prepare_data2.py \
+	--wikidata-simple-questions \
 	--output data/wikidata-simplequestions \
 	--entities $(WD_ENT) \
 	--properties $(WD_PROP) \
-	--progress
-	@echo "Preparing lc quad wikidata"
-	@python scripts/prepare_data.py \
-	--lc-quad2-wikidata third_party/KGQA-datasets/lcquad_v2 \
+	--progress \
+	-n $(NUM_PROCESSES)
+	@python scripts/prepare_data2.py \
+	--lc-quad2-wikidata \
 	--output data/wikidata-lcquad2 \
 	--entities $(WD_ENT) \
 	--properties $(WD_PROP) \
-	--progress
-	@echo "Preparing qald 10"
-	@python scripts/prepare_data.py \
-	--qald-10 third_party/KGQA-datasets/qald/qald-10.py \
+	--progress \
+	-n $(NUM_PROCESSES)
+	@python scripts/prepare_data2.py \
+	--qald-10
 	--output data/wikidata-qald10 \
 	--entities $(WD_ENT) \
 	--properties $(WD_PROP) \
-	--progress
-	@echo "Preparing mcwq"
-	@python scripts/prepare_data.py \
+	--progress \
+	-n $(NUM_PROCESSES)
+	@python scripts/prepare_data2.py \
+	--qald-7 data/raw/qald-7 \
+	--output data/wikidata-qald7 \
+	--entities $(WD_ENT) \
+	--properties $(WD_PROP) \
+	--progress \
+	-n $(NUM_PROCESSES)
+	@python scripts/prepare_data2.py \
 	--mcwq data/raw/mcwq \
 	--output data/wikidata-mcwq \
 	--entities $(WD_ENT) \
 	--properties $(WD_PROP) \
-	--progress
-	@echo "Preparing qa wiki"
+	--progress \
+	-n $(NUM_PROCESSES)
+	@python scripts/prepare_data2.py \
+	--wikisp data/raw/wikisp \
+	--output data/wikidata-wikisp \
+	--entities $(WD_ENT) \
+	--properties $(WD_PROP) \
+	--progress \
+	-n $(NUM_PROCESSES)
+	# todo: add kqa pro
 	@python scripts/prepare_data2.py \
 	--qa-wiki data/raw/qa_wiki/qa_wiki.tsv \
 	--output data/wikidata-qa-wiki \
 	--entities $(WD_ENT) \
 	--properties $(WD_PROP) \
-	--progress
-	@echo "Preparing OpenHermes2.5"
-	@mkdir -p data/open-hermes-2.5
-	@python scripts/prepare_openhermes.py data/open-hermes-2.5
-
-WD_QUERY_LOG_SOURCE=organic
-
-querylogs:
-	@echo "Preparing wikidata query logs"
+	--progress \
+	-n $(NUM_PROCESSES)
+	@python scripts/prepare_data2.py \
+	--qlever-wikidata data/raw/qlever-wikidata \
+	--output data/wikidata-qlever-wikidata \
+	--entities $(WD_ENT) \
+	--properties $(WD_PROP) \
+	--progress \
+	-n $(NUM_PROCESSES)
 	@python scripts/prepare_wikidata_query_logs.py \
-	--files data/wikidata-query-logs/downloads/*.tsv \
+	--files data/raw/wikidata-query-logs/*/*.tsv \
 	--output-dir data/wikidata-query-logs \
 	--entities $(WD_ENT) \
 	--properties $(WD_PROP) \
 	--$(WD_QUERY_LOG_SOURCE)-only \
 	--progress
 
-examples:
-	@echo "Creating example indices"
-	@mkdir -p data/example-index
-	@python scripts/prepare_examples.py \
-	data/wikidata-simplequestions/train_examples.tsv \
-	data/example-index/wikidata-simplequestions.bin \
-	--progress
-	@python scripts/prepare_examples.py \
-	data/wikidata-qa-wiki/train_examples.tsv \
-	data/wikidata-lcquad2/train_examples.tsv \
-	data/wikidata-qald10/train_examples.tsv \
-	data/wikidata-mcwq/train_examples.tsv \
-	data/example-index/wikidata.bin \
-	--progress
+freebase-data:
+	@python scripts/prepare_data2.py \
+	--grail-qa \
+	--output data/freebase-grail-qa \
+	--entities $(FB_ENT) \
+	--properties $(FB_PROP) \
+	--progress \
+	-n $(NUM_PROCESSES)
+	@python scripts/prepare_data2.py \
+	--wqsp \
+	--output data/freebase-wqsp \
+	--entities $(FB_ENT) \
+	--properties $(FB_PROP) \
+	--progress \
+	-n $(NUM_PROCESSES)
+	@python scripts/prepare_data2.py \
+	--cwq \
+	--output data/freebase-cwq \
+	--entities $(FB_ENT) \
+	--properties $(FB_PROP) \
+	--progress \
+	-n $(NUM_PROCESSES)
+	@python scripts/prepare_data2.py \
+	--cfq data/raw/cfq1.1/cfq
+	--output data/freebase-cfq \
+	--entities $(FB_ENT) \
+	--properties $(FB_PROP) \
+	--progress \
+	-n $(NUM_PROCESSES)
+
+dbpedia-data:
+	@python scripts/prepare_data2.py \
+	--lc-quad1-dbpedia \
+	--output data/dbpedia-lcquad1 \
+	--entities $(DBPEDIA_ENT) \
+	--properties $(DBPEDIA_PROP) \
+	--progress \
+	-n $(NUM_PROCESSES)
+	@python scripts/prepare_data2.py \
+	--qald-9 \
+	--output data/dbpedia-qald9 \
+	--entities $(DBPEDIA_ENT) \
+	--properties $(DBPEDIA_PROP) \
+	--progress \
+	-n $(NUM_PROCESSES)
+
+dblp-data:
+	@python scripts/prepare_data2.py \
+	--dblp-quad \
+	--output data/dblp-quad \
+	--entities $(DBLP_ENT) \
+	--properties $(DBLP_PROP) \
+	--progress \
+	-n $(NUM_PROCESSES)
+
+example-indices:
+	@for f in $(wildcard data/*/train_raw.jsonl); do \
+		python scripts/build_sim_index.py \
+		`dirname $$f`/train_examples.index \
+		$$f \
+		--progress; \
+	done
 
 search-data: wikidata-search-data freebase-search-data dbpedia-search-data
 search-indices: wikidata-search-indices freebase-search-indices dbpedia-search-indices
