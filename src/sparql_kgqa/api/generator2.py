@@ -334,10 +334,10 @@ class SPARQLGenerator(TextProcessor):
         if not self._disable_sparql_constraint:
             beam.info["const"] = self._sparql_constraint.clone()
 
-        memo: dict[tuple[tuple[str, str], ...], list[tuple[str, str]]] = {}
+        memo: dict[tuple[tuple[str, str], ...], list] = {}
         current: list[tuple[str, str]] = []
 
-        def advance(value: tuple[str, str]):
+        def advance(value):
             current.append(value)
 
         def backtrack():
@@ -349,7 +349,7 @@ class SPARQLGenerator(TextProcessor):
             else:
                 memo[key] = [value]
 
-        def failures() -> list[tuple[str, str]]:
+        def failures() -> list:
             return memo.get(tuple(current), [])
 
         def prefix(type: str) -> str:
@@ -459,10 +459,7 @@ class SPARQLGenerator(TextProcessor):
 
             else:
                 search_query, _ = previous()
-                failed = set(
-                    identifier
-                    for identifier, _ in failures()
-                )
+                failed = set(failures())
                 selection = self._select_alternative(
                     question,
                     prefix("sparql"),
@@ -691,7 +688,9 @@ class SPARQLGenerator(TextProcessor):
     ) -> None:
         if example_index is not None:
             if isinstance(example_index, str):
-                example_index = SimilarityIndex.load(example_index)
+                index = SimilarityIndex()
+                index.load(example_index)
+                example_index = index
             self._example_index = example_index
             self._examples = None
 

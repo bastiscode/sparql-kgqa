@@ -100,9 +100,9 @@ wikidata-search-data:
 	--data-urlencode access-token=$(WD_ACCESS_TOKEN) \
 	| python scripts/prepare_search_index.py \
 	> data/search-index/wikidata-entities/data.tsv
-	# wikidata entities small (top 1M entities by sitelinks)
+	# wikidata entities small (top 10M entities by sitelinks)
 	@mkdir -p data/search-index/wikidata-entities-small/$(SEARCH_INDEX)
-	@head -n 1000001 data/search-index/wikidata-entities/data.tsv \
+	@head -n 10000001 data/search-index/wikidata-entities/data.tsv \
 	> data/search-index/wikidata-entities-small/data.tsv
 	# wikidata properties
 	# https://qlever.cs.uni-freiburg.de/wikidata/dAqs2J

@@ -72,16 +72,16 @@ def is_prefix_of_iri(prefix: str, iri: str) -> bool:
 class Alternative:
     def __init__(
         self,
-        label: str,
         identifier: str,
         short_identifier: str | None = None,
+        label: str | None = None,
         variants: list[str] | None = None,
         aliases: list[str] | None = None,
         infos: list[str] | None = None
     ) -> None:
-        self.label = label
         self.identifier = identifier
         self.short_identifier = short_identifier
+        self.label = label
         self.aliases = aliases
         self.variants = variants
         self.infos = infos
@@ -90,35 +90,54 @@ class Alternative:
         return f"Alternative('{self.label}', '{self.identifier}')"
 
     @staticmethod
-    def _clip(s: str, max_len: int = 128) -> str:
+    def _clip(s: str | None, max_len: int = 128) -> str:
+        if s is None:
+            return ""
+
         return s[:max_len] + "..." if len(s) > max_len else s
 
+    def get_label(self, variant: str | None = None) -> str:
+        label = (
+            self._clip(self.label)
+            or self.short_identifier
+            or self.identifier
+        )
+        if variant:
+            label += f" ({variant})"
+
+        return label
+
     def get_string(self, max_aliases: int = 5, add_infos: bool = False) -> str:
-        s = self.label
-        if add_infos and self.infos:
-            info_str = ", ".join(self._clip(info) for info in self.infos)
-            s += f" ({info_str})"
+        s = self.get_label()
+
+        if add_infos and (self.label or self.infos):
+            infos = []
+            if self.label:
+                infos.append(self.short_identifier or self.identifier)
+            if self.infos:
+                infos.extend(self.infos)
+            if infos:
+                info_str = ", ".join(self._clip(info) for info in infos)
+                s += f" ({info_str})"
+
         if max_aliases and self.aliases:
             aliases = random.sample(
                 self.aliases,
                 min(len(self.aliases), max_aliases)
             )
-            alias_str = ", ".join(aliases)
+            alias_str = ", ".join(self._clip(a) for a in aliases)
             s += f", also known as {alias_str}"
 
-        if self.short_identifier and self.variants:
-            s += f" ({self.short_identifier}, {'|'.join(self.variants)})"
-        elif self.variants:
+        if self.variants:
             s += f" ({'|'.join(self.variants)})"
-        elif self.short_identifier:
-            s += f" ({self.short_identifier})"
+
         return s
 
     def get_regex(self) -> str:
-        r = re.escape(self.label)
+        r = re.escape(self.get_label())
         if self.variants:
             r += re.escape(" (") \
-                + "|".join(map(re.escape, self.variants)) \
+                + "(?:" + "|".join(map(re.escape, self.variants)) + ")" \
                 + re.escape(")")
         return r
 
@@ -508,41 +527,40 @@ class KgManager:
         if num_rows == 0:
             return "Empty"
 
-        def format_uri(s: str) -> str:
-            if not s.startswith("<") or not s.endswith(">"):
-                return s
+        # generate a nicely formatted table
+        data = []
+        for r in range(1, min(len(result), max_rows + 1)):
+            res = result[r]
+            row = []
+            for c in range(min(len(res), max_columns)):
+                val = res[c]
+                processed = self.process_iri_or_literal(val)
+                if processed is None:
+                    row.append(val)
+                    continue
 
-            # try to find in data
-            norm = self.entity_mapping.normalize(s)
-            map = self.entity_mapping
-            index = self.entity_index
-            if norm is None or norm[0] not in map:
-                norm = self.property_mapping.normalize(s)
-                map = self.property_mapping
-                index = self.property_index
+                typ, formatted, _ = processed
+                if typ == "literal":
+                    row.append(formatted)
 
-            if norm is None or norm[0] not in map:
-                return s
+                # for iri check whether it is in one of the mappings
+                norm = self.entity_mapping.normalize(val)
+                map = self.entity_mapping
+                index = self.entity_index
+                if norm is None or norm[0] not in map:
+                    norm = self.property_mapping.normalize(val)
+                    map = self.property_mapping
+                    index = self.property_index
 
-            key, variant = norm
-            label = index.get_name(map[key])
-            if variant is not None:
-                label += f" ({variant})"
+                if norm is not None and norm[0] in map:
+                    name = index.get_name(map[norm[0]])
+                    formatted = f"{name} ({formatted})"
 
-            longest = self.find_longest_prefix(s)
-            if longest is not None:
-                short, long = longest
-                s = short + ":" + s[len(long):-1]
-
-            label += f" ({s})"
-            return label
+                row.append(formatted)
 
         table = generate_table(
             [result[0][:max_columns]],
-            [
-                [format_uri(v) for v in res[:max_columns]]
-                for res in result[1:max_rows + 1]
-            ]
+            data,
         )
 
         return f"""\
@@ -635,6 +653,74 @@ Answer: (?:yes|no)"""
             None
         )
 
+    def process_iri_or_literal(
+        self,
+        data: str,
+        prefixes: dict[str, str] | None = None
+    ) -> tuple[str, str, str | None] | None:
+        try:
+            parse = self.iri_literal_parser.parse(
+                data,
+                skip_empty=True,
+                collapse_single=True
+            )
+        except Exception:
+            return None
+
+        match parse["name"]:
+            case "IRIREF":
+                short = self.format_iri(data, prefixes)
+                if short is None:
+                    return None
+
+                return "iri", short, None
+
+            case lit if lit.startswith("STRING"):
+                return "literal", self.format_string_literal(data), None
+
+            case "RDFLiteral":
+                if len(parse["children"]) == 2:
+                    # langtag
+                    s, langtag = parse["children"]
+                    if not langtag["value"].startswith("@en"):
+                        return None
+
+                    return (
+                        "literal",
+                        self.format_string_literal(s["value"]),
+                        langtag["value"]
+                    )
+
+                elif len(parse["children"]) == 3:
+                    # datatype
+                    s, _, datatype = parse["children"]
+                    return (
+                        "literal",
+                        self.format_string_literal(s["value"]),
+                        self.format_iri(datatype["value"])
+                    )
+
+            case "INTEGER" | "DECIMAL" | "DOUBLE" | "true" | "false":
+                return "literal", data, None
+
+    def format_iri(
+        self,
+        iri: str,
+        prefixes: dict[str, str] | None = None
+    ) -> str | None:
+        longest = self.find_longest_prefix(iri, prefixes)
+        if longest is None:
+            return iri
+
+        short, long = longest
+        return short + ":" + iri[len(long):-1]
+
+    def format_string_literal(self, literal: str) -> str:
+        if literal.startswith("'"):
+            return literal.strip("'")
+        else:
+            return literal.strip('"')
+
     def fix_prefixes(
         self,
         sparql: str,
@@ -684,14 +770,12 @@ Answer: (?:yes|no)"""
             if iri["value"] == "":
                 continue
 
-            val = iri["value"]
-            longest = self.find_longest_prefix(val)
-            if longest is None:
+            short = self.format_iri(iri["value"])
+            if short is None:
                 continue
 
-            short, long = longest
-            iri["value"] = short + ":" + val[len(long):-1]
-            seen.add(short)
+            pfx, _ = short.split(":", 1)
+            seen.add(pfx)
 
         for pfx in find_all(
             parse,
@@ -749,13 +833,13 @@ Answer: (?:yes|no)"""
             if start == end:
                 return False
 
-            val = child["value"]
-            # convert to long form
-            short, val = val.split(":", 1)
-            if short not in self.custom_prefixes:
+            short = child["value"]
+            # convert to long form iri
+            pfx, val = short.split(":", 1)
+            if pfx not in self.custom_prefixes:
                 return False
 
-            iri = self.custom_prefixes[short] + val + ">"
+            iri = self.custom_prefixes[pfx] + val + ">"
 
         elif child["name"] == "IRIREF":
             start, end = child["byte_span"]
@@ -763,15 +847,12 @@ Answer: (?:yes|no)"""
                 return False
 
             iri = child["value"]
-            longest = self.find_longest_prefix(
+            short = self.format_iri(
                 iri,
                 self.custom_prefixes
             )
-            if longest is None:
+            if short is None:
                 return False
-
-            short, long = longest
-            val = iri[len(long):-1]
 
         else:
             return False
@@ -791,7 +872,7 @@ Answer: (?:yes|no)"""
         label = index.get_name(map[key])
 
         if with_iri:
-            label += f" ({short}:{val})"
+            label += f" ({short})"
         elif variant:
             label += f" ({variant})"
 
@@ -906,9 +987,11 @@ Answer: (?:yes|no)"""
                 alt.identifier != id
                 for alt in alternatives
             ), f"duplicate identifier {id} in data"
+
             alternative = Alternative(
-                label,
                 id,
+                short_identifier=self.format_iri(id),
+                label=label,
                 variants=sorted(variants) if variants else None,
                 aliases=[s for s in syns.split(";;;") if s != ""],
                 infos=[i for i in infos.split(";;;") if i != ""]
@@ -964,37 +1047,9 @@ Answer: (?:yes|no)"""
                     matching.add(id)
                     data.append((index.get_row(id), map.default_variants()))
 
-                id = 0
-                while len(data) < k and id < len(index):
-                    # fill remaining positions with popular non-matching
-                    # entities or properties
-                    if id in matching:
-                        id += 1
-                        continue
-
-                    data.append((index.get_row(id), map.default_variants()))
-                    id += 1
-
                 all_alternatives[index_type] = self.build_alternatives(data)
 
             return all_alternatives
-
-        def format_iri(iri: str) -> str | None:
-            longest = self.find_longest_prefix(iri, self.prefixes)
-            if longest is None:
-                return None
-
-            short, long = longest
-            return short + ":" + iri[len(long):-1]
-
-        def format_string_literal(parse: dict) -> str:
-            match parse["name"]:
-                case "STRING_LITERAL_LONG1" | "STRING_LITERAL_LONG2":
-                    return parse["value"][3:-3]
-                case "STRING_LITERAL1" | "STRING_LITERAL2":
-                    return parse["value"][1:-1]
-                case _:
-                    return parse["value"]
 
         entities = {}
         properties = {}
@@ -1005,84 +1060,41 @@ Answer: (?:yes|no)"""
         # and literals
         start = time.perf_counter()
         for res in result:
-            try:
-                parse = self.iri_literal_parser.parse(
-                    res,
-                    skip_empty=True,
-                    collapse_single=True
-                )
-            except Exception:
+            processed = self.process_iri_or_literal(res)
+            if processed is None:
                 continue
 
-            match parse["name"]:
-                case "IRIREF":
-                    unmatched = True
-                    for id_map, map in [
-                        (entities, self.entity_mapping),
-                        (properties, self.property_mapping)
-                    ]:
-                        norm = map.normalize(res)
-                        if norm is None:
-                            continue
+            typ, formatted, info = processed
+            if typ == "literal":
+                literals.append((res, formatted, info))
+                continue
 
-                        iri, variant = norm
-                        if iri not in map:
-                            continue
-
-                        id = map[iri]
-                        if id not in id_map:
-                            id_map[id] = set()
-
-                        if variant is not None:
-                            id_map[id].add(variant)
-
-                        unmatched = False
-
-                    if not unmatched:
-                        continue
-
-                    label = format_iri(res)
-                    if label is not None:
-                        others.append((
-                            res,
-                            label,
-                            ""
-                        ))
-
-                case lit if lit.startswith("STRING"):
-                    literals.append((
-                        res,
-                        format_string_literal(parse),
-                        ""
-                    ))
-
-                case "RDFLiteral":
-                    if len(parse["children"]) == 2:
-                        # langtag
-                        s, langtag = parse["children"]
-                        if not langtag["value"].startswith("@en"):
-                            continue
-                        literals.append((
-                            res,
-                            format_string_literal(s),
-                            langtag["value"]
-                        ))
-
-                    elif len(parse["children"]) == 3:
-                        # datatype
-                        s, _, datatype = parse["children"]
-                        literals.append((
-                            res,
-                            format_string_literal(s),
-                            format_iri(datatype["value"])
-                            or datatype["value"]
-                        ))
-
-                case "INTEGER" | "DECIMAL" | "DOUBLE" | "true" | "false":
-                    literals.append((res, res, ""))
-
-                case _:
+            unmatched = True
+            for id_map, map in [
+                (entities, self.entity_mapping),
+                (properties, self.property_mapping)
+            ]:
+                norm = map.normalize(res)
+                if norm is None:
                     continue
+
+                iri, variant = norm
+                if iri not in map:
+                    continue
+
+                id = map[iri]
+                if id not in id_map:
+                    id_map[id] = set()
+
+                if variant is not None:
+                    id_map[id].add(variant)
+
+                unmatched = False
+
+            if not unmatched:
+                continue
+
+            others.append((res, formatted, info))
 
         end = time.perf_counter()
         LOGGER.debug(
@@ -1144,8 +1156,8 @@ Answer: (?:yes|no)"""
                 # write raw data to temp file in temp dir
                 with open(data_file, "w") as f:
                     f.write("label\tscore\tsynonyms\tid\tinfos\n")
-                    for res, label, info in raw:
-                        f.write(f"{label}\t0\t\t{res}\t{info}\n")
+                    for res, formatted, info in raw:
+                        f.write(f"{formatted}\t0\t\t{res}\t{info}\n")
 
                 QGramIndex.build(
                     data_file,
@@ -1202,28 +1214,22 @@ Answer: (?:yes|no)"""
                 continue
 
             counts = Counter(
-                alternative.label.lower()
+                alternative.get_label().lower()
                 for alternative in alts
             )
             strings = []
             regexes = []
             for alternative in alts:
+                alt_label = alternative.get_label()
                 alt_idx_str = f"{alt_idx + 1}. "
                 strings.append(alt_idx_str + alternative.get_string(
                     max_aliases,
                     # add info to non unique labels
-                    add_infos or counts[alternative.label.lower()] > 1
+                    add_infos or counts[alt_label.lower()] > 1
                 ))
-                r = re.escape(alt_idx_str + alternative.label)
-                if alternative.variants:
-                    vars = "|".join(
-                        re.escape(v)
-                        for v in alternative.variants
-                    )
-                    r += re.escape(" (") \
-                        + "(?:" + vars + ")" \
-                        + re.escape(")")
-                regexes.append(r)
+                regexes.append(
+                    re.escape(alt_idx_str) + alternative.get_regex()
+                )
 
                 alt_idx += 1
 
@@ -1236,6 +1242,7 @@ Answer: (?:yes|no)"""
             for obj_type in OBJ_TYPES
             if obj_type in alt_strings
         )
+
         alt_regex = "(?:" + "|".join(
             regex
             for obj_type in OBJ_TYPES
@@ -1245,42 +1252,41 @@ Answer: (?:yes|no)"""
 
         # none alternative
         num_alts = sum(len(alts) for alts in alternatives.values())
-        alt_string += f"\n\n{num_alts + 1}. none " \
-            "(if no other alternative fits well enough)"
-        alt_regex += "|" * (num_alts > 0) + re.escape(f"{num_alts + 1}. none")
+        alt_string = "0. none (if no other alternative fits well enough)" + \
+            "\n\n" * (num_alts > 0)
+        alt_regex += "|" * (num_alts > 0) + re.escape("0. none")
         alt_regex += ")"
 
+        failed = []
+        for obj_type, identifier, variant in failures or set():
+            if obj_type not in alternatives:
+                continue
+
+            nxt = next(
+                (alt for alt in enumerate(alternatives[obj_type])
+                 if alt[1].identifier == identifier),
+                None
+            )
+            if nxt is None:
+                continue
+
+            idx, alt = nxt
+            offset = sum(
+                len(alternatives[obj_type])
+                for obj_type in OBJ_TYPES[:OBJ_TYPES.index(obj_type)]
+                if obj_type in alternatives
+            )
+            fail = f"{offset + idx + 1}. {alt.label}"
+            if variant is not None:
+                assert variant in (alt.variants or []), \
+                    f"variant {variant} not in {alt.variants}"
+                fail += f" ({variant})"
+
+            failed.append(fail)
+
         failure = ""
-        if failures:
-            failed = []
-            for obj_type, identifier, variant in failures:
-                if obj_type not in alternatives:
-                    continue
-
-                nxt = next(
-                    (alt for alt in enumerate(alternatives[obj_type])
-                     if alt[1].identifier == identifier),
-                    None
-                )
-                if nxt is None:
-                    continue
-
-                idx, alt = nxt
-                offset = sum(
-                    len(alternatives[obj_type])
-                    for obj_type in OBJ_TYPES[:OBJ_TYPES.index(obj_type)]
-                    if obj_type in alternatives
-                )
-                fail = f"{offset + idx + 1}. {alt.label}"
-                if variant is not None:
-                    assert variant in (alt.variants or []), \
-                        f"variant {variant} not in {alt.variants}"
-                    fail += f" ({variant})"
-
-                failed.append(fail)
-
+        if failed:
             failed = "\n\n".join(failed)
-
             failure = f"""
 The following alternatives were already tried but unsuccessful. \
 If there is no other sensible alternative to try, select the none alternative:
@@ -1340,7 +1346,7 @@ Selection:
             # parse variant
             # + 4 to account for ". " and opening " ("
             # - 1 to account for closing ")"
-            variant = result[len(num) + len(alternative.label) + 4:-1]
+            variant = result[len(num) + len(alternative.get_label()) + 4:-1]
 
         denorm = None
         if obj_type == "property":
@@ -1352,11 +1358,9 @@ Selection:
             assert denorm is not None, "should not happen"
 
         if denorm is not None:
-            longest = self.find_longest_prefix(denorm, self.custom_prefixes)
-            assert longest is not None, "should not happen"
-            short, long = longest
-            val = denorm[len(long):-1]
-            name = f"<{name} ({short}:{val})>"
+            short = self.format_iri(denorm, self.custom_prefixes)
+            assert short is not None, "should not happen"
+            name = f"<{name} ({short})>"
 
         return (obj_type, identifier, variant), name
 
@@ -1381,7 +1385,6 @@ Selection:
             dist_info = f"{dist} distance"
 
         # only lowercase ascii + space, non-empty, up to 128 characters
-        regex = r"[a-z0-9 ]{1,128}"
         failure = ""
         if failures:
             failed = "\n\n".join(failures)
@@ -1390,7 +1393,6 @@ The following search queries were already tried but unsuccessful. If there \
 is no other sensible search query to try, output one of these again:
 {failed}
 """
-            regex += "|(?:" + "|".join(re.escape(f) for f in failures) + ")"
 
         prompt = f"""\
 Generate a search query for the next IRI or literal to continue the SPARQL \
@@ -1407,7 +1409,7 @@ SPARQL prefix over {self.kg}:
 {failure}
 Search query:
 """
-        return prompt, regex
+        return prompt, r"[\S ]{1,128}"
 
     def get_sparql_prompt(self, question: str) -> str:
         return f"""\
