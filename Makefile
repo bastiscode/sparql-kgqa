@@ -94,7 +94,7 @@ wikidata-data:
 	--progress \
 	-n $(NUM_PROCESSES)
 	@python scripts/prepare_wikidata_query_logs.py \
-	--files data/raw/wikidata-query-logs/*/*.tsv \
+	--files data/raw/wikidata-query-logs/*.tsv \
 	--output-dir data/wikidata-query-logs \
 	--entities $(WD_ENT) \
 	--properties $(WD_PROP) \
