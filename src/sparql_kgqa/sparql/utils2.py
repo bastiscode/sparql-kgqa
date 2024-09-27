@@ -559,6 +559,8 @@ class KgManager:
 
                 row.append(formatted)
 
+            data.append(row)
+
         table = generate_table(
             [result[0][:max_columns]],
             data,
