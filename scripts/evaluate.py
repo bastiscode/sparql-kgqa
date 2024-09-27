@@ -23,8 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input", type=str, default=None)
     parser.add_argument("--target", type=str, required=True)
     parser.add_argument("--prediction", type=str, required=True)
-    parser.add_argument("--save-invalid", action="store_true")
-    parser.add_argument("--save-incorrect", action="store_true")
+    parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--allow-subset", action="store_true")
     parser.add_argument("--empty-target-invalid", action="store_true")
     parser.add_argument(
@@ -35,23 +34,29 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--qlever-endpoint", type=str, default=None)
     parser.add_argument("-n", "--num-workers", type=int, default=None)
-    parser.add_argument("--prediction-format", type=str,
-                        choices=["text", "jsonl"], default="text")
+    parser.add_argument(
+        "--prediction-format",
+        type=str,
+        choices=["text", "jsonl"],
+        default="text"
+    )
     return parser.parse_args()
 
 
-def delete_file_or_create_dir(path: str):
-    if os.path.exists(path):
-        os.remove(path)
-    else:
-        dirname = os.path.dirname(path)
-        if dirname:
-            os.makedirs(dirname, exist_ok=True)
+def create_dir(path: str):
+    dirname = os.path.dirname(path)
+    if dirname:
+        os.makedirs(dirname, exist_ok=True)
 
 
 def evaluate(args: argparse.Namespace):
     targets = load_text_file(args.target)
     targets = [json.loads(t) for t in targets]
+    inputs = load_text_file(args.input)
+    inputs = [json.loads(i) for i in inputs]
+    assert len(inputs) == len(targets), \
+        "expected same number of inputs and targets"
+
     predictions = load_text_file(args.prediction)
     if args.prediction_format == "jsonl":
         predictions = [json.loads(p) for p in predictions]
@@ -60,33 +65,19 @@ def evaluate(args: argparse.Namespace):
         assert len(targets) == len(predictions), \
             "expected same number of predictions and targets"
 
-    if args.save_invalid or args.save_incorrect:
-        inputs = load_text_file(args.input)
-        inputs = [json.loads(i) for i in inputs]
-        assert len(inputs) == len(targets), \
-            "expected same number of inputs and targets"
-    else:
-        inputs = []
-
     base = os.path.splitext(args.prediction)[0]
-    if args.save_invalid:
-        invalid_file = f"{base}.invalid.txt"
-        delete_file_or_create_dir(invalid_file)
-    else:
-        invalid_file = ""
-
-    if args.save_incorrect:
-        incorrect_file = f"{base}.incorrect.txt"
-        delete_file_or_create_dir(incorrect_file)
-    else:
-        incorrect_file = ""
+    result_file = f"{base}.result.json"
+    if os.path.exists(result_file) and not args.overwrite:
+        print(f"result file already exists: {result_file}")
+        return
 
     gram, lex = load_sparql_grammar()
     parser = grammar.LR1Parser(gram, lex)
 
+    incorrect = []
+    pred_invalid = []
+    tgt_invalid = []
     f1s = []
-    pred_invalid = 0
-    tgt_invalid = 0
     iter = (
         (pred, target, parser,
          not args.empty_target_invalid, args.kg, args.qlever_endpoint)
@@ -98,38 +89,53 @@ def evaluate(args: argparse.Namespace):
         total=len(predictions),
         leave=False
     ):
-        if args.save_invalid and f1 is None:
-            with open(invalid_file, "a", encoding="utf8") as f:
-                f.write(
-                    f"{i+1}.\n"
-                    f"input : {inputs[i]}\n"
-                    f"pred  : {predictions[i]}\n"
-                    f"target: {targets[i]}\n\n"
-                )
-        if args.save_incorrect and f1 is not None and f1 < 1.0:
-            with open(incorrect_file, "a", encoding="utf8") as f:
-                f.write(
-                    f"{i+1}.\n"
-                    f"input : {inputs[i]}\n"
-                    f"pred  : {predictions[i]}\n"
-                    f"target: {targets[i]}\n\n"
-                )
-
         if pred_inv:
-            pred_invalid += 1
+            pred_invalid.append(i)
             f1 = 0.0
         if tgt_inv:
-            tgt_invalid += 1
+            tgt_invalid.append(i)
             continue
+        if f1 < 1.0:
+            incorrect.append(i)
         f1s.append(f1)
 
+    avg_f1 = sum(f1s) / len(f1s)
     print(
-        f"Query-averaged F1: {sum(f1s) / len(f1s):.2%} "
-        f"({pred_invalid:,} invalid predictions, "
-        f"{pred_invalid / len(f1s):.2%} | "
-        f"{tgt_invalid:,} invalid targets, "
-        f"{tgt_invalid / len(f1s):.2%})"
+        f"Query-averaged F1: {avg_f1:.2%} "
+        f"({len(pred_invalid):,} invalid predictions, "
+        f"{len(pred_invalid) / len(f1s):.2%} | "
+        f"{len(tgt_invalid):,} invalid targets, "
+        f"{len(tgt_invalid) / len(f1s):.2%})"
     )
+
+    base = os.path.splitext(args.prediction)[0]
+    result_file = f"{base}.result.json"
+    create_dir(result_file)
+
+    def format_indices(indices: list[int]) -> list[dict]:
+        return [
+            {
+                "sample": i + 1,
+                "input": inputs[i],
+                "target": targets[i],
+                "prediction": predictions[i]
+            }
+            for i in indices
+        ]
+
+    with open(result_file, "w") as outf:
+        json.dump(
+            {
+                "scores": {
+                    "f1": avg_f1,
+                },
+                "invalid_predictions": format_indices(pred_invalid),
+                "invalid_targets": format_indices(tgt_invalid),
+                "incorrect": format_indices(incorrect),
+            },
+            outf,
+            indent=2
+        )
 
 
 if __name__ == "__main__":

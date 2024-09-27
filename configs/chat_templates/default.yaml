@@ -1,0 +1,5 @@
+roles:
+  system: "<|system|>\n{text}\n\n"
+  user: "<|user|>\n{text}\n\n"
+  assistant: "<|assistant|>\n{text}\n\n"
+end: "<|assistant|>\n"

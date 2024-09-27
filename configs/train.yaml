@@ -64,7 +64,7 @@ train:
           configs:
             - type: chat_decode
               part: input
-              chat_template: file(chat_templates/env(MODEL).yaml)
+              chat_template: file(chat_templates/env(CHAT_TEMPLATE:default).yaml)
             - type: json_decode
               part: target
             - type: suffix

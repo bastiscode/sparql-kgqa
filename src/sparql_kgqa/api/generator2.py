@@ -194,9 +194,10 @@ class SPARQLGenerator(TextProcessor):
         if isinstance(input, str):
             input = [{"role": "user", "text": input}]
 
-        chat_template = self.cfg["inference"].get("chat_template", None)
-        if chat_template is None:
-            return "".join(m["text"] for m in input)
+        assert "chat_template" in self.cfg["inference"], \
+            "chat template not set in config, expect one even for " \
+            "non-chat models (use default)"
+        chat_template = self.cfg["inference"]["chat_template"]
 
         assert "user" in chat_template["roles"], \
             "chat template must have a user role"
