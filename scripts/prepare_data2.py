@@ -617,32 +617,61 @@ def prepare_stages(
     # get all items in triples
     items = [
         (item, map_item(item))
+        for item in find_all(
+            parse,
+            name="iri",
+            skip={"Prologue"}
+        )
+    ] + [
+        # only literals in triples are searchable
+        # rest should be predicted directly
+        (item, map_item(item))
         for triple in find_all(
             parse,
-            name="TriplesSameSubjectPath"
+            name="TriplesSameSubject"
         )
         for item in find_all(
             triple,
-            name={"iri", "RDFLiteral", "NumericLiteral", "BooleanLiteral"},
+            name={"RDFLiteral", "NumericLiteral", "BooleanLiteral"},
         )
     ]
 
-    # filter out invalid items
-    items = [
-        (item, processed)
-        for item, processed in items
-        if processed is not None
-    ]
+    # filter out invalid items and sort by occurence in the query
+    items = sorted(
+        ((item, processed)
+         for item, processed in items
+         if processed is not None),
+        key=lambda x: span(x[0])
+    )
 
-    # randomly drop items with type other or literal
+    # 1. randomly drop items with type other or literal
     # such that some continuations are trained to
     # predict them directly rather than searching for them
-    items = [
-        (item, processed)
-        for item, processed in items
-        if processed[0] not in ["other", "literal"]
-        or random.random() > 0.2
-    ]
+    # 2. randomly drop entities or properties that already
+    # occured in the previous triples
+    keep = []
+    for i, (item, processed) in enumerate(items):
+        typ, identifier, *_ = processed
+        if typ in ["other", "literal"] and random.random() < 0.2:
+            # drop other and literal with 20% probability
+            continue
+
+        if (
+            typ in ["entity", "property"]
+            and random.random() < 0.5
+            and next(
+                (p for p in range(i)
+                 if items[p][1][1] == identifier),
+                None
+            ) is not None
+        ):
+            # drop entities and properties that already occured
+            # with 50% probability
+            continue
+
+        keep.append((item, processed))
+
+    items = keep
 
     samples = []
     for item_idx in random.sample(
@@ -690,6 +719,7 @@ def prepare_stages(
                 question,
                 last_prefix
             )
+
             samples.append((cont_prompt, cont))
 
             if item_idx == len(items) - 1:

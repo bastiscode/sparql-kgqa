@@ -68,74 +68,84 @@ def evaluate(args: argparse.Namespace):
     base = os.path.splitext(args.prediction)[0]
     result_file = f"{base}.result.json"
     if os.path.exists(result_file) and not args.overwrite:
-        print(f"result file already exists: {result_file}")
-        return
+        with open(result_file, "r") as inf:
+            result = json.load(inf)
 
-    gram, lex = load_sparql_grammar()
-    parser = grammar.LR1Parser(gram, lex)
+        mean_f1 = result["scores"]["f1"]["mean"]
+        f1s = result["scores"]["f1"]["values"]
+        pred_invalid = result["invalid_predictions"]
+        tgt_invalid = result["invalid_targets"]
+        incorrect = result["incorrect_predictions"]
 
-    incorrect = []
-    pred_invalid = []
-    tgt_invalid = []
-    f1s = []
-    iter = (
-        (pred, target, parser,
-         not args.empty_target_invalid, args.kg, args.qlever_endpoint)
-        for pred, target in zip(predictions, targets)
-    )
-    for i, (f1, pred_inv, tgt_inv) in tqdm(
-        enumerate(run_parallel(calc_f1, iter, args.num_workers)),
-        desc="evaluating",
-        total=len(predictions),
-        leave=False
-    ):
-        if pred_inv:
-            pred_invalid.append(i)
-            f1 = 0.0
-        if tgt_inv:
-            tgt_invalid.append(i)
-            continue
-        if f1 < 1.0:
-            incorrect.append(i)
-        f1s.append(f1)
+    else:
+        gram, lex = load_sparql_grammar()
+        parser = grammar.LR1Parser(gram, lex)
 
-    avg_f1 = sum(f1s) / len(f1s)
+        incorrect = []
+        pred_invalid = []
+        tgt_invalid = []
+        f1s = []
+        iter = (
+            (pred, target, parser,
+             not args.empty_target_invalid, args.kg, args.qlever_endpoint)
+            for pred, target in zip(predictions, targets)
+        )
+        for i, (f1, pred_inv, tgt_inv) in tqdm(
+            enumerate(run_parallel(calc_f1, iter, args.num_workers)),
+            desc="evaluating",
+            total=len(predictions),
+            leave=False
+        ):
+            if pred_inv:
+                pred_invalid.append(i)
+                f1 = 0.0
+            if tgt_inv:
+                tgt_invalid.append(i)
+                continue
+            if f1 < 1.0:
+                incorrect.append(i)
+            f1s.append(f1)
+
+        mean_f1 = sum(f1s) / len(f1s)
+        base = os.path.splitext(args.prediction)[0]
+        result_file = f"{base}.result.json"
+        create_dir(result_file)
+
+        def format_indices(indices: list[int]) -> list[dict]:
+            return [
+                {
+                    "sample": i + 1,
+                    "input": inputs[i],
+                    "target": targets[i],
+                    "prediction": predictions[i]
+                }
+                for i in indices
+            ]
+
+        with open(result_file, "w") as outf:
+            json.dump(
+                {
+                    "scores": {
+                        "f1": {
+                            "mean": mean_f1,
+                            "values": f1s
+                        }
+                    },
+                    "invalid_predictions": format_indices(pred_invalid),
+                    "invalid_targets": format_indices(tgt_invalid),
+                    "incorrect_predictions": format_indices(incorrect),
+                },
+                outf,
+                indent=2
+            )
+
     print(
-        f"Query-averaged F1: {avg_f1:.2%} "
+        f"Query-averaged F1: {mean_f1:.2%} "
         f"({len(pred_invalid):,} invalid predictions, "
         f"{len(pred_invalid) / len(f1s):.2%} | "
         f"{len(tgt_invalid):,} invalid targets, "
         f"{len(tgt_invalid) / len(f1s):.2%})"
     )
-
-    base = os.path.splitext(args.prediction)[0]
-    result_file = f"{base}.result.json"
-    create_dir(result_file)
-
-    def format_indices(indices: list[int]) -> list[dict]:
-        return [
-            {
-                "sample": i + 1,
-                "input": inputs[i],
-                "target": targets[i],
-                "prediction": predictions[i]
-            }
-            for i in indices
-        ]
-
-    with open(result_file, "w") as outf:
-        json.dump(
-            {
-                "scores": {
-                    "f1": avg_f1,
-                },
-                "invalid_predictions": format_indices(pred_invalid),
-                "invalid_targets": format_indices(tgt_invalid),
-                "incorrect": format_indices(incorrect),
-            },
-            outf,
-            indent=2
-        )
 
 
 if __name__ == "__main__":
