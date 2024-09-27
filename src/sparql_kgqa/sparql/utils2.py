@@ -972,6 +972,7 @@ Answer: (?:yes|no)"""
         ):
             if "value" not in obj:
                 continue
+
             elif obj["name"] in ["PNAME_NS", "PNAME_LN"]:
                 # translate short to long
                 short = obj["value"]
@@ -979,6 +980,7 @@ Answer: (?:yes|no)"""
                 if pfx not in self.custom_prefixes:
                     continue
                 val = self.custom_prefixes[pfx] + val + ">"
+
             else:
                 val = obj["value"]
 
@@ -1040,24 +1042,30 @@ Answer: (?:yes|no)"""
         max_candidates: int | None = None,
         endpoint: str | None = None,
         max_retries: int = 1,
+        skip_autocomplete: bool = False,
         **kwargs: Any
     ) -> dict[str, list[Alternative]] | None:
         try:
-            result = self.autocomplete_prefix(
-                prefix + SEARCH_TOKEN,
-                endpoint,
-                max_candidates + 1
-                if max_candidates is not None else None,
-                max_retries
-            )
+            if skip_autocomplete:
+                result = None
+            else:
+                result = self.autocomplete_prefix(
+                    prefix + SEARCH_TOKEN,
+                    endpoint,
+                    max_candidates + 1
+                    if max_candidates is not None else None,
+                    max_retries
+                )
+                LOGGER.debug(
+                    f"Got {len(result or set())} results "
+                    f"for prefix {prefix}"
+                )
         except Exception as e:
             LOGGER.debug(
                 f"autocomplete_prefix failed for prefix '{prefix}': "
                 f"{e}"
             )
             return None
-
-        LOGGER.debug(f"Got {len(result or set())} results for prefix {prefix}")
 
         all_alternatives = {}
 
@@ -1490,7 +1498,8 @@ Continuation:
         messages = []
         for q, s in examples or []:
             try:
-                s = self.fix_prefixes(self.replace_entities_and_properties(s))
+                s = self.fix_prefixes(s, remove_known=True)
+                s = self.replace_iris(s)
             except Exception:
                 # skip invalid examples
                 continue

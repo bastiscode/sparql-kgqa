@@ -248,13 +248,13 @@ def main():
     parser.add_argument(
         "--select-k",
         type=int,
-        default=8,
+        default=16,
         help="Number of candidates to select from"
     )
     parser.add_argument(
         "--select-max-candidates",
         type=int,
-        default=4096,
+        default=16384,
         help="Maximum number of candidates for which a sub-index is created"
     )
     parser.add_argument(

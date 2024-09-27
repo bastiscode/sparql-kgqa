@@ -807,8 +807,11 @@ def prepare_stages(
 
         select_failures = set()
 
-        drop_alt = random.random() < 0.1
-        if target_alt is not None and drop_alt:
+        if (
+            target_alt is not None
+            and random.random() < 0.1
+            and len(alts[obj_type]) > 1
+        ):
             # differentiate between dropping the target from
             # the list of alternatives entirely or only adding the
             # variant to previous fails

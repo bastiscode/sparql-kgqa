@@ -163,7 +163,7 @@ class SPARQLGenerator(TextProcessor):
     ) -> data.InferenceData:
         assert self._manager is not None, "kg indices not set"
         if examples is None and self._example_index is not None:
-            examples = self._example_index.top_k(
+            examples = self._example_index.find_matches(
                 question,
                 self._num_examples
             )  # type: ignore
@@ -177,7 +177,11 @@ class SPARQLGenerator(TextProcessor):
 
         assert examples is not None
 
-        messages = self._manager.get_sparql_continuation_prompt(question, "")
+        messages = self._manager.get_sparql_continuation_prompt(
+            question,
+            "",
+            examples
+        )
         prompt = self._chat_format(messages)
         return data.InferenceData(
             prompt,
@@ -242,7 +246,6 @@ class SPARQLGenerator(TextProcessor):
         self,
         token_ids: torch.Tensor,
         lengths: torch.Tensor,
-        **kwargs: Any
     ) -> tuple[torch.Tensor, dict[str, Any]]:
         assert isinstance(self.model, PretrainedDecoder)
         dec, _ = self.model.decode(
@@ -645,7 +648,9 @@ class SPARQLGenerator(TextProcessor):
             sparql_prefix,
             search_query,
             self._k,
-            self._max_candidates
+            self._max_candidates,
+            max_retries=3,
+            skip_autocomplete=self._disable_subgraph_constraint
         )
         if alternatives is None:
             return None
