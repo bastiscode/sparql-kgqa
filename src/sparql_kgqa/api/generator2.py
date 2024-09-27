@@ -457,7 +457,7 @@ class SPARQLGenerator(TextProcessor):
                 failed = set(failures())
                 search_query = self._generate_search_query(
                     question,
-                    prefix("sparql"),
+                    prefix("natural"),
                     failed
                 )
                 if search_query in failed:
@@ -592,8 +592,7 @@ class SPARQLGenerator(TextProcessor):
         self.logger.debug(
             "continuation:\n"
             f"{prompt[-2]['text']}"
-            f"{prompt[-1]['text']}"
-            f"{cont}{search_token}"
+            f"{(prompt[-1]['text'] + ' ' + cont + search_token).lstrip()}"
         )
         return cont, search_token
 

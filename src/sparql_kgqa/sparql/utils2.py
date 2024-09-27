@@ -1124,6 +1124,13 @@ Answer: (?:yes|no)"""
             if not unmatched:
                 continue
 
+            # not an entity or property from our index
+            # check if it is starting with a known general prefix
+            # because custom ids could just be guessed by the model
+            pfx, _ = formatted.split(":", 1)
+            if pfx not in self.prefixes:
+                continue
+
             others.append((res, formatted, info))
 
         end = time.perf_counter()

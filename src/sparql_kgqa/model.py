@@ -163,7 +163,7 @@ class PretrainedDecoder(Model):
         else:
             assert model in PRETRAINED_DECODERS, f"unknown model {model}"
             if model.startswith("llama-3"):
-                split = model.split()
+                split = model.split("-")
                 version = split[1]
                 if version == "3":
                     name = "Meta-Llama"
