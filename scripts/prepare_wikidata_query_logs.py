@@ -10,7 +10,6 @@ from tqdm import tqdm
 from sparql_kgqa.sparql.utils import clean
 from sparql_kgqa.sparql.utils2 import (
     KgManager,
-    WikidataManager,
     WikidataPropertyMapping,
     get_kg_manager,
     load_index_and_mapping
@@ -92,7 +91,7 @@ def prepare(args: argparse.Namespace):
                 args.output_dir, f"{source}{ext}.jsonl"
             ))
             for ext in ["_input", "_target", "_sparql"]
-        ):
+        ) and not args.overwrite:
             print(
                 f"output files for {source} in {args.output_dir}"
                 " already exist"
@@ -187,6 +186,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--progress",
+        action="store_true"
+    )
+    parser.add_argument(
+        "--overwrite",
         action="store_true"
     )
     source = parser.add_mutually_exclusive_group()

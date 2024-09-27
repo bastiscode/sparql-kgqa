@@ -29,6 +29,8 @@ QLEVER_TIMEOUT=1h
 
 SEARCH_INDEX=qgram
 
+OVERWRITE=""
+
 all: search-data search-indices other-data wikidata-data freebase-data dbpedia-data dblp-data example-indices
 
 other-data:
@@ -42,42 +44,42 @@ wikidata-data:
 	--entities $(WD_ENT) \
 	--properties $(WD_PROP) \
 	--progress \
-	-n $(NUM_PROCESSES)
+	-n $(NUM_PROCESSES) $(OVERWRITE)
 	@python scripts/prepare_data2.py \
 	--lc-quad2-wikidata \
 	--output data/wikidata-lcquad2 \
 	--entities $(WD_ENT) \
 	--properties $(WD_PROP) \
 	--progress \
-	-n $(NUM_PROCESSES)
+	-n $(NUM_PROCESSES) $(OVERWRITE)
 	@python scripts/prepare_data2.py \
 	--qald-10 \
 	--output data/wikidata-qald10 \
 	--entities $(WD_ENT) \
 	--properties $(WD_PROP) \
 	--progress \
-	-n $(NUM_PROCESSES)
+	-n $(NUM_PROCESSES) $(OVERWRITE)
 	@python scripts/prepare_data2.py \
 	--qald-7 data/raw/qald-7 \
 	--output data/wikidata-qald7 \
 	--entities $(WD_ENT) \
 	--properties $(WD_PROP) \
 	--progress \
-	-n $(NUM_PROCESSES)
+	-n $(NUM_PROCESSES) $(OVERWRITE)
 	@python scripts/prepare_data2.py \
 	--mcwq data/raw/mcwq \
 	--output data/wikidata-mcwq \
 	--entities $(WD_ENT) \
 	--properties $(WD_PROP) \
 	--progress \
-	-n $(NUM_PROCESSES)
+	-n $(NUM_PROCESSES) $(OVERWRITE)
 	@python scripts/prepare_data2.py \
 	--wikisp data/raw/wikisp \
 	--output data/wikidata-wikisp \
 	--entities $(WD_ENT) \
 	--properties $(WD_PROP) \
 	--progress \
-	-n $(NUM_PROCESSES)
+	-n $(NUM_PROCESSES) $(OVERWRITE)
 	# todo: add kqa pro
 	@python scripts/prepare_data2.py \
 	--qa-wiki data/raw/qa_wiki/qa_wiki.tsv \
@@ -85,14 +87,14 @@ wikidata-data:
 	--entities $(WD_ENT) \
 	--properties $(WD_PROP) \
 	--progress \
-	-n $(NUM_PROCESSES)
+	-n $(NUM_PROCESSES) $(OVERWRITE)
 	@python scripts/prepare_data2.py \
 	--qlever-wikidata data/raw/qlever_wikidata/data.tsv \
 	--output data/wikidata-qlever-wikidata \
 	--entities $(WD_ENT) \
 	--properties $(WD_PROP) \
 	--progress \
-	-n $(NUM_PROCESSES)
+	-n $(NUM_PROCESSES) $(OVERWRITE)
 	@mkdir -p data/wikidata-query-logs
 	@python scripts/prepare_wikidata_query_logs.py \
 	--files data/raw/wikidata-query-logs/*.tsv \
@@ -100,7 +102,7 @@ wikidata-data:
 	--entities $(WD_ENT) \
 	--properties $(WD_PROP) \
 	--$(WD_QUERY_LOG_SOURCE)-only \
-	--progress
+	--progress $(OVERWRITE)
 
 freebase-data:
 	@python scripts/prepare_data2.py \
@@ -109,28 +111,28 @@ freebase-data:
 	--entities $(FB_ENT) \
 	--properties $(FB_PROP) \
 	--progress \
-	-n $(NUM_PROCESSES)
+	-n $(NUM_PROCESSES) $(OVERWRITE)
 	@python scripts/prepare_data2.py \
 	--wqsp \
 	--output data/freebase-wqsp \
 	--entities $(FB_ENT) \
 	--properties $(FB_PROP) \
 	--progress \
-	-n $(NUM_PROCESSES)
+	-n $(NUM_PROCESSES) $(OVERWRITE)
 	@python scripts/prepare_data2.py \
 	--cwq \
 	--output data/freebase-cwq \
 	--entities $(FB_ENT) \
 	--properties $(FB_PROP) \
 	--progress \
-	-n $(NUM_PROCESSES)
+	-n $(NUM_PROCESSES) $(OVERWRITE)
 	@python scripts/prepare_data2.py \
 	--cfq data/raw/cfq1.1/cfq \
 	--output data/freebase-cfq \
 	--entities $(FB_ENT) \
 	--properties $(FB_PROP) \
 	--progress \
-	-n $(NUM_PROCESSES)
+	-n $(NUM_PROCESSES) $(OVERWRITE)
 
 dbpedia-data:
 	@python scripts/prepare_data2.py \
@@ -139,14 +141,14 @@ dbpedia-data:
 	--entities $(DBPEDIA_ENT) \
 	--properties $(DBPEDIA_PROP) \
 	--progress \
-	-n $(NUM_PROCESSES)
+	-n $(NUM_PROCESSES) $(OVERWRITE)
 	@python scripts/prepare_data2.py \
 	--qald-9 \
 	--output data/dbpedia-qald9 \
 	--entities $(DBPEDIA_ENT) \
 	--properties $(DBPEDIA_PROP) \
 	--progress \
-	-n $(NUM_PROCESSES)
+	-n $(NUM_PROCESSES) $(OVERWRITE)
 
 dblp-data:
 	@python scripts/prepare_data2.py \
@@ -155,14 +157,14 @@ dblp-data:
 	--entities $(DBLP_ENT) \
 	--properties $(DBLP_PROP) \
 	--progress \
-	-n $(NUM_PROCESSES)
+	-n $(NUM_PROCESSES) $(OVERWRITE)
 
 example-indices:
 	@for f in $(wildcard data/*/train_raw.jsonl); do \
 		python scripts/build_sim_index.py \
 		`dirname $$f`/train_examples.index \
 		$$f \
-		--progress; \
+		--progress $(OVERWRITE) \
 	done
 
 search-data: wikidata-search-data freebase-search-data dbpedia-search-data
