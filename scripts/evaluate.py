@@ -52,6 +52,7 @@ def create_dir(path: str):
 def evaluate(args: argparse.Namespace):
     base = os.path.splitext(args.prediction)[0]
     result_file = f"{base}.result.json"
+
     if os.path.exists(result_file) and not args.overwrite:
         with open(result_file, "r") as inf:
             result = json.load(inf)
@@ -61,6 +62,7 @@ def evaluate(args: argparse.Namespace):
         pred_invalid = result["invalid_predictions"]
         tgt_invalid = result["invalid_targets"]
         incorrect = result["incorrect_predictions"]
+        num_samples = result["num_samples"]
 
     else:
         targets = load_text_file(args.target)
@@ -122,9 +124,11 @@ def evaluate(args: argparse.Namespace):
                 for i in indices
             ]
 
+        num_samples = len(predictions)
         with open(result_file, "w") as outf:
             json.dump(
                 {
+                    "num_samples": num_samples,
                     "scores": {
                         "f1": {
                             "mean": mean_f1,
@@ -141,10 +145,12 @@ def evaluate(args: argparse.Namespace):
 
     print(
         f"Query-averaged F1: {mean_f1:.2%} "
-        f"({len(pred_invalid):,} invalid predictions, "
-        f"{len(pred_invalid) / len(f1s):.2%} | "
-        f"{len(tgt_invalid):,} invalid targets, "
-        f"{len(tgt_invalid) / len(f1s):.2%})"
+        f"({len(pred_invalid):,} / {num_samples:,} invalid predictions, "
+        f"{len(pred_invalid) / num_samples:.2%} | "
+        f"{len(tgt_invalid):,} / {num_samples:,} invalid targets, "
+        f"{len(tgt_invalid) / num_samples:.2%}), "
+        f"{len(incorrect):,} / {len(f1s):,} incorrect predictions, "
+        f"{len(incorrect) / len(f1s):.2%}"
     )
 
 
