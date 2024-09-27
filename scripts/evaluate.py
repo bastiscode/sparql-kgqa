@@ -50,21 +50,6 @@ def create_dir(path: str):
 
 
 def evaluate(args: argparse.Namespace):
-    targets = load_text_file(args.target)
-    targets = [json.loads(t) for t in targets]
-    inputs = load_text_file(args.input)
-    inputs = [json.loads(i) for i in inputs]
-    assert len(inputs) == len(targets), \
-        "expected same number of inputs and targets"
-
-    predictions = load_text_file(args.prediction)
-    if args.prediction_format == "jsonl":
-        predictions = [json.loads(p) for p in predictions]
-
-    if not args.allow_subset:
-        assert len(targets) == len(predictions), \
-            "expected same number of predictions and targets"
-
     base = os.path.splitext(args.prediction)[0]
     result_file = f"{base}.result.json"
     if os.path.exists(result_file) and not args.overwrite:
@@ -78,6 +63,21 @@ def evaluate(args: argparse.Namespace):
         incorrect = result["incorrect_predictions"]
 
     else:
+        targets = load_text_file(args.target)
+        targets = [json.loads(t) for t in targets]
+        inputs = load_text_file(args.input)
+        inputs = [json.loads(i) for i in inputs]
+        assert len(inputs) == len(targets), \
+            "expected same number of inputs and targets"
+
+        predictions = load_text_file(args.prediction)
+        if args.prediction_format == "jsonl":
+            predictions = [json.loads(p) for p in predictions]
+
+        if not args.allow_subset:
+            assert len(targets) == len(predictions), \
+                "expected same number of predictions and targets"
+
         gram, lex = load_sparql_grammar()
         parser = grammar.LR1Parser(gram, lex)
 
