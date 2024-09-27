@@ -145,12 +145,12 @@ def evaluate(args: argparse.Namespace):
 
     print(
         f"Query-averaged F1: {mean_f1:.2%} "
-        f"({len(pred_invalid):,} / {num_samples:,} invalid predictions, "
-        f"{len(pred_invalid) / num_samples:.2%} | "
-        f"{len(tgt_invalid):,} / {num_samples:,} invalid targets, "
-        f"{len(tgt_invalid) / num_samples:.2%}), "
-        f"{len(incorrect):,} / {len(f1s):,} incorrect predictions, "
-        f"{len(incorrect) / len(f1s):.2%}"
+        f"({len(pred_invalid):,}/{num_samples:,} pred error, "
+        f"{len(pred_invalid)/num_samples:.2%} | "
+        f"{len(tgt_invalid):,}/{num_samples:,} tgt error, "
+        f"{len(tgt_invalid)/num_samples:.2%} | "
+        f"{len(incorrect):,}/{len(f1s):,} pred wrong, "
+        f"{len(incorrect)/len(f1s):.2%} )"
     )
 
 
