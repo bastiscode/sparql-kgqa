@@ -125,7 +125,7 @@ freebase-data:
 	--progress \
 	-n $(NUM_PROCESSES)
 	@python scripts/prepare_data2.py \
-	--cfq data/raw/cfq1.1/cfq
+	--cfq data/raw/cfq1.1/cfq \
 	--output data/freebase-cfq \
 	--entities $(FB_ENT) \
 	--properties $(FB_PROP) \
