@@ -149,7 +149,7 @@ def evaluate(args: argparse.Namespace):
         f"{len(pred_invalid)/num_samples:.2%} | "
         f"{len(tgt_invalid):,}/{num_samples:,} tgt error, "
         f"{len(tgt_invalid)/num_samples:.2%} | "
-        f"{len(incorrect):,}/{len(f1s):,} pred wrong, "
+        f"{len(incorrect):,}/{len(f1s):,} pred incorrect, "
         f"{len(incorrect)/len(f1s):.2%} )"
     )
 
