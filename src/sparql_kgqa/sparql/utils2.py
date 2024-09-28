@@ -1323,12 +1323,7 @@ Answer: (?:yes|no)"""
                 for obj_type in OBJ_TYPES[:OBJ_TYPES.index(obj_type)]
                 if obj_type in alternatives
             )
-            fail = f"{offset + idx + 1}. {alt.label}"
-            if variant is not None:
-                assert variant in (alt.variants or []), \
-                    f"variant {variant} not in {alt.variants}"
-                fail += f" ({variant})"
-
+            fail = f"{offset + idx + 1}. {alt.get_label(variant)}"
             failed.append(fail)
 
         failure = ""
