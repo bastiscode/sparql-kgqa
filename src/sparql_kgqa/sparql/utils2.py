@@ -1245,8 +1245,35 @@ Answer: (?:yes|no)"""
         alternatives: dict[str, list[Alternative]],
         max_aliases: int = 5,
         add_infos: bool = False,
-        failures: set[tuple[str, str, str | None]] | None = None
+        failures: set[tuple[str, str, str | None]] | None = None,
+        exclude_failures: bool = False
     ) -> tuple[str, str]:
+        failed = []
+        exclude = set()
+        for obj_type, identifier, variant in failures or set():
+            if obj_type not in alternatives:
+                continue
+
+            nxt = next(
+                (alt for alt in enumerate(alternatives[obj_type])
+                 if alt[1].identifier == identifier),
+                None
+            )
+            if nxt is None:
+                continue
+
+            idx, alt = nxt
+            offset = sum(
+                len(alternatives[obj_type])
+                for obj_type in OBJ_TYPES[:OBJ_TYPES.index(obj_type)]
+                if obj_type in alternatives
+            )
+            idx = offset + idx
+            fail = f"{idx + 1}. {alt.get_label(variant)}"
+            failed.append(fail)
+            if exclude_failures:
+                exclude.add(idx)
+
         prefix = prefix + "..."
 
         alt_strings = {}
@@ -1274,9 +1301,10 @@ Answer: (?:yes|no)"""
                     # add info to non unique labels
                     add_infos or counts[alt_label.lower()] > 1
                 ))
-                regexes.append(
-                    re.escape(alt_idx_str) + alternative.get_regex()
-                )
+                if alt_idx not in exclude:
+                    regexes.append(
+                        re.escape(alt_idx_str) + alternative.get_regex()
+                    )
 
                 alt_idx += 1
 
@@ -1301,30 +1329,9 @@ Answer: (?:yes|no)"""
         num_alts = sum(len(alts) for alts in alternatives.values())
         alt_string = "0. none (if no other alternative fits well enough)" + \
             "\n\n" * (num_alts > 0) + alt_string
-        alt_regex += "|" * (num_alts > 0) + re.escape("0. none")
+        if not exclude_failures or num_alts - len(exclude) <= 0:
+            alt_regex += "|" * (num_alts > 0) + re.escape("0. none")
         alt_regex += ")"
-
-        failed = []
-        for obj_type, identifier, variant in failures or set():
-            if obj_type not in alternatives:
-                continue
-
-            nxt = next(
-                (alt for alt in enumerate(alternatives[obj_type])
-                 if alt[1].identifier == identifier),
-                None
-            )
-            if nxt is None:
-                continue
-
-            idx, alt = nxt
-            offset = sum(
-                len(alternatives[obj_type])
-                for obj_type in OBJ_TYPES[:OBJ_TYPES.index(obj_type)]
-                if obj_type in alternatives
-            )
-            fail = f"{offset + idx + 1}. {alt.get_label(variant)}"
-            failed.append(fail)
 
         failure = ""
         if failed:
