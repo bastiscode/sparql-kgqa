@@ -53,7 +53,7 @@ train:
     max_length: env(MAX_LENGTH:512)
     buffer_size: env(BUFFER_SIZE:512)
     prefetch_factor: env(PREFETCH_FACTOR:512)
-    num_threads: eval(env(THREADS:None) or len(os.sched_getaffinity(0)) // 2)
+    num_threads: env(THREADS:4)
     batch_limit: env(BATCH_LIMIT:8)
     batch_limit_type: env(BATCH_LIMIT_TYPE:batch_size)
     pipeline:

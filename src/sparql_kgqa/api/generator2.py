@@ -18,6 +18,7 @@ from text_utils.inference import (
     beam_search
 )
 from text_utils.inference.utils import Beam
+from text_utils.constraints import AndConstraint, AvoidConstraint
 
 from sparql_kgqa.model import (
     Model,
@@ -142,6 +143,7 @@ class SPARQLGenerator(TextProcessor):
         self._examples: Examples | None = None
         self._num_examples: int = 3
         self._max_failures: int = 3
+        self._min_tries: int | None = None
         self._max_alternatives: int = 3
         self._default_system_message: str | None = self.cfg["inference"].get(
             "system_message", None
@@ -357,6 +359,9 @@ class SPARQLGenerator(TextProcessor):
         def failures() -> list:
             return memo.get(tuple(current), [])
 
+        def num_failures() -> int:
+            return len(failures())
+
         def prefix(typ: str) -> str:
             assert self._manager is not None, "kg indices not set"
             assert typ in {"natural", "sparql"}
@@ -381,15 +386,12 @@ class SPARQLGenerator(TextProcessor):
         def state(idx: int | None = None) -> str | None:
             # translate current to state name,
             # can be one of:
-            # - None (if backtrack limit reached)
             # - sparql (continuing query ending in search token)
             # - done (same as sparql but with empty search token)
             # - search (generating search query)
             # - select (selecting alternative)
-            if len(failures()) > self._max_failures:
-                return None
 
-            # always return current state if not specific idx
+            # always return current state if no specific idx
             # is given
             if idx is None:
                 idx = len(current)
@@ -422,6 +424,22 @@ class SPARQLGenerator(TextProcessor):
                 f"previous: {prev} "
                 f" {previous() if current else 'none'}"
             )
+
+            num = num_failures()
+            # go back if too many failures
+            if num > self._max_failures:
+                if current:
+                    backtrack()
+                    s = state()
+                    continue
+
+                # cannot backtrack, return empty sparql
+                break
+
+            # force different path if not
+            # enough were already tried
+            exclude_failures = num < (self._min_tries or num)
+
             if s == "done":
                 accept = self._judge_sparql(
                     question,
@@ -445,7 +463,8 @@ class SPARQLGenerator(TextProcessor):
                     question,
                     prefix("sparql"),
                     prefix("natural"),
-                    failed
+                    failed,
+                    exclude_failures
                 )
                 if continuation + search_token in failed:
                     if current:
@@ -461,7 +480,8 @@ class SPARQLGenerator(TextProcessor):
                 search_query = self._generate_search_query(
                     question,
                     prefix("natural"),
-                    failed
+                    failed,
+                    exclude_failures
                 )
                 if search_query in failed:
                     backtrack()
@@ -476,7 +496,8 @@ class SPARQLGenerator(TextProcessor):
                     prefix("sparql"),
                     prefix("natural"),
                     search_query,
-                    failed
+                    failed,
+                    exclude_failures
                 )
                 if selection is None or selection[1] in failed:
                     backtrack()
@@ -532,7 +553,8 @@ class SPARQLGenerator(TextProcessor):
         question: str,
         sparql_prefix: str,
         natural_prefix: str,
-        failures: set[str] | None = None
+        failures: set[str] | None = None,
+        exclude_failures: bool = False
     ) -> Generator[str, None, tuple[str, str]]:
         assert self._manager is not None, "kg indices not set"
         assert self._sparql_constraint is not None, "sparql constraint not set"
@@ -546,12 +568,26 @@ class SPARQLGenerator(TextProcessor):
             self._is_chat
         ).token_ids
 
-        info = {"continuation": "", "search_token": ""}
+        info: dict = {"continuation": "", "search_token": ""}
         # add sparql constraint if not disabled
         if not self._disable_sparql_constraint:
             const = self._sparql_constraint.clone()
             const.reset(sparql_prefix.encode())
             info["const"] = const
+
+        if exclude_failures and failures:
+            const = AvoidConstraint(
+                [f.encode() for f in failures],
+                self._continuations,
+                self._eos_token_id
+            )
+            if "const" in info:
+                info["const"] = AndConstraint([
+                    info["const"],
+                    const
+                ])
+            else:
+                info["const"] = const
 
         beam = Beam(
             token_ids,
@@ -583,9 +619,9 @@ class SPARQLGenerator(TextProcessor):
             stop_fn,
             no_sampling=True  # for sparql continuations turn off sampling
         ):
-            self.logger.debug(
-                self.tokenizer.de_tokenize(output.decoded_token_ids)
-            )
+            self.logger.debug(self.tokenizer.de_tokenize(
+                output.decoded_token_ids
+            ))
             yield self.tokenizer.de_tokenize(output.decoded_token_ids)
             last = output
 
@@ -603,7 +639,8 @@ class SPARQLGenerator(TextProcessor):
         self,
         question: str,
         prefix: str,
-        failures: set[str] | None = None
+        failures: set[str] | None = None,
+        exclude_failures: bool = False
     ) -> str:
         assert self._manager is not None, "kg indices not set"
         prompt, regex = self._manager.get_search_prompt_and_regex(
@@ -618,10 +655,19 @@ class SPARQLGenerator(TextProcessor):
         beam = Beam(
             token_ids,
             info={
-                "const": grammar.RegexConstraint(
-                    regex,
-                    self._continuations
-                ),
+                "const": AndConstraint([
+                    grammar.RegexConstraint(
+                        regex,
+                        self._continuations
+                    ),
+                    AvoidConstraint(
+                        [f.encode() for f in failures]
+                        if exclude_failures and failures is not None
+                        else [],
+                        self._continuations,
+                        self._eos_token_id
+                    )
+                ])
             }
         )
 
@@ -641,6 +687,7 @@ class SPARQLGenerator(TextProcessor):
         natural_prefix: str,
         search_query: str,
         failures: set[tuple[str, str, str | None]] | None = None,
+        exclude_failures: bool = False
     ) -> tuple[str, tuple[str, str, str | None]] | None:
         assert self._manager is not None, "kg indices not set"
 
@@ -662,7 +709,8 @@ class SPARQLGenerator(TextProcessor):
             alternatives,
             max_aliases=self._max_aliases,
             add_infos=self._add_infos,
-            failures=failures
+            failures=failures,
+            exclude_failures=exclude_failures
         )
         token_ids = self.tokenizer.tokenize(
             self._chat_format(prompt),
@@ -746,6 +794,8 @@ class SPARQLGenerator(TextProcessor):
         disable_sparql_constraint: bool = False,
         disable_subgraph_constraint: bool = False,
         disable_sparql_judgement: bool = False,
+        max_failures: int = 3,
+        min_tries: int = 1,
         num_examples: int = 3,
         select_k: int = 8,
         select_max_candidates: int | None = 4096,
@@ -766,7 +816,11 @@ class SPARQLGenerator(TextProcessor):
         self._disable_subgraph_constraint = disable_subgraph_constraint
         self._disable_sparql_judgement = disable_sparql_judgement
         self._force_exact = force_exact
+        assert max_failures >= (min_tries or max_failures), \
+            f"got max {max_failures} failures but min {min_tries} tries"
         self._num_examples = num_examples
+        self._max_failures = max_failures
+        self._min_tries = min_tries
         self._system_message = system_message
         self._k = select_k
         self._max_candidates = select_max_candidates
