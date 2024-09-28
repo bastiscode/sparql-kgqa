@@ -693,21 +693,26 @@ class SPARQLGenerator(TextProcessor):
     def set_examples(
         self,
         examples: Examples | str | None = None,
-        example_index: SimilarityIndex | str | None = None
+        example_index: SimilarityIndex | str | list[str] | None = None
     ) -> None:
-        if example_index is not None:
-            if isinstance(example_index, str):
-                index = SimilarityIndex()
-                index.load(example_index)
-                example_index = index
+        self._example_index = None
+        self._examples = None
+        if isinstance(example_index, SimilarityIndex):
             self._example_index = example_index
-            self._examples = None
 
-        elif examples is not None:
-            if isinstance(examples, str):
-                examples = load_examples(examples)
+        elif (
+            isinstance(example_index, str)
+            or isinstance(example_index, list)
+        ):
+            index = SimilarityIndex()
+            index.load(example_index)
+            self._example_index = index
+
+        elif isinstance(examples, str):
+            self._examples = load_examples(examples)
+
+        elif isinstance(examples, list):
             self._examples = examples
-            self._example_index = None
 
         else:
             raise ValueError("either examples or example_index must be set")
