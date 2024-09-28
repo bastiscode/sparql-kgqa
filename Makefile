@@ -74,8 +74,8 @@ wikidata-data:
 	--progress \
 	-n $(NUM_PROCESSES) $(OVERWRITE)
 	@python scripts/prepare_data2.py \
-	--wikisp data/raw/wikisp \
-	--output data/wikidata-wikisp \
+	--wwq data/raw/wikiwebquestions \
+	--output data/wikidata-wwq \
 	--entities $(WD_ENT) \
 	--properties $(WD_PROP) \
 	--progress \

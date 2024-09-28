@@ -36,7 +36,7 @@ def parse_args() -> argparse.Namespace:
     data.add_argument("--qald-10", action="store_true")
     data.add_argument("--qald-7", type=str)
     data.add_argument("--mcwq", type=str)
-    data.add_argument("--wikisp", type=str)
+    data.add_argument("--wwq", type=str)
     data.add_argument("--kqa-pro", type=str)
     data.add_argument("--qa-wiki", type=str)
     data.add_argument("--qlever-wikidata", type=str)
@@ -268,10 +268,10 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
                 samples.append(Sample(query, sparql))
             output[split] = samples
 
-    elif args.wikisp is not None:
+    elif args.wwq is not None:
         kg = "wikidata"
         for split in ["train", "dev", "test"]:
-            file = os.path.join(args.wikisp, f"{split}.json")
+            file = os.path.join(args.wwq, f"{split}.json")
             split = SPLIT_RENAME.get(split, split)
             with open(file, "r") as inf:
                 data = json.load(inf)
