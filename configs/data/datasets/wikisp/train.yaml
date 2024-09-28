@@ -1,3 +1,0 @@
-type: file_pair
-input_path: data/wikidata-wikisp/train_input.jsonl
-target_path: data/wikidata-wikisp/train_target.jsonl
