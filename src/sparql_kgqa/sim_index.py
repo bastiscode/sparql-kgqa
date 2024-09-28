@@ -6,7 +6,7 @@ from sentence_transformers.util import dot_score
 class SimilarityIndex:
     def __init__(
         self,
-        device: str = "cpu",
+        device: str = "cuda",
     ) -> None:
         self.device = device
         self.model = SentenceTransformer(
@@ -80,6 +80,7 @@ class SimilarityIndex:
             convert_to_tensor=True,
             normalize_embeddings=True,
         )
+        assert isinstance(query_embedding, torch.Tensor)
         similarities = dot_score(
             query_embedding.to(self.device),
             self.embeddings

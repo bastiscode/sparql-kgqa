@@ -531,10 +531,9 @@ class KgManager:
         # generate a nicely formatted table
         data = []
         for r in range(1, min(len(result), max_rows + 1)):
-            res = result[r]
             row = []
-            for c in range(min(len(res), max_columns)):
-                val = res[c]
+            for c in range(min(len(result[r]), max_columns)):
+                val = result[r][c]
                 processed = self.process_iri_or_literal(val)
                 if processed is None:
                     row.append(val)
@@ -543,6 +542,7 @@ class KgManager:
                 typ, formatted, _ = processed
                 if typ == "literal":
                     row.append(formatted)
+                    continue
 
                 # for iri check whether it is in one of the mappings
                 norm = self.entity_mapping.normalize(val)
@@ -1506,7 +1506,7 @@ Continuation:
         for q, s in examples or []:
             try:
                 s = self.fix_prefixes(s, remove_known=True)
-                s = self.replace_iris(s)
+                s, _ = self.replace_iris(s, with_iri=False)
             except Exception:
                 # skip invalid examples
                 continue
