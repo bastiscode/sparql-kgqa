@@ -163,7 +163,7 @@ def main():
         "-kg",
         "--knowledge-graph",
         type=str,
-        choices=["wikidata"],
+        choices=["wikidata", "freebase", "dbpedia", "dblp"],
         default="wikidata",
         help="Knowledge graph to use for generation",
         required=True

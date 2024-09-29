@@ -77,7 +77,7 @@ train:
         type: global
         fn:
           type: clip_length
-    sources: file(data/env(DATA).yaml)
+    sources: env(TRAIN)
 
 val:
   data: env(VAL:1000)
