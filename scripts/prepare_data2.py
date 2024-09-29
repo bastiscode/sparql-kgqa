@@ -379,7 +379,10 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
             "complexwebquestions_test"
         )
         output["test"] = [
-            Sample(item["question"], item["sparql"])
+            Sample(
+                item["question"],
+                clean_sparql_for_wqsp_and_cwq(item["sparql"])
+            )
             for item in data["test"]
         ]
 

@@ -27,6 +27,7 @@ for b in data/*; do
             --kg wikidata \
             --allow-subset \
             --prediction-format jsonl \
+            --empty-target-invalid \
             $overwrite
         echo ""
     done

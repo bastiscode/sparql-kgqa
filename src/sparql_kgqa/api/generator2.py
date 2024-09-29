@@ -33,6 +33,7 @@ from sparql_kgqa.sparql.utils2 import (
     Mapping,
     WikidataManager,
     Chat,
+    get_kg_manager,
 )
 
 logging.getLogger("requests").setLevel(logging.WARNING)
@@ -773,19 +774,17 @@ class SPARQLGenerator(TextProcessor):
         entity_mapping: Mapping,
         property_mapping: Mapping
     ) -> None:
-        if kg == "wikidata":
-            self._manager = WikidataManager(
-                entity_index,
-                property_index,
-                entity_mapping,
-                property_mapping  # type: ignore
-            )
-            self._sparql_constraint = self._manager.get_constraint(
-                self._continuations,
-                self._exact or self._force_exact
-            )
-        else:
-            raise ValueError(f"kg {kg} not supported")
+        self._manager = get_kg_manager(
+            kg,
+            entity_index,
+            property_index,
+            entity_mapping,
+            property_mapping
+        )
+        self._sparql_constraint = self._manager.get_constraint(
+            self._continuations,
+            self._exact or self._force_exact
+        )
 
     def set_inference_options(
         self,

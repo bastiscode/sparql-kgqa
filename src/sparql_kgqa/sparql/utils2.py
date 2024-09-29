@@ -1045,10 +1045,9 @@ Answer: (?:yes|no)"""
         skip_autocomplete: bool = False,
         **kwargs: Any
     ) -> dict[str, list[Alternative]] | None:
+        result = None
         try:
-            if skip_autocomplete:
-                result = None
-            else:
+            if not skip_autocomplete:
                 result = self.autocomplete_prefix(
                     prefix + SEARCH_TOKEN,
                     endpoint,
@@ -1065,7 +1064,6 @@ Answer: (?:yes|no)"""
                 f"autocomplete_prefix failed for prefix '{prefix}': "
                 f"{e}"
             )
-            return None
 
         all_alternatives = {}
 
