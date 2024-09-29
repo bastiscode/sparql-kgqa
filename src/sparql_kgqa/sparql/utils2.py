@@ -672,11 +672,8 @@ Answer: (?:yes|no)"""
 
         match parse["name"]:
             case "IRIREF":
-                short = self.format_iri(data, prefixes, safe=False)
-                if short is None:
-                    return None
-
-                return "iri", short, None
+                formatted = self.format_iri(data, prefixes, safe=False)
+                return "iri", formatted, None
 
             case lit if lit.startswith("STRING"):
                 return "literal", self.format_string_literal(data), None
@@ -711,7 +708,7 @@ Answer: (?:yes|no)"""
         iri: str,
         prefixes: dict[str, str] | None = None,
         safe: bool = False
-    ) -> str | None:
+    ) -> str:
         longest = self.find_longest_prefix(iri, prefixes)
         if longest is None:
             return iri
@@ -724,7 +721,7 @@ Answer: (?:yes|no)"""
         if not safe or quote_plus(val) == val:
             return short + ":" + val
         else:
-            return None
+            return iri
 
     def format_string_literal(self, literal: str) -> str:
         if literal.startswith("'"):
@@ -800,13 +797,13 @@ Answer: (?:yes|no)"""
             if iri["value"] == "":
                 continue
 
-            short = self.format_iri(iri["value"], safe=True)
-            if short is None:
+            formatted = self.format_iri(iri["value"], safe=True)
+            if formatted == iri["value"]:
                 continue
 
-            pfx, _ = short.split(":", 1)
-            iri["value"] = short
-            iri["name"] = "PNAME_NS"
+            pfx, _ = formatted.split(":", 1)
+            iri["value"] = formatted
+            iri["name"] = "PNAME_LN"
             seen.add(pfx)
 
         for pfx in find_all(
@@ -879,12 +876,6 @@ Answer: (?:yes|no)"""
                 return False
 
             iri = child["value"]
-            short = self.format_iri(
-                iri,
-                self.custom_prefixes
-            )
-            if short is None:
-                return False
 
         else:
             return False
@@ -904,7 +895,7 @@ Answer: (?:yes|no)"""
         label = index.get_name(map[key])
 
         if with_iri:
-            label += f" ({short})"
+            label += f" ({self.format_iri(iri)})"
         elif variant:
             label += f" ({variant})"
 
@@ -1131,17 +1122,14 @@ Answer: (?:yes|no)"""
 
                 unmatched = False
 
-            if not unmatched:
-                continue
+            if unmatched:
+                others.append((res, formatted, info))
 
-            # not an entity or property from our index
-            # check if it is starting with a known general prefix
-            # because custom ids could just be guessed by the model
-            pfx, _ = formatted.split(":", 1)
-            if pfx not in self.prefixes:
-                continue
-
-            others.append((res, formatted, info))
+        # sort others by whether they are from one of our known
+        # prefixes or not
+        others.sort(
+            key=lambda item: self.find_longest_prefix(item[0]) is None
+        )
 
         end = time.perf_counter()
         LOGGER.debug(
@@ -1404,9 +1392,8 @@ Selection:
             variant
         )
         if denorm is not None:
-            short = self.format_iri(denorm, self.custom_prefixes)
-            assert short is not None, "should not happen"
-            name = f"<{name} ({short})>"
+            formatted = self.format_iri(denorm, self.custom_prefixes)
+            name = f"<{name} ({formatted})>"
 
         return name, (obj_type, identifier, variant)
 

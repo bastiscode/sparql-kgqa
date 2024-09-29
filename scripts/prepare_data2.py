@@ -571,48 +571,43 @@ def prepare_stages(
         if obj["name"] != "iri":
             return None
 
-        short = None
         child = obj["children"][0]
         if child["name"] == "PrefixedName":
-            short = child["children"][0]["value"]
-
-        elif child["name"] == "IRIREF":
-            short = manager.format_iri(child["value"])
-
-        if short is None:
-            return None
-
-        pfx, val = short.split(":", 1)
-
-        if pfx in manager.prefixes:
-            return "other", short, None, short, []
-
-        elif pfx in manager.custom_prefixes:
-            # check whether the iri is a valid entity or property
-            long = manager.custom_prefixes[pfx]
-            iri = long + val + ">"
-
-            matching = {}
-            for obj_type in ["entity", "property"]:
-                map = mappings[obj_type]
-                index = indices[obj_type]
-                norm = map.normalize(iri)
-                if norm is None or norm[0] not in map:
-                    continue
-
-                id = map[norm[0]]
-                label = index.get_name(id)
-                syns = [
-                    s for s in index.get_val(id, 2).split(";;;")
-                    if s != ""
-                ]
-                matching[obj_type] = (*norm, label, syns)
-
-            if not matching:
+            pfx, val = child["children"][0]["value"].split(":", 1)
+            long = manager.prefixes.get(pfx, manager.custom_prefixes.get(pfx))
+            if long is None:
                 return None
 
-            obj_type, nxt = next(val for val in matching.items())
-            return obj_type, *nxt
+            iri = long + val + ">"
+
+        elif child["name"] == "IRIREF":
+            iri = child["value"]
+
+        else:
+            return None
+
+        # check whether the iri is a valid entity or property
+        matching = []
+        for obj_type in ["entity", "property"]:
+            map = mappings[obj_type]
+            index = indices[obj_type]
+            norm = map.normalize(iri)
+            if norm is None or norm[0] not in map:
+                continue
+
+            id = map[norm[0]]
+            label = index.get_name(id)
+            syns = [
+                s for s in index.get_val(id, 2).split(";;;")
+                if s != ""
+            ]
+            matching.append((obj_type, *norm, label, syns))
+
+        if matching:
+            return random.choice(matching)
+
+        elif manager.find_longest_prefix(iri, manager.prefixes) is not None:
+            return "other", iri, None, iri, []
 
     # get all items in triples
     items = [
@@ -644,39 +639,10 @@ def prepare_stages(
         key=lambda x: span(x[0])
     )
 
-    # 1. randomly drop items with type other or literal
-    # such that some continuations are trained to
-    # predict them directly rather than searching for them
-    # 2. randomly drop entities or properties that already
-    # occured in the previous triples
-    keep = []
-    for i, (item, processed) in enumerate(items):
-        typ, identifier, *_ = processed
-        if typ in ["other", "literal"] and random.random() < 0.2:
-            # drop other and literal with 20% probability
-            continue
-
-        if (
-            typ in ["entity", "property"]
-            and random.random() < 0.5
-            and next(
-                (p for p in range(i)
-                 if items[p][1][1] == identifier),
-                None
-            ) is not None
-        ):
-            # drop entities and properties that already occured
-            # with 50% probability
-            continue
-
-        keep.append((item, processed))
-
-    items = keep
-
     samples = []
     for item_idx in random.sample(
         list(range(len(items))),
-        min(len(items), args.stages_per_sample)
+        min(len(items), args.stages_per_sample or len(items))
     ):
         manager = random.choice(managers)
         item, processed = items[item_idx]
@@ -685,6 +651,7 @@ def prepare_stages(
         assert end >= start, "invalid span"
         obj_type, identifier, variant, label, syns = processed
         is_lit_or_other = obj_type in ["literal", "other"]
+        is_ent_or_prop = obj_type in ["entity", "property"]
 
         try:
             prefix_raw = manager.fix_prefixes(
@@ -696,6 +663,12 @@ def prepare_stages(
                 prefix_raw,
                 is_prefix=True
             )
+
+            # 1. randomly drop items with type other or literal
+            # such that some continuations are trained to
+            # predict them directly rather than searching for them
+            # 2. randomly drop entities or properties that already
+            # occured in the previous triples
 
             if item_idx > 0:
                 last, _ = items[item_idx - 1]
@@ -714,7 +687,25 @@ def prepare_stages(
                 last_prefix = ""
                 last_end = 0
 
-            cont = sparql_encoded[last_end:start].decode() + SEARCH_TOKEN
+            is_known_ent_or_prop = (
+                is_ent_or_prop
+                and any(
+                    items[i][1][1] == identifier
+                    for i in range(item_idx)
+                )
+            )
+
+            token = SEARCH_TOKEN
+            can_skip = random.random() > 0.5
+            if can_skip and (is_lit_or_other or is_known_ent_or_prop):
+                if item_idx < len(items) - 1:
+                    start, _ = span(items[item_idx + 1][0])
+                else:
+                    start = len(sparql_encoded)
+                    token = ""
+
+            cont = sparql_encoded[last_end:start].decode() + token
+
             cont_prompt = manager.get_sparql_continuation_prompt(
                 question,
                 last_prefix
@@ -797,40 +788,40 @@ def prepare_stages(
             alts = {}
 
         target_alts = [
-            alt
-            for alt in alts.get(obj_type, [])
+            (obj_type, alt)
+            for obj_type, obj_alts in alts.items()
+            for alt in obj_alts
             if (alt.identifier == identifier
                 or (is_lit_or_other and alt.label == label))
             and (variant is None or variant in (alt.variants or []))
         ]
-        target_alt = random.choice(target_alts) if target_alts else None
+        target_obj_type, target_alt = random.choice(target_alts) \
+            if target_alts else (obj_type, None)
 
         select_failures = set()
 
         if (
             target_alt is not None
             and random.random() < 0.1
-            and len(alts[obj_type]) > 1
+            and len(alts[target_obj_type]) > 1
         ):
             # differentiate between dropping the target from
             # the list of alternatives entirely or only adding the
             # variant to previous fails
             if random.random() < 0.5:
-                alts[obj_type].remove(target_alt)
+                alts[target_obj_type].remove(target_alt)
             else:
-                select_failures.add((obj_type, identifier, variant))
+                select_failures.add((target_obj_type, identifier, variant))
 
             target_alt = None
 
         alts_to_fail = [
-            (obj_type, alt.identifier, var)
-            for alt_obj_type, obj_alts in alts.items()
-            for alt in obj_alts
+            (target_obj_type, alt.identifier, var)
+            for alt in alts.get(target_obj_type)
             for var in (alt.variants or [None])
-            if (target_alt is None
-                or alt.identifier != target_alt.identifier
-                or var != variant)
-            and (target_alt is None or obj_type == alt_obj_type)
+            if target_alt is None
+            or alt.identifier != target_alt.identifier
+            or var != variant
         ]
 
         num_select_failures = random.sample(
@@ -862,10 +853,10 @@ def prepare_stages(
         else:
             offset = sum(
                 len(alts[obj_type])
-                for obj_type in OBJ_TYPES[:OBJ_TYPES.index(obj_type)]
+                for obj_type in OBJ_TYPES[:OBJ_TYPES.index(target_obj_type)]
                 if obj_type in alts
             )
-            select_idx = offset + alts[obj_type].index(target_alt)
+            select_idx = offset + alts[target_obj_type].index(target_alt)
             selection = f"{select_idx + 1}. {target_alt.get_label(variant)}"
 
         samples.append((select_prompt, selection))
@@ -982,7 +973,7 @@ def prepare(args: argparse.Namespace):
         initargs=(kg, args)
     )
 
-    if args.stages_per_sample is None:
+    if (args.stages_per_sample or 1) < 0:
         train_samples = num_samples["train"]
         # determine dynamically based on the number of training samples
         # < 1000: 8x stages
