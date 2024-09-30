@@ -59,6 +59,8 @@ def evaluate(args: argparse.Namespace):
 
         mean_f1 = result["scores"]["f1"]["mean"]
         f1s = result["scores"]["f1"]["values"]
+        mean_em = result["scores"]["em"]["mean"]
+        ems = result["scores"]["em"]["values"]
         pred_invalid = result["invalid_predictions"]
         tgt_invalid = result["invalid_targets"]
         incorrect = result["incorrect_predictions"]
@@ -124,6 +126,9 @@ def evaluate(args: argparse.Namespace):
                 for i in indices
             ]
 
+        ems = [int(f1 == 1.0) for f1 in f1s]
+        mean_em = sum(ems) / len(ems)
+
         num_samples = len(predictions)
         with open(result_file, "w") as outf:
             json.dump(
@@ -133,6 +138,10 @@ def evaluate(args: argparse.Namespace):
                         "f1": {
                             "mean": mean_f1,
                             "values": f1s
+                        },
+                        "em": {
+                            "mean": mean_em,
+                            "values": ems
                         }
                     },
                     "invalid_predictions": format_indices(pred_invalid),
@@ -144,7 +153,8 @@ def evaluate(args: argparse.Namespace):
             )
 
     print(
-        f"Query-averaged F1: {mean_f1:.2%} "
+        f"Mean F1: {mean_f1:.2%}\n"
+        f"Mean EM: {mean_em:.2%}\n"
         f"({len(pred_invalid):,}/{num_samples:,} pred error, "
         f"{len(pred_invalid)/num_samples:.2%} | "
         f"{len(tgt_invalid):,}/{num_samples:,} tgt error, "

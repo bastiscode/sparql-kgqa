@@ -31,7 +31,6 @@ from sparql_kgqa.sim_index import SimilarityIndex
 from sparql_kgqa.sparql.utils2 import (
     KgManager,
     Mapping,
-    WikidataManager,
     Chat,
     get_kg_manager,
 )
