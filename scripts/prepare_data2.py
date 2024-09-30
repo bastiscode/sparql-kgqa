@@ -820,7 +820,7 @@ def prepare_stages(
 
         alts_to_fail = [
             (target_obj_type, alt.identifier, var)
-            for alt in alts.get(target_obj_type)
+            for alt in alts.get(target_obj_type, [])
             for var in (alt.variants or [None])
             if target_alt is None
             or alt.identifier != target_alt.identifier
