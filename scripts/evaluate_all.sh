@@ -1,14 +1,6 @@
 shopt -s nullglob
 
-overwrite=""
 regex="${1:-.*}"
-
-for arg in "$@"; do
-    if [[ $arg == "--overwrite" ]]; then
-        overwrite="--overwrite"
-        break
-    fi
-done
 
 for b in data/*; do
     if [[ ! -d $b/predictions ]]; then
@@ -27,8 +19,7 @@ for b in data/*; do
             --kg wikidata \
             --allow-subset \
             --prediction-format jsonl \
-            --empty-target-invalid \
-            $overwrite
+            ${@:2}
         echo ""
     done
     echo "---------"
