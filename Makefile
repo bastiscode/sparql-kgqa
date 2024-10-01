@@ -29,7 +29,7 @@ QLEVER_TIMEOUT=1h
 
 SEARCH_INDEX=qgram
 
-OVERWRITE=""
+OVERWRITE=
 
 all: search-data search-indices other-data wikidata-data freebase-data dbpedia-data dblp-data example-indices
 

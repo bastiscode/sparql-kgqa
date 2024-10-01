@@ -183,8 +183,8 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
             for item in items:
                 queries = [item["question"]]
                 sparql = item["sparql"]
-                for pq in item["paraphrased_question"]:
-                    queries.append(pq)
+                if split != "test":
+                    queries.extend(item["paraphrased_question"])
                 for q in queries:
                     if q is None or q.strip() == "" or "{" in q or "}" in q:
                         continue
@@ -208,6 +208,9 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
 
                 for q in queries:
                     samples.append(Sample(q, sparql))
+                    if split == "test":
+                        # only the first for test
+                        break
 
             output[split] = samples
 
@@ -233,6 +236,8 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
                         continue
                     sparql = item["query"]["sparql"]
                     samples.append(Sample(q["string"], sparql))
+                    if split == "test":
+                        break
             output[split] = samples
 
     elif args.mcwq is not None:
@@ -355,6 +360,9 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
                         item["RawQuestion"],
                         clean_sparql_for_wqsp_and_cwq(sparql)
                     ))
+                    if split == "test":
+                        # only first for test
+                        break
             output[split] = samples
 
     elif args.cwq:
@@ -404,7 +412,7 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
                 item = data[idx]
                 samples.append(Sample(
                     item["question"],
-                    item["sparql"].replace(" ns:", " fb:")
+                    item["sparql"]
                 ))
             output[s] = samples
 
@@ -442,6 +450,9 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
 
                 for q in queries:
                     samples.append(Sample(q, sparql))
+                    if split == "test":
+                        # only first for test
+                        break
 
             output[split] = samples
 
@@ -453,12 +464,12 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
             assert split in {"train", "val", "test"}
             samples = []
             for item in items:
-                if split != "train" and not item["held_out"]:
-                    continue
                 samples.append(Sample(
                     item["question"]["string"],
                     item["query"]["sparql"]
                 ))
+                if split == "test":
+                    continue
                 samples.append(Sample(
                     item["paraphrased_question"]["string"],
                     item["query"]["sparql"]
@@ -879,20 +890,16 @@ def prepare_sample(
         clean(sample.question),
         clean(sample.sparql),
     )
+    if split == "test":
+        return sample.question, sample.sparql, []
 
     manager = random.choice(managers)
-    is_test = split == "test"
 
     try:
-        if is_test and sample.sparql == "":
-            return sample.question, sample.sparql, []
-
         raw_sparql = manager.fix_prefixes(
             sample.sparql,
-            remove_known=not is_test
+            remove_known=True
         )
-        if is_test:
-            return sample.question, raw_sparql, []
 
         prompt = manager.get_sparql_prompt(sample.question)
         sparql, inc = manager.replace_iris(
@@ -1018,21 +1025,25 @@ def prepare(args: argparse.Namespace):
             args.output,
             f"{split}_raw.jsonl"
         )
+        outputs = list(tqdm(
+            pool.imap(
+                prepare_sample_mp,
+                ((sample, args, split) for sample in samples)
+            ),  # type: ignore
+            desc=f"processing and writing {split} samples",
+            leave=False,
+            total=len(samples),
+            disable=not args.progress
+        ))
+        random.seed(args.seed)
+        random.shuffle(outputs)
+
         invalid = 0
         num_sparqls = 0
         with open(input, "w") as inf, \
                 open(target, "w") as tf, \
                 open(raw, "w") as rf:
-            for output in tqdm(
-                pool.imap(
-                    prepare_sample_mp,
-                    ((sample, args, split) for sample in samples)
-                ),  # type: ignore
-                desc=f"processing and writing {split} samples",
-                leave=False,
-                total=len(samples),
-                disable=not args.progress
-            ):
+            for output in outputs:
                 if output is None:
                     invalid += 1
                     continue
