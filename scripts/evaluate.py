@@ -1,6 +1,7 @@
 import argparse
 import os
 import json
+from typing import Any
 
 from tqdm import tqdm
 
@@ -61,9 +62,8 @@ def evaluate(args: argparse.Namespace):
         f1s = result["scores"]["f1"]["values"]
         mean_em = result["scores"]["em"]["mean"]
         ems = result["scores"]["em"]["values"]
-        pred_invalid = result["invalid_predictions"]
-        tgt_invalid = result["invalid_targets"]
-        incorrect = result["incorrect_predictions"]
+        invalid = result["invalid"]
+        incorrect = result["incorrect"]
         num_samples = result["num_samples"]
 
     else:
@@ -85,50 +85,62 @@ def evaluate(args: argparse.Namespace):
         gram, lex = load_sparql_grammar()
         parser = grammar.LR1Parser(gram, lex)
 
-        incorrect = []
-        pred_invalid = []
-        tgt_invalid = []
+        incorrect = {}
+        invalid = {}
         f1s = []
         iter = (
             (pred, target, parser,
              not args.empty_target_invalid, args.kg, args.qlever_endpoint)
             for pred, target in zip(predictions, targets)
         )
-        for i, (f1, pred_inv, tgt_inv) in tqdm(
+        for i, (f1, pred, tgt) in tqdm(
             enumerate(run_parallel(calc_f1, iter, args.num_workers)),
             desc="evaluating",
             total=len(predictions),
             leave=False
         ):
-            if pred_inv:
-                pred_invalid.append(i)
+            invalid_pred = isinstance(pred, str)
+            if invalid_pred:
+                invalid[i] = {"prediction": pred}
                 f1 = 0.0
-            if tgt_inv:
-                tgt_invalid.append(i)
+
+            if isinstance(tgt, str):
+                if i not in invalid:
+                    invalid[i] = {}
+                invalid[i]["target"] = tgt
                 continue
-            if f1 < 1.0:
-                incorrect.append(i)
+
+            assert f1 is not None
+
+            if f1 < 1.0 and not invalid_pred:
+                incorrect[i] = {"f1": f1}
+
             f1s.append(f1)
 
-        mean_f1 = sum(f1s) / len(f1s)
+        mean_f1 = sum(f1s) / max(len(f1s), 1)
         base = os.path.splitext(args.prediction)[0]
         result_file = f"{base}.result.json"
         create_dir(result_file)
 
-        def format_indices(indices: list[int]) -> list[dict]:
+        def format_indices_and_infos(
+            indices: dict[int, dict[str, Any]]
+        ) -> list[dict]:
             return [
                 {
                     "sample": i + 1,
                     "input": inputs[i],
                     "target": targets[i],
-                    "prediction": predictions[i]
+                    "prediction": predictions[i],
+                    "infos": infos
                 }
-                for i in indices
+                for i, infos in indices.items()
             ]
 
         ems = [int(f1 == 1.0) for f1 in f1s]
-        mean_em = sum(ems) / len(ems)
+        mean_em = sum(ems) / max(1, len(ems))
 
+        invalid = format_indices_and_infos(invalid)
+        incorrect = format_indices_and_infos(incorrect)
         num_samples = len(predictions)
         with open(result_file, "w") as outf:
             json.dump(
@@ -144,23 +156,30 @@ def evaluate(args: argparse.Namespace):
                             "values": ems
                         }
                     },
-                    "invalid_predictions": format_indices(pred_invalid),
-                    "invalid_targets": format_indices(tgt_invalid),
-                    "incorrect_predictions": format_indices(incorrect),
+                    "invalid": invalid,
+                    "incorrect": incorrect
                 },
                 outf,
                 indent=2
             )
 
+    pred_invalid = sum(
+        int("prediction" in item["infos"])
+        for item in invalid
+    )
+    tgt_invalid = sum(
+        int("target" in item["infos"])
+        for item in invalid
+    )
     print(
         f"Mean F1: {mean_f1:.2%}\n"
         f"Mean EM: {mean_em:.2%}\n"
-        f"({len(pred_invalid):,}/{num_samples:,} pred error, "
-        f"{len(pred_invalid)/num_samples:.2%} | "
-        f"{len(tgt_invalid):,}/{num_samples:,} tgt error, "
-        f"{len(tgt_invalid)/num_samples:.2%} | "
+        f"({pred_invalid:,}/{num_samples:,} pred error, "
+        f"{pred_invalid/max(1, num_samples):.2%} | "
+        f"{tgt_invalid:,}/{num_samples:,} tgt error, "
+        f"{tgt_invalid/max(1, num_samples):.2%} | "
         f"{len(incorrect):,}/{len(f1s):,} pred incorrect, "
-        f"{len(incorrect)/len(f1s):.2%} )"
+        f"{len(incorrect)/max(1, len(f1s)):.2%} )"
     )
 
 

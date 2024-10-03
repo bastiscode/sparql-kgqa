@@ -8,7 +8,7 @@ import logging
 import re
 import uuid
 from importlib import resources
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Iterable, Iterator, Type, TypeVar, Any
 
 from text_utils import grammar, tokenization
@@ -594,7 +594,7 @@ at maximum below:
         prompt = f"""\
 Given a question and a SPARQL query together with its execution result, \
 judge whether the SPARQL query makes sense for answering the question. \
-Provide a short, high level explanation of at most 16 words and \
+Provide a short, high level explanation of at most 128 characters and \
 a final yes or no answer.
 
 Question:
@@ -607,7 +607,7 @@ Result:
 {result}
 """
         regex = """\
-Explanation: (?:\\w+ ){1, 15}\\w+
+Explanation: [\\w ]{1, 128}
 
 Answer: (?:yes|no)"""
         return prompt, regex
@@ -999,31 +999,20 @@ Answer: (?:yes|no)"""
 
         return parse_to_string(parse)
 
-    def build_alternatives(
+    def build_alternative(
         self,
-        data: list[tuple[str, set[str] | None]],
-    ) -> list[Alternative]:
-        alternatives: list[Alternative] = []
-
-        for line, variants in data:
-            label, _, syns, id, infos = line.rstrip("\r\n").split("\t")
-
-            assert all(
-                alt.identifier != id
-                for alt in alternatives
-            ), f"duplicate identifier {id} in data"
-
-            alternative = Alternative(
-                id,
-                short_identifier=self.format_iri(id),
-                label=label,
-                variants=sorted(variants) if variants else None,
-                aliases=[s for s in syns.split(";;;") if s != ""],
-                infos=[i for i in infos.split(";;;") if i != ""]
-            )
-            alternatives.append(alternative)
-
-        return alternatives
+        data: str,
+        variants: set[str] | None
+    ) -> Alternative:
+        label, _, syns, id, infos = data.rstrip("\r\n").split("\t")
+        return Alternative(
+            id,
+            short_identifier=self.format_iri(id),
+            label=label,
+            variants=sorted(variants) if variants else None,
+            aliases=[s for s in syns.split(";;;") if s != ""],
+            infos=[i for i in infos.split(";;;") if i != ""]
+        )
 
     def get_selection_alternatives(
         self,
@@ -1035,7 +1024,7 @@ Answer: (?:yes|no)"""
         max_retries: int = 1,
         skip_autocomplete: bool = False,
         **kwargs: Any
-    ) -> dict[str, list[Alternative]] | None:
+    ) -> dict[str, list[Alternative]]:
         result = None
         try:
             if not skip_autocomplete:
@@ -1070,13 +1059,16 @@ Answer: (?:yes|no)"""
                 ("entity", self.entity_index, self.entity_mapping),
                 ("property", self.property_index, self.property_mapping)
             ]:
-                data: list[tuple[str, set[str] | None]] = []
+                alternatives = []
                 matching = set()
                 for id, _ in index.find_matches(search, **kwargs)[:k]:
                     matching.add(id)
-                    data.append((index.get_row(id), map.default_variants()))
+                    alternatives.append(self.build_alternative(
+                        index.get_row(id),
+                        map.default_variants()
+                    ))
 
-                all_alternatives[index_type] = self.build_alternatives(data)
+                all_alternatives[index_type] = alternatives
 
             return all_alternatives
 
@@ -1140,28 +1132,34 @@ Answer: (?:yes|no)"""
             ("entity", entities, self.entity_index),
             ("property", properties, self.property_index)
         ]:
-            data: list[tuple[str, set[str] | None]] = []
+            alternatives = []
 
             # build sub index and search in it
             matching = set()
             sub_index = index.sub_index_by_ids(list(id_map))
             for id, _ in sub_index.find_matches(search, **kwargs)[:k]:
                 matching.add(id)
-                data.append((sub_index.get_row(id), id_map[id]))
+                alternatives.append(self.build_alternative(
+                    sub_index.get_row(id),
+                    id_map[id]
+                ))
 
             # fill alternatives with popular non-matching entities
             # or properties; lower ids mean higher scores, so just
             # iterate over sorted id_map keys while ignoring already
             # machted ids, and breaking when reaching k total datapoints
             for id in sorted(id_map):
-                if len(data) >= k:
+                if len(alternatives) >= k:
                     break
                 elif id in matching:
                     continue
 
-                data.append((index.get_row(id), id_map[id]))
+                alternatives.append(self.build_alternative(
+                    index.get_row(id),
+                    id_map[id]
+                ))
 
-            all_alternatives[index_type] = self.build_alternatives(data)
+            all_alternatives[index_type] = alternatives
 
         end = time.perf_counter()
         LOGGER.debug(
@@ -1176,7 +1174,7 @@ Answer: (?:yes|no)"""
                 ("literal", literals)
             ]:
                 # build index and search in it
-                data: list[tuple[str, set[str] | None]] = []
+                alternatives = []
 
                 data_file = os.path.join(temp_dir, f"{index_type}_data.tsv")
                 index_dir = os.path.join(temp_dir, f"{index_type}_index")
@@ -1200,20 +1198,24 @@ Answer: (?:yes|no)"""
                 matching = set()
                 for id, _ in index.find_matches(search, **kwargs)[:k]:
                     matching.add(id)
-                    data.append((index.get_row(id), None))
+                    alternatives.append(self.build_alternative(
+                        index.get_row(id), None
+                    ))
 
                 # fill alternatives with non-matching other iris
                 # or literals
                 id = 0
-                while len(data) < k and id < len(index):
+                while len(alternatives) < k and id < len(index):
                     if id in matching:
                         id += 1
                         continue
 
-                    data.append((index.get_row(id), None))
+                    alternatives.append(self.build_alternative(
+                        index.get_row(id), None
+                    ))
                     id += 1
 
-                all_alternatives[index_type] = self.build_alternatives(data)
+                all_alternatives[index_type] = alternatives
 
         end = time.perf_counter()
         LOGGER.debug(
@@ -1380,16 +1382,19 @@ Selection:
 
         else:
             # parse variant
-            # + 4 to account for ". " and opening " ("
+            # + 2 to account for opening " ("
             # - 1 to account for closing ")"
-            variant = result[len(num) + len(alternative.get_label()) + 4:-1]
+            name_end = len(alternative.get_label())
+            variant = name[name_end + 2:-1]
+            name = name[:name_end]
 
-        denorm = self.denormalize_selection(
-            obj_type,
-            identifier,
-            variant
-        )
-        if denorm is not None:
+        if obj_type in ["property", "entity"]:
+            denorm = self.denormalize_selection(
+                obj_type,
+                identifier,
+                variant
+            )
+            assert denorm is not None
             formatted = self.format_iri(denorm, self.custom_prefixes)
             name = f"<{name} ({formatted})>"
 
@@ -1452,22 +1457,62 @@ Question:
 
 SPARQL query:
 """
+    def format_selections(
+        self,
+        selections: list[tuple[str, str, str | None]],
+    ) -> str:
+        entities = {}
+        properties = {}
+
+        for obj_type, identifier, variant in selections:
+            if obj_type == "entity" and identifier in self.entity_mapping:
+                id = self.entity_mapping[identifier]
+                if id not in entities:
+                    entities[id] = {}
+                entities[id].add(variant)
+
+            elif obj_type == "property" and identifier in self.property_mapping:
+                id = self.property_mapping[identifier]
+                if id not in properties:
+                    properties[id] = {}
+                properties[id].add(variant)
+
+        s = ""
+        for obj_type, id_map, index in [
+            ("entities", entities, self.entity_index),
+            ("properties", properties, self.property_index)
+        ]:
+            if not id_map:
+                continue
+
+            s += f"Using {obj_type}:\n"
+            s += "\n".join(
+                self.build_alternative(
+                    index.get_row(id),
+                    variants
+                ).get_string(add_infos=True)
+                for id, variants in id_map.items()
+            )
+
+        return s.strip()
 
     def get_sparql_continuation_prompt(
         self,
         question: str,
         prefix: str,
+        selections: list[tuple[str, str, str | None]] | None = None,
         examples: list[tuple[str, str]] | None = None,
         failures: set[str] | None = None
     ) -> Chat:
         failure = ""
         if failures:
-            failed = "\n\n".join(failures)
+            failed = "\n".join(failures)
             failure = f"""
 The following continuations were already tried but unsuccessful. If there \
 is no other sensible continuation to try, output one of these again:
 {failed}
 """
+
         prompt = f"""\
 Continue the SPARQL prefix to answer the question either \
 until the end of the SPARQL query or the next {self.kg} \
@@ -1481,6 +1526,7 @@ SPARQL prefix over {self.kg}:
 {failure}
 Continuation:
 """
+        
 
         messages = []
         for q, s in examples or []:
@@ -1664,7 +1710,7 @@ def run_parallel(
             future = executor.submit(fn, *input)
             futures.append(future)
 
-        for future in as_completed(futures):
+        for future in futures:
             yield future.result()
 
 

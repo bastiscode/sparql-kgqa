@@ -752,11 +752,12 @@ def prepare_stages(
         all_syns = [label] + syns
 
         search_failures = set()
-        num_search_failures = random.sample(
-            list(range(len(all_syns) + 1)),
-            1,
-            counts=list(range(len(all_syns) + 1, 0, -1))
-        )[0]
+        # num_search_failures = random.sample(
+        #     list(range(len(all_syns) + 1)),
+        #     1,
+        #     counts=list(range(len(all_syns) + 1, 0, -1))
+        # )[0]
+        num_search_failures = 0
         for i in range(num_search_failures):
             search_failures.add(get_search_query(
                 question,
@@ -838,11 +839,12 @@ def prepare_stages(
             or var != variant
         ]
 
-        num_select_failures = random.sample(
-            list(range(3 - len(select_failures) + 1)),
-            1,
-            counts=list(range(3 - len(select_failures) + 1, 0, -1))
-        )[0]
+        # num_select_failures = random.sample(
+        #     list(range(3 - len(select_failures) + 1)),
+        #     1,
+        #     counts=list(range(3 - len(select_failures) + 1, 0, -1))
+        # )[0]
+        num_select_failures = 0
         failed = random.sample(
             alts_to_fail,
             min(len(alts_to_fail), num_select_failures),
@@ -890,10 +892,14 @@ def prepare_sample(
         clean(sample.question),
         clean(sample.sparql),
     )
-    if split == "test":
-        return sample.question, sample.sparql, []
-
     manager = random.choice(managers)
+
+    if split == "test":
+        try:
+            sparql = manager.fix_prefixes(sample.sparql)
+        except Exception:
+            sparql = sample.sparql
+        return sample.question, sparql, []
 
     try:
         raw_sparql = manager.fix_prefixes(
@@ -913,12 +919,12 @@ def prepare_sample(
         return None
 
     sparqls: list[tuple[str | Chat, str]] = [(prompt, sparql)]
-    sparqls.extend(prepare_stages(
+    sparqls = prepare_stages(
         sample.question,
         raw_sparql,
         managers,
         args
-    ))
+    )
 
     return sample.question, raw_sparql, sparqls
 

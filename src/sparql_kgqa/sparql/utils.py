@@ -652,7 +652,7 @@ def query_entities(
     parser: grammar.LR1Parser,
     kg: str = "wikidata",
     qlever_endpoint: str | None = None
-) -> Counter | None:
+) -> tuple[Counter | None, str | None]:
     if qlever_endpoint is None:
         assert kg in QLEVER_URLS, \
             f"no QLever endpoint for knowledge graph {kg}"
@@ -667,11 +667,14 @@ def query_entities(
             timeout=(5.0, 60.0)
         )
         if isinstance(result, AskResult):
-            return Counter({result: 1})
+            return Counter({result: 1}), None
         else:
-            return Counter((tuple(r) for r in result))
-    except Exception:
-        return None
+            return Counter((
+                tuple(result[i]) for i in range(1, len(result))
+            )), None
+
+    except Exception as e:
+        return None, str(e)
 
 
 def calc_f1(
@@ -681,15 +684,33 @@ def calc_f1(
     allow_empty_target: bool = True,
     kg: str = "wikidata",
     qlever_endpoint: str | None = None
-) -> tuple[float | None, bool, bool]:
-    pred_set = query_entities(pred, parser, kg, qlever_endpoint)
-    target_set = query_entities(target, parser, kg, qlever_endpoint)
-    if pred_set is None or target_set is None:
-        return None, pred_set is None, target_set is None
+) -> tuple[float | None, str | Counter, str | Counter]:
+    pred_set, pred_err = query_entities(
+        pred,
+        parser,
+        kg,
+        qlever_endpoint
+    )
+    target_set, target_err = query_entities(
+        target,
+        parser,
+        kg,
+        qlever_endpoint
+    )
+    if pred_err is not None or target_err is not None:
+        return (
+            None,
+            pred_err or pred_set,
+            target_err or target_set
+        )  # type: ignore
+
+    assert pred_set is not None and target_set is not None
     if len(target_set) == 0 and not allow_empty_target:
-        return None, False, True
+        return None, pred_set, "target set is empty"
+
     if len(pred_set) == 0 and len(target_set) == 0:
-        return 1.0, False, False
+        return 1.0, pred_set, target_set
+
     tp = (pred_set & target_set).total()
     fp = (pred_set - target_set).total()
     fn = (target_set - pred_set).total()
@@ -700,7 +721,8 @@ def calc_f1(
         f1 = 2 * p * r / (p + r)
     else:
         f1 = 0.0
-    return f1, False, False
+
+    return f1, pred_set, target_set
 
 
 def fix_prefixes(

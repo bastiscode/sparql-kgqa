@@ -284,11 +284,13 @@ class SPARQLGenerator(TextProcessor):
 
         if self._sampling_strategy == "greedy" or no_sampling:
             sample_fn = inference_utils.greedy()
+
         elif self._sampling_strategy == "top_k":
             assert self._top_k >= self._beam_width, \
                 "top k must be greater than or equal to beam width"
             logit_fns.append(inference_utils.top_k_masking(self._top_k))
             sample_fn = inference_utils.sample()
+
         else:
             logit_fns.append(inference_utils.nucleus_masking(self._top_p))
             sample_fn = inference_utils.sample()
@@ -310,7 +312,7 @@ class SPARQLGenerator(TextProcessor):
             update_fn=update_fn,
             logit_fns=logit_fns,
             max_new_tokens=self._max_new_tokens,
-            yield_intermediate=True
+            yield_intermediate=True,
         ):
             beam = beams[0][0]
             yield beam
@@ -699,8 +701,6 @@ class SPARQLGenerator(TextProcessor):
             max_retries=3,
             skip_autocomplete=self._disable_subgraph_constraint
         )
-        if alternatives is None:
-            return None
 
         prompt, regex = self._manager.get_selection_prompt_and_regex(
             question,
