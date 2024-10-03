@@ -1148,16 +1148,16 @@ Answer: (?:yes|no)"""
             # or properties; lower ids mean higher scores, so just
             # iterate over sorted id_map keys while ignoring already
             # machted ids, and breaking when reaching k total datapoints
-            for id in sorted(id_map):
-                if len(alternatives) >= k:
-                    break
-                elif id in matching:
-                    continue
-
-                alternatives.append(self.build_alternative(
-                    index.get_row(id),
-                    id_map[id]
-                ))
+            # for id in sorted(id_map):
+            #     if len(alternatives) >= k:
+            #         break
+            #     elif id in matching:
+            #         continue
+            #
+            #     alternatives.append(self.build_alternative(
+            #         index.get_row(id),
+            #         id_map[id]
+            #     ))
 
             all_alternatives[index_type] = alternatives
 
@@ -1204,16 +1204,16 @@ Answer: (?:yes|no)"""
 
                 # fill alternatives with non-matching other iris
                 # or literals
-                id = 0
-                while len(alternatives) < k and id < len(index):
-                    if id in matching:
-                        id += 1
-                        continue
-
-                    alternatives.append(self.build_alternative(
-                        index.get_row(id), None
-                    ))
-                    id += 1
+                # id = 0
+                # while len(alternatives) < k and id < len(index):
+                #     if id in matching:
+                #         id += 1
+                #         continue
+                #
+                #     alternatives.append(self.build_alternative(
+                #         index.get_row(id), None
+                #     ))
+                #     id += 1
 
                 all_alternatives[index_type] = alternatives
 
@@ -1323,7 +1323,7 @@ Answer: (?:yes|no)"""
 
         failure = ""
         if failed:
-            failed = "\n\n".join(failed)
+            failed = "\n".join(failed)
             failure = f"""
 The following alternatives were already tried but unsuccessful. \
 If there is no other sensible alternative to try, select the none alternative:
@@ -1423,7 +1423,7 @@ Selection:
         # only lowercase ascii + space, non-empty, up to 128 characters
         failure = ""
         if failures:
-            failed = "\n\n".join(failures)
+            failed = "\n".join(failures)
             failure = f"""
 The following search queries were already tried but unsuccessful. If there \
 is no other sensible search query to try, output one of these again:
@@ -1526,7 +1526,6 @@ SPARQL prefix over {self.kg}:
 {failure}
 Continuation:
 """
-        
 
         messages = []
         for q, s in examples or []:

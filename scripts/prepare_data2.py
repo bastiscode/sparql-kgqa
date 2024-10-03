@@ -85,17 +85,17 @@ def parse_args() -> argparse.Namespace:
     sample_group.add_argument(
         "--selections-min-k",
         type=int,
-        default=8
+        default=4
     )
     sample_group.add_argument(
         "--selections-max-k",
         type=int,
-        default=16
+        default=8
     )
     sample_group.add_argument(
         "--selections-min-aliases",
         type=int,
-        default=0
+        default=1
     )
     sample_group.add_argument(
         "--selections-max-aliases",
@@ -749,31 +749,28 @@ def prepare_stages(
             continue
 
         random.shuffle(syns)
-        all_syns = [label] + syns
 
-        search_failures = set()
-        # num_search_failures = random.sample(
-        #     list(range(len(all_syns) + 1)),
-        #     1,
-        #     counts=list(range(len(all_syns) + 1, 0, -1))
-        # )[0]
-        num_search_failures = 0
-        for i in range(num_search_failures):
-            search_failures.add(get_search_query(
+        num_search_failures = min(random.sample(
+            list(range(len(syns) + 1)),
+            1,
+            counts=list(range(len(syns) + 1, 0, -1))
+        )[0], 3)
+        search_failures = set(get_search_query(
                 question,
-                all_syns[i],
-                manager.entity_index.get_type()
-            ))
-
-        if num_search_failures >= len(all_syns):
-            search_fail_list = list(search_failures)
-            search = random.choice(search_fail_list)
-        else:
-            search = get_search_query(
-                question,
-                all_syns[num_search_failures],
+                syns[i],
                 manager.entity_index.get_type()
             )
+            for i in range(num_search_failures)
+        )
+
+        search = get_search_query(
+            question,
+            label,
+            manager.entity_index.get_type()
+        )
+        if len(search_failures) >= len(syns) and random.random() < 0.5:
+            search_failures.add(search)
+            search = random.choice(list(search_failures))
 
         search_prompt, _ = manager.get_search_prompt_and_regex(
             question,
@@ -839,15 +836,16 @@ def prepare_stages(
             or var != variant
         ]
 
-        # num_select_failures = random.sample(
-        #     list(range(3 - len(select_failures) + 1)),
-        #     1,
-        #     counts=list(range(3 - len(select_failures) + 1, 0, -1))
-        # )[0]
-        num_select_failures = 0
+        num_select_failures = min(random.sample(
+            list(range(3 - len(select_failures) + 1)),
+            1,
+            counts=list(range(3 - len(select_failures) + 1, 0, -1))
+        )[0], 3)
         failed = random.sample(
             alts_to_fail,
             min(len(alts_to_fail), num_select_failures),
+            # make earlier alts more likely failures
+            counts=list(range(len(alts_to_fail), 0, -1))
         )
         select_failures.update(set(failed))
 
@@ -860,7 +858,7 @@ def prepare_stages(
                 args.selections_min_aliases,
                 args.selections_max_aliases
             ),
-            add_infos=random.random() < 0.1,
+            add_infos=True,
             failures=select_failures
         )
 
