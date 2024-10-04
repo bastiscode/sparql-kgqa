@@ -748,20 +748,22 @@ def prepare_stages(
         except Exception:
             continue
 
-        random.shuffle(syns)
-
-        num_search_failures = min(random.sample(
-            list(range(len(syns) + 1)),
-            1,
-            counts=list(range(len(syns) + 1, 0, -1))
-        )[0], 3)
-        search_failures = set(get_search_query(
-                question,
-                syns[i],
-                manager.entity_index.get_type()
+        if len(syns) > 0:
+            num_search_failures = min(random.sample(
+                list(range(len(syns) + 1)),
+                1,
+                counts=list(range(len(syns) + 1, 0, -1))
+            )[0], 3)
+            search_failures = set(
+                get_search_query(
+                    question,
+                    syn,
+                    manager.entity_index.get_type()
+                )
+                for syn in random.sample(syns, num_search_failures)
             )
-            for i in range(num_search_failures)
-        )
+        else:
+            search_failures = set()
 
         search = get_search_query(
             question,
@@ -836,18 +838,20 @@ def prepare_stages(
             or var != variant
         ]
 
-        num_select_failures = min(random.sample(
-            list(range(3 - len(select_failures) + 1)),
-            1,
-            counts=list(range(3 - len(select_failures) + 1, 0, -1))
-        )[0], 3)
-        failed = random.sample(
-            alts_to_fail,
-            min(len(alts_to_fail), num_select_failures),
-            # make earlier alts more likely failures
-            counts=list(range(len(alts_to_fail), 0, -1))
-        )
-        select_failures.update(set(failed))
+        if len(alts_to_fail) > 0:
+            num_select_failures = min(random.sample(
+                list(range(len(alts_to_fail) + 1)),
+                1,
+                counts=list(range(len(alts_to_fail) + 1, 0, -1))
+            )[0], 3 - len(select_failures))
+            select_failures.update(
+                random.sample(
+                    alts_to_fail,
+                    num_select_failures,
+                    # make earlier alts more likely failures
+                    counts=list(range(len(alts_to_fail), 0, -1))
+                )
+            )
 
         select_prompt, _ = manager.get_selection_prompt_and_regex(
             question,

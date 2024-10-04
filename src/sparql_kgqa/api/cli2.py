@@ -248,7 +248,7 @@ def main():
     parser.add_argument(
         "--select-k",
         type=int,
-        default=16,
+        default=10,
         help="Number of candidates to select from"
     )
     parser.add_argument(
