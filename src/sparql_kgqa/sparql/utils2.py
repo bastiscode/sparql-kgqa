@@ -77,6 +77,7 @@ class Alternative:
         short_identifier: str | None = None,
         label: str | None = None,
         variants: list[str] | None = None,
+        display_variants: list[str] | None = None,
         aliases: list[str] | None = None,
         infos: list[str] | None = None
     ) -> None:
@@ -85,6 +86,7 @@ class Alternative:
         self.label = label
         self.aliases = aliases
         self.variants = variants
+        self.display_variants = display_variants
         self.infos = infos
 
     def __repr__(self) -> str:
@@ -129,8 +131,9 @@ class Alternative:
             alias_str = ", ".join(self._clip(a) for a in aliases)
             s += f", also known as {alias_str}"
 
-        if self.variants:
-            s += f" ({'|'.join(self.variants)})"
+        variants = self.display_variants or self.variants
+        if variants:
+            s += f" ({'|'.join(variants)})"
 
         return s
 
@@ -151,7 +154,7 @@ class NoneAlternative(Alternative):
     def get_string(self, max_aliases: int = 5, add_infos: bool = True) -> str:
         return f"{self.label} (if no other {self.obj_type} fits well enough)"
 
-    def get_regex(self) -> str:
+    def get_regex(self, variants: list[str] | None = None) -> str:
         return re.escape("none")
 
 
@@ -167,7 +170,22 @@ WIKIDATA_PROPERTY_VARIANTS = {
     "<http://www.wikidata.org/prop/reference/value/": "prv",
     "<http://www.wikidata.org/prop/statement/": "ps",
     "<http://www.wikidata.org/prop/statement/value-normalized/": "psn",
-    "<http://www.wikidata.org/prop/statement/value/": "psv"
+    "<http://www.wikidata.org/prop/statement/value/": "psv",
+    # "<http://www.wikidata.org/prop/direct-normalized/": "direct norm",
+    # "<http://www.wikidata.org/prop/direct/": "direct",
+    # "<http://www.wikidata.org/prop/": "prop",
+    # "<http://www.wikidata.org/prop/qualifier/": "qualifier",
+    # "<http://www.wikidata.org/prop/qualifier/value-normalized/":
+    # "qualifier norm",
+    # "<http://www.wikidata.org/prop/qualifier/value/": "qualifier value",
+    # "<http://www.wikidata.org/prop/reference/": "reference",
+    # "<http://www.wikidata.org/prop/reference/value-normalized/":
+    # "reference norm",
+    # "<http://www.wikidata.org/prop/reference/value/": "reference value",
+    # "<http://www.wikidata.org/prop/statement/": "statement",
+    # "<http://www.wikidata.org/prop/statement/value-normalized/":
+    # "statement norm",
+    # "<http://www.wikidata.org/prop/statement/value/": "statement value",
 }
 
 
@@ -1002,7 +1020,8 @@ Answer: (?:yes|no)"""
     def build_alternative(
         self,
         data: str,
-        variants: set[str] | None
+        variants: set[str] | None = None,
+        display_variants: set[str] | None = None
     ) -> Alternative:
         label, _, syns, id, infos = data.rstrip("\r\n").split("\t")
         return Alternative(
@@ -1010,6 +1029,8 @@ Answer: (?:yes|no)"""
             short_identifier=self.format_iri(id),
             label=label,
             variants=sorted(variants) if variants else None,
+            display_variants=sorted(display_variants)
+            if display_variants else None,
             aliases=[s for s in syns.split(";;;") if s != ""],
             infos=[i for i in infos.split(";;;") if i != ""]
         )
@@ -1065,7 +1086,8 @@ Answer: (?:yes|no)"""
                     matching.add(id)
                     alternatives.append(self.build_alternative(
                         index.get_row(id),
-                        map.default_variants()
+                        variants=map.default_variants(),
+                        display_variants={"all"}
                     ))
 
                 all_alternatives[index_type] = alternatives
@@ -1199,7 +1221,8 @@ Answer: (?:yes|no)"""
                 for id, _ in index.find_matches(search, **kwargs)[:k]:
                     matching.add(id)
                     alternatives.append(self.build_alternative(
-                        index.get_row(id), None
+                        index.get_row(id),
+                        None
                     ))
 
                 # fill alternatives with non-matching other iris
@@ -1233,11 +1256,11 @@ Answer: (?:yes|no)"""
         alternatives: dict[str, list[Alternative]],
         max_aliases: int = 5,
         add_infos: bool = False,
+        selections: list[tuple[str, str, str | None]] | None = None,
         failures: set[tuple[str, str, str | None]] | None = None,
-        exclude_failures: bool = False
+        add_none_alternative: bool = True
     ) -> tuple[str, str]:
         failed = []
-        exclude = set()
         for obj_type, identifier, variant in failures or set():
             if obj_type not in alternatives:
                 continue
@@ -1259,8 +1282,6 @@ Answer: (?:yes|no)"""
             idx = offset + idx
             fail = f"{idx + 1}. {alt.get_label(variant)}"
             failed.append(fail)
-            if exclude_failures:
-                exclude.add(idx)
 
         prefix = prefix + "..."
 
@@ -1289,10 +1310,10 @@ Answer: (?:yes|no)"""
                     # add info to non unique labels
                     add_infos or counts[alt_label.lower()] > 1
                 ))
-                if alt_idx not in exclude:
-                    regexes.append(
-                        re.escape(alt_idx_str) + alternative.get_regex()
-                    )
+                regexes.append(
+                    re.escape(alt_idx_str)
+                    + alternative.get_regex()
+                )
 
                 alt_idx += 1
 
@@ -1315,26 +1336,18 @@ Answer: (?:yes|no)"""
 
         # none alternative
         num_alts = sum(len(alts) for alts in alternatives.values())
-        alt_string = "0. none (if no other alternative fits well enough)" + \
-            "\n\n" * (num_alts > 0) + alt_string
-        if not exclude_failures or num_alts - len(exclude) <= 0:
+        if add_none_alternative or num_alts == 0:
+            alt_string = "0. none (if no other alternative fits well enough)" \
+                + "\n\n" * (num_alts > 0) + alt_string
             alt_regex += "|" * (num_alts > 0) + re.escape("0. none")
         alt_regex += ")"
-
-        failure = ""
-        if failed:
-            failed = "\n".join(failed)
-            failure = f"""
-The following alternatives were already tried but unsuccessful. \
-If there is no other sensible alternative to try, select the none alternative:
-{failed}
-"""
 
         prompt = f"""\
 Select the most fitting alternative to continue the SPARQL \
 query with. The question to be answered, the current SPARQL prefix, the \
 list of possible alternatives and the search query that \
-returned these alternatives are given below.
+returned these alternatives are given below. Avoid selecting \
+alternatives that were already tried and unsuccessful.
 
 Question:
 {question.strip()}
@@ -1346,9 +1359,24 @@ Search query:
 {search_query}
 
 {alt_string}
-{failure}
+"""
+
+        if selections:
+            prompt += f"""
+{self.format_selections(selections)}
+"""
+
+        if failed:
+            failed = "\n".join(failed)
+            prompt += f"""
+The following alternatives were already tried and unsuccessful:
+{failed}
+"""
+
+        prompt += """
 Selection:
 """
+
         return prompt, alt_regex
 
     def parse_selection(
@@ -1404,6 +1432,7 @@ Selection:
         self,
         question: str,
         prefix: str,
+        selections: list[tuple[str, str, str | None]] | None = None,
         failures: set[str] | None = None
     ) -> tuple[str, str]:
         prefix = prefix + "..."
@@ -1420,21 +1449,12 @@ Selection:
             index_info = "character-level n-gram"
             dist_info = f"{dist} distance"
 
-        # only lowercase ascii + space, non-empty, up to 128 characters
-        failure = ""
-        if failures:
-            failed = "\n".join(failures)
-            failure = f"""
-The following search queries were already tried but unsuccessful. If there \
-is no other sensible search query to try, output one of these again:
-{failed}
-"""
-
         prompt = f"""\
 Generate a search query for the next IRI or literal to continue the SPARQL \
 query with. The search query will be executed over {index_info} indices \
 containing candidate IRIs and literals. It should be short and \
-concise, retrieving candidates by {dist_info}. The question to be answered \
+concise, retrieving candidates by {dist_info}. Avoid search queries that \
+were already tried and unsuccesful. The question to be answered \
 and the current SPARQL prefix are given below.
 
 Question:
@@ -1442,9 +1462,24 @@ Question:
 
 SPARQL prefix over {self.kg}:
 {prefix}
-{failure}
+"""
+        if selections:
+            prompt += f"""
+{self.format_selections(selections)}
+"""
+
+        # only lowercase ascii + space, non-empty, up to 128 characters
+        if failures:
+            failed = "\n".join(failures)
+            prompt += f"""
+The following search queries were already tried and unsuccessful:
+{failed}
+"""
+
+        prompt += """
 Search query:
 """
+
         return prompt, r"[\S ]{1,128}"
 
     def get_sparql_prompt(self, question: str) -> str:
@@ -1457,27 +1492,31 @@ Question:
 
 SPARQL query:
 """
+
     def format_selections(
         self,
         selections: list[tuple[str, str, str | None]],
     ) -> str:
+        print(selections)
         entities = {}
         properties = {}
 
-        for obj_type, identifier, variant in selections:
-            if obj_type == "entity" and identifier in self.entity_mapping:
-                id = self.entity_mapping[identifier]
+        for obj_type, ident, variant in selections:
+            if obj_type == "entity" and ident in self.entity_mapping:
+                id = self.entity_mapping[ident]
                 if id not in entities:
-                    entities[id] = {}
-                entities[id].add(variant)
+                    entities[id] = set()
+                if variant is not None:
+                    entities[id].add(variant)
 
-            elif obj_type == "property" and identifier in self.property_mapping:
-                id = self.property_mapping[identifier]
+            elif obj_type == "property" and ident in self.property_mapping:
+                id = self.property_mapping[ident]
                 if id not in properties:
-                    properties[id] = {}
-                properties[id].add(variant)
+                    properties[id] = set()
+                if variant is not None:
+                    properties[id].add(variant)
 
-        s = ""
+        formatted = []
         for obj_type, id_map, index in [
             ("entities", entities, self.entity_index),
             ("properties", properties, self.property_index)
@@ -1485,45 +1524,55 @@ SPARQL query:
             if not id_map:
                 continue
 
-            s += f"Using {obj_type}:\n"
-            s += "\n".join(
-                self.build_alternative(
-                    index.get_row(id),
-                    variants
-                ).get_string(add_infos=True)
-                for id, variants in id_map.items()
-            )
+            formatted.append((
+                obj_type,
+                "\n".join(
+                    self.build_alternative(
+                        index.get_row(id),
+                        variants
+                    ).get_string(add_infos=True)
+                    for id, variants in id_map.items()
+                )
+            ))
 
-        return s.strip()
+        return "\n\n".join(
+            f"Using {obj_type}:\n{selection}"
+            for obj_type, selection in formatted
+        )
 
     def get_sparql_continuation_prompt(
         self,
         question: str,
         prefix: str,
         selections: list[tuple[str, str, str | None]] | None = None,
-        examples: list[tuple[str, str]] | None = None,
-        failures: set[str] | None = None
+        failures: set[str] | None = None,
+        examples: list[tuple[str, str]] | None = None
     ) -> Chat:
-        failure = ""
-        if failures:
-            failed = "\n".join(failures)
-            failure = f"""
-The following continuations were already tried but unsuccessful. If there \
-is no other sensible continuation to try, output one of these again:
-{failed}
-"""
-
         prompt = f"""\
 Continue the SPARQL prefix to answer the question either \
 until the end of the SPARQL query or the next {self.kg} \
-knowledge graph search via {SEARCH_TOKEN}.
+knowledge graph search via {SEARCH_TOKEN}. Avoid continuations \
+that were already tried and unsuccesful.
 
 Question:
 {question.strip()}
 
 SPARQL prefix over {self.kg}:
 {prefix}
-{failure}
+"""
+
+        if selections:
+            prompt += f"""
+{self.format_selections(selections)}
+"""
+
+        if failures:
+            failed = "\n".join(failures)
+            prompt += f"""
+The following continuations were already tried and unsuccessful:
+{failed}
+"""
+        prompt += """
 Continuation:
 """
 

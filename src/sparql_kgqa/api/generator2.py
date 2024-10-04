@@ -18,7 +18,6 @@ from text_utils.inference import (
     beam_search
 )
 from text_utils.inference.utils import Beam
-from text_utils.constraints import AndConstraint, AvoidConstraint
 
 from sparql_kgqa.model import (
     Model,
@@ -131,9 +130,6 @@ class SPARQLGenerator(TextProcessor):
         self._disable_sparql_constraint = False
         self._disable_sparql_judgement = False
         self._manager: None | KgManager = None
-        self._is_chat = self.cfg["inference"].get(
-            "chat_template", None
-        ) is not None
 
         self.model = self.model.compile(
             **self.cfg["inference"].get("compile", {})
@@ -182,7 +178,7 @@ class SPARQLGenerator(TextProcessor):
         messages = self._manager.get_sparql_continuation_prompt(
             question,
             "",
-            examples
+            examples=examples
         )
         prompt = self._chat_format(messages)
         return data.InferenceData(
@@ -361,6 +357,17 @@ class SPARQLGenerator(TextProcessor):
         def failures() -> list:
             return memo.get(tuple(current), [])
 
+        def selections() -> list[tuple[str, str, str | None]]:
+            sel = []
+            for i, val in enumerate(current):
+                s = state(i)
+                if s != "select":
+                    continue
+
+                sel.append(val[1])
+
+            return sel
+
         def num_failures() -> int:
             return len(failures())
 
@@ -440,7 +447,7 @@ class SPARQLGenerator(TextProcessor):
 
             # force different path if not
             # enough were already tried
-            exclude_failures = num < (self._min_tries or num)
+            min_tries_reached = num >= (self._min_tries or num)
 
             if s == "done":
                 accept = self._judge_sparql(
@@ -465,10 +472,10 @@ class SPARQLGenerator(TextProcessor):
                     question,
                     prefix("sparql"),
                     prefix("natural"),
+                    selections(),
                     failed,
-                    exclude_failures
                 )
-                if continuation + search_token in failed:
+                if continuation + search_token in failed and min_tries_reached:
                     if current:
                         backtrack()
                     else:
@@ -482,26 +489,27 @@ class SPARQLGenerator(TextProcessor):
                 search_query = self._generate_search_query(
                     question,
                     prefix("natural"),
+                    selections(),
                     failed,
-                    exclude_failures
                 )
-                if search_query in failed:
+                if search_query in failed and min_tries_reached:
                     backtrack()
                 else:
                     advance(search_query)
 
             else:
-                search_query = previous()
                 failed = set(selection for _, selection in failures())
                 selection = self._select_alternative(
                     question,
                     prefix("sparql"),
                     prefix("natural"),
-                    search_query,
+                    previous(),
+                    selections(),
                     failed,
-                    exclude_failures
+                    min_tries_reached
                 )
-                if selection is None or selection[1] in failed:
+                invalid_selection = selection is None or selection in failed
+                if invalid_selection and min_tries_reached:
                     backtrack()
                 else:
                     advance(selection)
@@ -527,7 +535,7 @@ class SPARQLGenerator(TextProcessor):
         )
         token_ids = self.tokenizer.tokenize(
             self._chat_format(prompt),
-            self._is_chat
+            True
         ).token_ids
         beam = Beam(
             token_ids,
@@ -555,21 +563,17 @@ class SPARQLGenerator(TextProcessor):
         question: str,
         sparql_prefix: str,
         natural_prefix: str,
+        selections: list[tuple[str, str, str | None]] | None = None,
         failures: set[str] | None = None,
-        exclude_failures: bool = False
     ) -> Generator[str, None, tuple[str, str]]:
         assert self._manager is not None, "kg indices not set"
         assert self._sparql_constraint is not None, "sparql constraint not set"
         prompt = self._manager.get_sparql_continuation_prompt(
             question,
             natural_prefix,
+            selections=selections,
             failures=failures
         )
-        token_ids = self.tokenizer.tokenize(
-            self._chat_format(prompt),
-            self._is_chat
-        ).token_ids
-
         info: dict = {"continuation": "", "search_token": ""}
         # add sparql constraint if not disabled
         if not self._disable_sparql_constraint:
@@ -577,22 +581,11 @@ class SPARQLGenerator(TextProcessor):
             const.reset(sparql_prefix.encode())
             info["const"] = const
 
-        if exclude_failures and failures:
-            const = AvoidConstraint(
-                [f.encode() for f in failures],
-                self._continuations,
-                self._eos_token_id
-            )
-            if "const" in info:
-                info["const"] = AndConstraint([
-                    info["const"],
-                    const
-                ])
-            else:
-                info["const"] = const
-
         beam = Beam(
-            token_ids,
+            self.tokenizer.tokenize(
+                self._chat_format(prompt),
+                True
+            ).token_ids,
             info=info
         )
 
@@ -641,35 +634,26 @@ class SPARQLGenerator(TextProcessor):
         self,
         question: str,
         prefix: str,
+        selections: list[tuple[str, str, str | None]] | None = None,
         failures: set[str] | None = None,
-        exclude_failures: bool = False
     ) -> str:
         assert self._manager is not None, "kg indices not set"
         prompt, regex = self._manager.get_search_prompt_and_regex(
             question,
             prefix,
+            selections,
             failures
         )
-        token_ids = self.tokenizer.tokenize(
-            self._chat_format(prompt),
-            self._is_chat
-        ).token_ids
         beam = Beam(
-            token_ids,
+            self.tokenizer.tokenize(
+                self._chat_format(prompt),
+                True
+            ).token_ids,
             info={
-                "const": AndConstraint([
-                    grammar.RegexConstraint(
+                "const": grammar.RegexConstraint(
                         regex,
                         self._continuations
                     ),
-                    AvoidConstraint(
-                        [f.encode() for f in failures]
-                        if exclude_failures and failures is not None
-                        else [],
-                        self._continuations,
-                        self._eos_token_id
-                    )
-                ])
             }
         )
 
@@ -688,8 +672,9 @@ class SPARQLGenerator(TextProcessor):
         sparql_prefix: str,
         natural_prefix: str,
         search_query: str,
+        selections: list[tuple[str, str, str | None]] | None = None,
         failures: set[tuple[str, str, str | None]] | None = None,
-        exclude_failures: bool = False
+        allow_none: bool = True
     ) -> tuple[str, tuple[str, str, str | None]] | None:
         assert self._manager is not None, "kg indices not set"
 
@@ -709,15 +694,16 @@ class SPARQLGenerator(TextProcessor):
             alternatives,
             max_aliases=self._max_aliases,
             add_infos=self._add_infos,
+            selections=selections,
             failures=failures,
-            exclude_failures=exclude_failures
+            add_none_alternative=allow_none
         )
-        token_ids = self.tokenizer.tokenize(
-            self._chat_format(prompt),
-            self._is_chat
-        ).token_ids
+
         beam = Beam(
-            token_ids,
+            self.tokenizer.tokenize(
+                self._chat_format(prompt),
+                True,
+            ).token_ids,
             info={
                 "const": grammar.RegexConstraint(
                     regex,
@@ -867,7 +853,7 @@ class SPARQLGenerator(TextProcessor):
             sort=sort,
             num_threads=num_threads,
             show_progress=show_progress,
-            ignore_special_tokens=self._is_chat
+            ignore_special_tokens=True
         )
 
     def generate_live(
@@ -883,7 +869,7 @@ class SPARQLGenerator(TextProcessor):
             iter([input]),
             self.cfg["inference"]["tokenizer"],
             self.cfg["inference"].get("window", {"type": "full"}),
-            ignore_special_tokens=self._is_chat
+            ignore_special_tokens=True
         ))
 
         # yield the prompt
