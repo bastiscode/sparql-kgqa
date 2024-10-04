@@ -1,3 +1,3 @@
 type: file_pair
-input_path: data/wikidata-wwq/val_input.jsonl
-target_path: data/wikidata-wwq/val_target.jsonl
+input_path: data/wikidata-wwqenv(VARIANT:"")/val_input.jsonl
+target_path: data/wikidata-wwqenv(VARIANT:"")/val_target.jsonl
