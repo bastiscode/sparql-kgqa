@@ -299,10 +299,10 @@ dbpedia-search-indices:
 
 dblp-search-data:
 	# dblp entities
-	# https://qlever.cs.uni-freiburg.de/dblp/tb1FJ8
+	# https://qlever.cs.uni-freiburg.de/dblp/Mepe2l
 	@mkdir -p data/search-index/dblp-entities
 	@curl -s $(DBLP_URL) -H "Accept: text/tab-separated-values" \
-	--data-urlencode query="PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> SELECT DISTINCT ?label ?score (GROUP_CONCAT(DISTINCT ?alias; SEPARATOR=\";;;\") AS ?synonyms) ?id (GROUP_CONCAT(DISTINCT ?info; SEPARATOR=\";;;\") AS ?infos) WHERE { { SELECT ?id (COUNT(?id) AS ?score) WHERE { ?id ?p ?o } GROUP BY ?id } ?id rdfs:label ?label . BIND(\"\" AS ?alias) OPTIONAL { { ?id rdfs:comment ?info } UNION { ?id rdfs:subClassOf|rdf:type ?type_ . FILTER(STRSTARTS(STR(?type_), \"https://dblp.org/\")) . ?type_ rdfs:label ?type } } } GROUP BY ?label ?score ?id ORDER BY DESC(?score)" \
+	--data-urlencode query="PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX dbo: <http://dbpedia.org/ontology/> PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> PREFIX dbp: <http://dbpedia.org/property/> PREFIX foaf: <http://xmlns.com/foaf/0.1/> SELECT DISTINCT (SAMPLE(COALESCE(?pname, ?lab)) AS ?label) ?score (GROUP_CONCAT(DISTINCT ?alias; SEPARATOR=\";;;\") AS ?synonyms) ?id (GROUP_CONCAT(DISTINCT ?info; SEPARATOR=\";;;\") AS ?infos) WHERE { { SELECT ?id (COUNT(?id) AS ?score) WHERE { ?id ?p ?o } GROUP BY ?id } OPTIONAL { ?id <https://dblp.org/rdf/schema#primaryCreatorName> ?pname } ?id rdfs:label ?lab . BIND(\"\" AS ?alias) OPTIONAL { { ?id rdfs:comment ?info } UNION { ?id rdfs:subClassOf|rdf:type ?type_ . FILTER(STRSTARTS(STR(?type_), \"https://dblp.org/\")) . ?type_ rdfs:label ?type } } } GROUP BY ?score ?id ORDER BY DESC(?score)" \
 	--data-urlencode timeout=$(QLEVER_TIMEOUT) \
 	--data-urlencode access-token=$(DBLP_ACCESS_TOKEN) \
 	| python scripts/prepare_search_index.py \
