@@ -19,6 +19,7 @@ from text_utils.inference import (
 )
 from text_utils.inference.utils import Beam
 
+from sparql_kgqa.api.utils import Chat, format_chat
 from sparql_kgqa.model import (
     Model,
     PretrainedDecoder,
@@ -30,7 +31,6 @@ from sparql_kgqa.sim_index import SimilarityIndex
 from sparql_kgqa.sparql.utils2 import (
     KgManager,
     Mapping,
-    Chat,
     get_kg_manager,
 )
 
@@ -180,7 +180,7 @@ class SPARQLGenerator(TextProcessor):
             "",
             examples=examples
         )
-        prompt = self._chat_format(messages)
+        prompt = self._format_chat(messages)
         return data.InferenceData(
             prompt,
             {
@@ -189,55 +189,27 @@ class SPARQLGenerator(TextProcessor):
             }
         )
 
-    def _chat_format(
-        self,
-        input: str | Chat,
-    ) -> str:
-        if isinstance(input, str):
-            input = [{"role": "user", "text": input}]
-
+    def _format_chat(self, input: str | Chat) -> str:
         assert "chat_template" in self.cfg["inference"], \
             "chat template not set in config, expect one even for " \
             "non-chat models (use default)"
         chat_template = self.cfg["inference"]["chat_template"]
 
-        assert "user" in chat_template["roles"], \
-            "chat template must have a user role"
-        assert "assistant" in chat_template["roles"], \
-            "chat template must have an assistant role"
-
-        s: str = chat_template.get("start", "")
-
         system_message = self._system_message or self._default_system_message
-        if system_message is not None:
+        if system_message is not None and not isinstance(input, str):
             assert all(m["role"] != "system" for m in input), \
                 "system message already in input"
             assert "system" in chat_template["roles"], \
                 "chat template must have a system role"
-            s += chat_template["roles"]["system"].replace(
-                "{text}",
-                system_message
-            )
+            input.insert(0, {
+                "role": "system",
+                "text": system_message
+            })
 
-        last_partial = False
-        for i, message in enumerate(input):
-            role = message["role"]
-            text = message["text"]
-            assert role in chat_template["roles"], \
-                f"role {role} not in chat template"
-            template = chat_template["roles"][role]
-            if message.get("partial", False):
-                assert i == len(input) - 1, "partial message not last"
-                pos = template.find("{text}")
-                s += template[:pos] + text
-                last_partial = True
-            else:
-                s += template.replace("{text}", text)
-
-        if not last_partial:
-            s += chat_template.get("end", "")
-
-        return s
+        return format_chat(
+            input,
+            chat_template
+        )
 
     @torch.inference_mode()
     def _decode_fn(
@@ -508,8 +480,9 @@ class SPARQLGenerator(TextProcessor):
                     failed,
                     min_tries_reached
                 )
-                invalid_selection = selection is None or selection in failed
-                if invalid_selection and min_tries_reached:
+                if selection is None or (
+                    selection in failed and min_tries_reached
+                ):
                     backtrack()
                 else:
                     advance(selection)
@@ -534,7 +507,7 @@ class SPARQLGenerator(TextProcessor):
             natural_sparql,
         )
         token_ids = self.tokenizer.tokenize(
-            self._chat_format(prompt),
+            self._format_chat(prompt),
             True
         ).token_ids
         beam = Beam(
@@ -583,7 +556,7 @@ class SPARQLGenerator(TextProcessor):
 
         beam = Beam(
             self.tokenizer.tokenize(
-                self._chat_format(prompt),
+                self._format_chat(prompt),
                 True
             ).token_ids,
             info=info
@@ -646,7 +619,7 @@ class SPARQLGenerator(TextProcessor):
         )
         beam = Beam(
             self.tokenizer.tokenize(
-                self._chat_format(prompt),
+                self._format_chat(prompt),
                 True
             ).token_ids,
             info={
@@ -701,7 +674,7 @@ class SPARQLGenerator(TextProcessor):
 
         beam = Beam(
             self.tokenizer.tokenize(
-                self._chat_format(prompt),
+                self._format_chat(prompt),
                 True,
             ).token_ids,
             info={

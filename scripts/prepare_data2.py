@@ -64,6 +64,9 @@ def parse_args() -> argparse.Namespace:
     # dblp
     data.add_argument("--dblp-quad", action="store_true")
 
+    # orkg
+    data.add_argument("--sci-qa", action="store_true")
+
     parser.add_argument("--output", type=str, required=True)
     parser.add_argument("--entities", type=str, required=True)
     parser.add_argument("--properties", type=str, required=True)
@@ -85,20 +88,10 @@ def parse_args() -> argparse.Namespace:
     sample_group.add_argument(
         "--selections-min-k",
         type=int,
-        default=4
+        default=5
     )
     sample_group.add_argument(
         "--selections-max-k",
-        type=int,
-        default=8
-    )
-    sample_group.add_argument(
-        "--selections-min-aliases",
-        type=int,
-        default=1
-    )
-    sample_group.add_argument(
-        "--selections-max-aliases",
         type=int,
         default=5
     )
@@ -476,6 +469,29 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
                 ))
             output[split] = samples
 
+    elif args.dblp_quad:
+        kg = "orkg"
+        data = load_dataset("orkg/SciQA")
+        for split, items in data.items():
+            split = SPLIT_RENAME.get(split, split)
+            assert split in {"train", "val", "test"}
+            samples = []
+            for item in items:
+                samples.append(Sample(
+                    item["question"]["string"],
+                    item["query"]["sparql"]
+                ))
+                if split == "test":
+                    continue
+
+                for q in item["paraphrased_question"]:
+                    samples.append(Sample(
+                        q,
+                        item["query"]["sparql"]
+                    ))
+
+            output[split] = samples
+
     else:
         raise RuntimeError("unknown dataset")
 
@@ -655,12 +671,51 @@ def prepare_stages(
 
     samples = []
     for item_idx in random.sample(
-        list(range(len(items))),
-        min(len(items), args.stages_per_sample or len(items))
+        list(range(len(items) + 1)),
+        min(len(items) + 1, args.stages_per_sample or (len(items) + 1))
     ):
         manager = random.choice(managers)
-        item, processed = items[item_idx]
 
+        selections = [
+            (obj_type, identifier, variant)
+            for _, (obj_type, identifier, variant, *_) in items[:item_idx]
+        ]
+
+        if item_idx >= len(items) and item_idx > 0:
+            end = span(items[item_idx - 1][0])[1]
+
+            try:
+                final_prefix_raw = manager.fix_prefixes(
+                    sparql_encoded[:end].decode(),
+                    is_prefix=True,
+                    remove_known=True
+                )
+                final_prefix, _ = manager.replace_iris(
+                    final_prefix_raw,
+                    is_prefix=True
+                )
+            except Exception:
+                continue
+
+            final_cont = sparql_encoded[end:].decode()
+            final_cont_prompt = manager.get_sparql_continuation_prompt(
+                question,
+                final_prefix,
+                selections
+            )
+            samples.append((final_cont_prompt, final_cont))
+            continue
+
+        elif item_idx >= len(items) and item_idx == 0:
+            final_cont_prompt = manager.get_sparql_continuation_prompt(
+                question,
+                "",
+                selections
+            )
+            samples.append((final_cont_prompt, sparql))
+            continue
+
+        item, processed = items[item_idx]
         start, end = span(item)
         assert end >= start, "invalid span"
         obj_type, identifier, variant, label, syns = processed
@@ -685,8 +740,7 @@ def prepare_stages(
             # occured in the previous triples
 
             if item_idx > 0:
-                last, _ = items[item_idx - 1]
-                (_, last_end) = span(last)
+                last_end = span(items[item_idx - 1][0])[1]
                 assert last_end < start, "invalid item order"
                 last_prefix_raw = manager.fix_prefixes(
                     sparql_encoded[:last_end].decode(),
@@ -722,28 +776,11 @@ def prepare_stages(
 
             cont_prompt = manager.get_sparql_continuation_prompt(
                 question,
-                last_prefix
+                last_prefix,
+                selections
             )
 
             samples.append((cont_prompt, cont))
-
-            if item_idx == len(items) - 1:
-                # add additional continuation sample for the end of the query
-                final_prefix_raw = manager.fix_prefixes(
-                    sparql_encoded[:end].decode(),
-                    is_prefix=True,
-                    remove_known=True
-                )
-                final_prefix, _ = manager.replace_iris(
-                    final_prefix_raw,
-                    is_prefix=True
-                )
-                final_cont = sparql_encoded[end:].decode()
-                final_cont_prompt = manager.get_sparql_continuation_prompt(
-                    question,
-                    final_prefix
-                )
-                samples.append((final_cont_prompt, final_cont))
 
         except Exception:
             continue
@@ -777,7 +814,8 @@ def prepare_stages(
         search_prompt, _ = manager.get_search_prompt_and_regex(
             question,
             prefix,
-            failures=search_failures
+            selections,
+            search_failures
         )
         samples.append((search_prompt, search))
 
@@ -858,14 +896,9 @@ def prepare_stages(
             prefix,
             search,
             alts,
-            max_aliases=random.randint(
-                args.selections_min_aliases,
-                args.selections_max_aliases
-            ),
-            add_infos=True,
+            selections=selections,
             failures=select_failures
         )
-
         if target_alt is None:
             selection = "0. none"
         else:
@@ -1025,6 +1058,7 @@ def prepare(args: argparse.Namespace):
         if os.path.exists(input) and not args.overwrite:
             print(f"skipping {split} split because it already exists")
             continue
+
         target = os.path.join(
             args.output,
             f"{split}_target.jsonl"

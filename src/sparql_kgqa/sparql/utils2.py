@@ -17,6 +17,7 @@ from search_index.index import SearchIndex
 from search_index.mapping import Mapping as SearchIndexMapping
 from text_utils.api.table import generate_table
 
+from sparql_kgqa.api.utils import Chat
 from sparql_kgqa.sparql.utils import (
     AskResult,
     find_all,
@@ -29,7 +30,6 @@ from sparql_kgqa.sparql.utils import (
 
 LOGGER = logging.getLogger(__name__)
 CLEAN_PATTERN = re.compile(r"\s+", flags=re.MULTILINE)
-Chat = list[dict[str, str]]
 
 OBJ_TYPES = ["entity", "property", "other", "literal"]
 SEARCH_TOKEN = "<|search|>"
@@ -110,7 +110,11 @@ class Alternative:
 
         return label
 
-    def get_string(self, max_aliases: int = 5, add_infos: bool = False) -> str:
+    def get_string(
+        self,
+        max_aliases: int | None = 5,
+        add_infos: bool = True
+    ) -> str:
         s = self.get_label()
 
         if add_infos and (self.label or self.infos):
@@ -123,10 +127,10 @@ class Alternative:
                 info_str = ", ".join(self._clip(info) for info in infos)
                 s += f" ({info_str})"
 
-        if max_aliases and self.aliases:
+        if self.aliases and (max_aliases or True):
             aliases = random.sample(
                 self.aliases,
-                min(len(self.aliases), max_aliases)
+                min(len(self.aliases), max_aliases or len(self.aliases))
             )
             alias_str = ", ".join(self._clip(a) for a in aliases)
             s += f", also known as {alias_str}"
@@ -151,7 +155,11 @@ class NoneAlternative(Alternative):
         super().__init__("none", "none")
         self.obj_type = obj_type
 
-    def get_string(self, max_aliases: int = 5, add_infos: bool = True) -> str:
+    def get_string(
+        self,
+        max_aliases: int | None = 5,
+        add_infos: bool = True
+    ) -> str:
         return f"{self.label} (if no other {self.obj_type} fits well enough)"
 
     def get_regex(self, variants: list[str] | None = None) -> str:
@@ -1084,10 +1092,11 @@ Answer: (?:yes|no)"""
                 matching = set()
                 for id, _ in index.find_matches(search, **kwargs)[:k]:
                     matching.add(id)
+                    default = map.default_variants()
                     alternatives.append(self.build_alternative(
                         index.get_row(id),
                         variants=map.default_variants(),
-                        display_variants={"all"}
+                        display_variants={"all"} if default else None
                     ))
 
                 all_alternatives[index_type] = alternatives
@@ -1254,8 +1263,8 @@ Answer: (?:yes|no)"""
         prefix: str,
         search_query: str,
         alternatives: dict[str, list[Alternative]],
-        max_aliases: int = 5,
-        add_infos: bool = False,
+        max_aliases: int | None = 5,
+        add_infos: bool = True,
         selections: list[tuple[str, str, str | None]] | None = None,
         failures: set[tuple[str, str, str | None]] | None = None,
         add_none_alternative: bool = True
@@ -1354,16 +1363,18 @@ Question:
 
 SPARQL prefix over {self.kg}:
 {prefix}
-
-Search query:
-{search_query}
-
-{alt_string}
 """
 
         if selections:
             prompt += f"""
 {self.format_selections(selections)}
+"""
+
+        prompt += f"""
+Search query:
+{search_query}
+
+{alt_string}
 """
 
         if failed:
@@ -1422,7 +1433,8 @@ Selection:
                 identifier,
                 variant
             )
-            assert denorm is not None
+            assert denorm is not None, \
+                f"denormalizing selection '{result}' failed unexpectedly"
             formatted = self.format_iri(denorm, self.custom_prefixes)
             name = f"<{name} ({formatted})>"
 
@@ -1497,7 +1509,6 @@ SPARQL query:
         self,
         selections: list[tuple[str, str, str | None]],
     ) -> str:
-        print(selections)
         entities = {}
         properties = {}
 
@@ -1530,7 +1541,7 @@ SPARQL query:
                     self.build_alternative(
                         index.get_row(id),
                         variants
-                    ).get_string(add_infos=True)
+                    ).get_string()
                     for id, variants in id_map.items()
                 )
             ))
@@ -1648,6 +1659,13 @@ def get_kg_manager(
             entity_mapping,
             property_mapping
         )
+    elif kg == "orkg":
+        return ORKGManager(
+            entity_index,
+            property_index,
+            entity_mapping,
+            property_mapping
+        )
     else:
         raise ValueError(f"unknown kg {kg}")
 
@@ -1670,7 +1688,6 @@ class DBLPManager(KgManager):
         # add dblp specific prefixes
         self.custom_prefixes.update({
             "dblp": "<https://dblp.org/rdf/schema#",
-            "dblpr": "<https://dblp.org/rec/",
         })
 
 
@@ -1715,6 +1732,29 @@ class DBPediaManager(KgManager):
             "dbp": "<http://dbpedia.org/property/",
             "dbo": "<http://dbpedia.org/ontology/",
             "dbr": "<http://dbpedia.org/resource/",
+        })
+
+
+class ORKGManager(KgManager):
+    def __init__(
+        self,
+        entity_index: SearchIndex,
+        property_index: SearchIndex,
+        entity_mapping: Mapping,
+        property_mapping: Mapping,
+    ):
+        super().__init__(
+            "orkg",
+            entity_index,
+            property_index,
+            entity_mapping,
+            property_mapping,
+        )
+        # add dbpedia specific prefixes
+        self.custom_prefixes.update({
+            "orkgc": "<http://orkg.org/orkg/class/",
+            "orkgp": "<http://orkg.org/orkg/predicate/",
+            "orkgsh": "<http://orkg.org/orkg/shapes/"
         })
 
 

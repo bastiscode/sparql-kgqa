@@ -20,6 +20,7 @@ QLEVER_URLS = {
     "dbpedia": f"{QLEVER_API}/dbpedia",
     "freebase": f"{QLEVER_API}/freebase",
     "dblp": f"{QLEVER_API}/dblp",
+    "orkg": f"{QLEVER_API}/orkg",
 }
 
 
