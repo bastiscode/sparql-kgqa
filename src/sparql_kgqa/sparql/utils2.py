@@ -526,8 +526,8 @@ class KgManager:
         sparql: str,
         qlever_endpoint: str | None = None,
         max_retries: int = 1,
-        max_rows: int = 10,
-        max_columns: int = 5,
+        show_top_bottom_rows: int = 10,
+        show_columns: int = 5,
     ) -> str:
         # run sparql against endpoint, format result as string
         try:
@@ -544,30 +544,28 @@ class KgManager:
                 f"querying qlever within get_formatted_result "
                 f"failed for sparql '{sparql}': {e}"
             )
-            return f"Query failed with exception: {e}"
+            return f"Query failed with error:\n{e}"
 
         if isinstance(result, AskResult):
-            return str(result)
+            return f"Ask query returned {result}"
 
         num_rows = len(result) - 1
         num_columns = len(result[0])
         if num_rows == 0:
-            return "Empty"
+            return "Select query returned an empty result"
 
-        # generate a nicely formatted table
-        data = []
-        for r in range(1, min(len(result), max_rows + 1)):
-            row = []
-            for c in range(min(len(result[r]), max_columns)):
-                val = result[r][c]
+        def format_row(row: list[str]) -> list[str]:
+            new_row = []
+            for c in range(min(len(row), show_columns)):
+                val = row[c]
                 processed = self.process_iri_or_literal(val)
                 if processed is None:
-                    row.append(val)
+                    new_row.append(val)
                     continue
 
                 typ, formatted, _ = processed
                 if typ == "literal":
-                    row.append(formatted)
+                    new_row.append(formatted)
                     continue
 
                 # for iri check whether it is in one of the mappings
@@ -583,20 +581,36 @@ class KgManager:
                     name = index.get_name(map[norm[0]])
                     formatted = f"{name} ({formatted})"
 
-                row.append(formatted)
+                new_row.append(formatted)
 
-            data.append(row)
+            return new_row
 
-        table = generate_table(
-            [result[0][:max_columns]],
-            data,
+        # generate a nicely formatted table
+        header = [format_row(result[0])]
+        top_start = 1
+        top_end = min(show_top_bottom_rows + 1, num_rows + 1)
+        data = [
+            format_row(result[r])
+            for r in range(top_start, top_end)
+        ]
+
+        bottom_start = num_rows + 1 - show_top_bottom_rows
+        if bottom_start > top_end:
+            data.append(format_row(["..."] * num_columns))
+
+        bottom_start = max(bottom_start, top_end)
+        data.extend(
+            format_row(result[r])
+            for r in range(bottom_start, num_rows + 1)
         )
+
+        table = generate_table(data, header)
 
         return f"""\
 Got {num_rows:,} row{'s' * (num_rows != 1)} for \
 {num_columns:,} variable{'s' * (num_columns != 1)}, \
-showing the first {max_rows} rows for the first {max_columns} variables \
-at maximum below:
+showing the first {show_top_bottom_rows} and last {show_top_bottom_rows} rows \
+for the first {show_columns} variables at maximum below:
 {table}
 """
 

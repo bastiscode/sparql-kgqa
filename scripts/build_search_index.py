@@ -31,13 +31,13 @@ def build(args: argparse.Namespace):
             args.output,
             args.qgram,
             args.distance,
-            not args.no_syns
+            use_synonyms=not args.no_syns
         )
     else:
         PrefixIndex.build(
             args.input,
             args.output,
-            not args.no_syns
+            use_synonyms=not args.no_syns
         )
 
     if not args.with_mapping:

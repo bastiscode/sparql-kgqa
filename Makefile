@@ -23,12 +23,6 @@ DBLP_PROP=data/search-index/dblp-properties
 DBLP_URL=https://qlever.cs.uni-freiburg.de/api/dblp
 DBLP_ACCESS_TOKEN=null
 
-ORKG_ENT=data/search-index/orkg-entities
-ORKG_PROP=data/search-index/orkg-properties
-
-ORKG_URL=https://qlever.cs.uni-freiburg.de/api/orkg
-ORKG_ACCESS_TOKEN=null
-
 NUM_PROCESSES=4
 
 QLEVER_TIMEOUT=1h
@@ -162,15 +156,6 @@ dblp-data:
 	--output data/dblp-quad \
 	--entities $(DBLP_ENT) \
 	--properties $(DBLP_PROP) \
-	--progress \
-	-n $(NUM_PROCESSES) $(OVERWRITE)
-
-orkg-data:
-	@python scripts/prepare_data2.py \
-	--sci-qa \
-	--output data/orkg-sci-qa \
-	--entities $(ORKG_ENT) \
-	--properties $(ORKG_PROP) \
 	--progress \
 	-n $(NUM_PROCESSES) $(OVERWRITE)
 
