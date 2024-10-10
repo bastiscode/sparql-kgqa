@@ -358,149 +358,97 @@ class KgManager:
         Autocomplete the SPARQL prefix,
         run it against Qlever and return the IRIs
         and literals that can come next.
-        Assumes that the prefix is a valid SPARQL prefix
-        ending with <|search|>
+        Assumes that the prefix is a valid SPARQL prefix.
         """
-        parse, _ = self.parser.prefix_parse(
+
+        # autocomplete by adding 1 to 3 variables to the query,
+        # completing and then parsing it to find the current position
+        # in the query triple block
+        parse, rest = self.parser.prefix_parse(
             prefix.encode(),
             skip_empty=False,
             collapse_single=True
         )
+        rest_str = bytes(rest).decode(errors="replace")
 
-        # find one non-empty iri
-        iri = next((
-            p for p in find_all(
-                parse,
-                {"IRIREF", "PNAME_LN", "PNAME_NS"},
-                skip={"Prologue", "SubSelect"}
-            ) if p["value"] != ""),
-            None
-        )
-        if iri is None:
-            # means we have a prefix but with only vars,
-            # which means that there are no constraints
-            return None
-
-        # determine current position in the query:
-        # subject, predicate or object
-
-        # find all triple blocks first
-        triple_blocks = list(find_all(
-            parse,
-            "TriplesSameSubjectPath",
-            skip={"SubSelect"}
-        ))
-        if not triple_blocks:
-            # without triples the knowledge graph can not be
-            # constrained
-            return None
-
-        no_iris = all(
-            all(
-                iri["value"] == ""
-                for iri in find_all(
-                    triple_block,
-                    {"IRIREF", "PNAME_NS", "PNAME_LN"}
-                )
-            )
-            for triple_block in triple_blocks
-        )
-        if no_iris:
-            # without iris the knowledge graph can not be
-            # constrained
-            return None
-
-        last_triple = triple_blocks[-1]
-        # the last triple block
-        assert len(last_triple["children"]) == 2
-        subj, second = last_triple["children"]
-        assert second["name"] == "PropertyListPathNotEmpty"
-
-        var = uuid.uuid4().hex
-        assert len(second["children"]) == 3
-        prop, obj, _ = second["children"]
-        if subj["name"] == "KGS":
-            # subject can be anything
-            return None
-
-        elif prop["name"] == "KGS":
-            # property
-            prop["name"] = "VAR1"
-            prop["value"] = f"?{var}"
-            obj["name"] = "VAR1"
-            obj_var = uuid.uuid4().hex
-            obj["value"] = f"?{obj_var}"
-
-        elif obj["name"] == "KGS":
-            # object
-            obj["name"] = "VAR1"
-            obj["value"] = f"?{var}"
-
-        else:
-            assert "unexpected case"
-
-        # fix all future brackets
+        # build bracket stack to fix brackets later
+        bracket_stack = []
         for item in find_all(
             parse,
-            {"{", "}", "(", ")", "."},
+            {"{", "}", "(", ")"},
         ):
-            item["value"] = item["name"]
+            if item["name"] in ["{", "("]:
+                bracket_stack.append(item["name"])
+                continue
 
-        if limit is not None:
-            # find solution modifier and add limit clause
-            sol_mod = find(parse, "SolutionModifier")
-            assert sol_mod is not None, "could not find solution modifier"
-            children = sol_mod.get("children", [])
-            children.append({
-                "name": "LimitClause",
-                "children": [
-                    {
-                        'name': 'LIMIT',
-                        'value': 'LIMIT'
-                    },
-                    {
-                        'name': 'INTEGER',
-                        'value': str(limit)
-                    }
+            assert bracket_stack and bracket_stack[-1] == item["name"], \
+                "bracket mismatch"
+            bracket_stack.pop()
+
+        if rest_str in ["{", "("]:
+            bracket_stack.append(rest_str)
+
+        def fix_latest_subselect(parse: dict, var: str):
+            subsels = list(find_all(parse, "SubSelect"))
+            if not subsels:
+                return
+
+            subsel = subsels[-1]
+            selclause = find(subsel, "SelectClause")
+            if selclause is None or len(selclause["children"]) != 3:
+                return
+            selclause["children"][-1] = {"name": "Var", "value": f"?{var}"}
+            fix_latest_subselect(subsel, var)
+
+        final_query = None
+        for num_vars in range(3, 0, -1):
+            vars = [uuid.uuid4().hex for _ in range(num_vars)]
+
+            full_query = prefix + " " + " ".join(f"?{v}" for v in vars)
+            for b in reversed(bracket_stack):
+                if b == "{":
+                    full_query += " }"
+                else:
+                    full_query += " )"
+
+            # add limit clause
+            if limit is not None:
+                full_query += f" LIMIT {limit}"
+
+            try:
+                parse = self.parser.parse(full_query)
+            except Exception:
+                continue
+
+            # replace all select vars with the last one
+            select_var = vars[-1]
+
+            # replace first select or ask with select var
+            query = find(parse, "QueryType")
+            assert query is not None
+            query = query["children"][0]
+            if query["name"] == "SelectQuery":
+                query["children"][1:] = [
+                    {"name": "DISTINCT", "value": "DISTINCT"},
+                    {"name": "VAR1", "value": f"?{select_var}"},
                 ]
-            })
-            sol_mod["children"] = children
+            elif query["name"] == "AskQuery":
+                query["children"] = [
+                    {"name": "SELECT", "value": "SELECT"},
+                    {"name": "DISTINCT", "value": "DISTINCT"},
+                    {"name": "VAR1", "value": f"?{select_var}"},
+                ]
+            else:
+                continue
 
-        prefix = parse_to_string(parse)
+            # fix subselects
+            fix_latest_subselect(parse, select_var)
 
-        select = ask_to_select(
-            prefix,
-            self.parser,
-            var=f"?{var}",
-            distinct=True
-        )
-        if select is not None:
-            prefix = select
-        else:
-            # query is not an ask query, replace
-            # the selected vars with our own
-            parse = self.parser.parse(
-                prefix,
-                skip_empty=False,
-                collapse_single=False
-            )
-            sel_clause = find(parse, "SelectClause", skip={"SubSelect"})
-            assert sel_clause is not None, "could not find select clause"
-            sel_clause["children"] = [
-                {
-                    'name': 'SELECT',
-                    'value': 'SELECT',
-                },
-                {
-                    'name': "DISTINCT",
-                    'value': "DISTINCT"
-                },
-                {
-                    'name': 'Var',
-                    'value': f"?{var}"
-                }
-            ]
-            prefix = parse_to_string(parse)
+            final_query = parse_to_string(parse)
+            break
+
+        if final_query is None:
+            return None
 
         uris = None
         try:
@@ -796,11 +744,11 @@ Answer: (?:yes|no)"""
     ) -> str:
         if is_prefix:
             parse, rest = self.parser.prefix_parse(
-                sparql.encode(),
+                (sparql + " ").encode(),
                 skip_empty=False,
                 collapse_single=True
             )
-            rest_str = bytes(rest).decode(errors="replace")
+            rest_str = bytes(rest[:-1]).decode(errors="replace")
         else:
             parse = self.parser.parse(
                 sparql,
@@ -825,8 +773,6 @@ Answer: (?:yes|no)"""
             assert len(prefix_decl["children"]) == 3
             first = prefix_decl["children"][1]["value"]
             second = prefix_decl["children"][2]["value"]
-            if first == "" or second == "":
-                continue
 
             short = first.split(":", 1)[0]
             long = second[:-1]
@@ -834,9 +780,6 @@ Answer: (?:yes|no)"""
 
         seen = set()
         for iri in find_all(parse, "IRIREF", skip={"Prologue"}):
-            if iri["value"] == "":
-                continue
-
             formatted = self.format_iri(iri["value"], safe=True)
             if formatted == iri["value"]:
                 continue
@@ -851,9 +794,6 @@ Answer: (?:yes|no)"""
             {"PNAME_NS", "PNAME_LN"},
             skip={"Prologue"}
         ):
-            if pfx["value"] == "":
-                continue
-
             short, val = pfx["value"].split(":", 1)
             long = exist.get(short, "")
 
@@ -953,11 +893,11 @@ Answer: (?:yes|no)"""
 
         if is_prefix:
             parse, rest = self.parser.prefix_parse(
-                sparql.encode(),
+                (sparql + " ").encode(),
                 skip_empty=True,
                 collapse_single=False
             )
-            rest_str = bytes(rest).decode(errors="replace")
+            rest_str = bytes(rest[:-1]).decode(errors="replace")
         else:
             parse = self.parser.parse(
                 sparql,
@@ -1072,7 +1012,7 @@ Answer: (?:yes|no)"""
         try:
             if not skip_autocomplete:
                 result = self.autocomplete_prefix(
-                    prefix + SEARCH_TOKEN,
+                    prefix,
                     endpoint,
                     max_candidates + 1
                     if max_candidates is not None else None,

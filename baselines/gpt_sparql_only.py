@@ -1,9 +1,9 @@
 import argparse
 import json
+import os
 from pprint import pformat
 
 from openai import OpenAI
-from search_index.index import SearchIndex
 
 
 from sparql_kgqa.sparql.utils import QLEVER_URLS
@@ -26,31 +26,48 @@ def parse_args() -> argparse.Namespace:
         help="Question to translate to SPARQL"
     )
     parser.add_argument(
-        "entities",
-        type=str,
-        help="Path to entity index"
-    )
-    parser.add_argument(
-        "properties",
-        type=str,
-        help="Path to property index"
-    )
-    parser.add_argument(
-        "kg",
+        "-kg",
+        "--knowledge-graph",
         type=str,
         choices=list(QLEVER_URLS),
+        default="wikidata",
         help="Knowledge graph used"
     )
     parser.add_argument(
+        "-i",
+        "--index-type",
+        type=str,
+        choices=["prefix", "qgram"],
+        default="prefix",
+        help="Index type to use"
+    )
+    parser.add_argument(
+        "-e",
+        "--entities",
+        type=str,
+        default=None,
+        help="Path to entity index"
+    )
+    parser.add_argument(
+        "-p",
+        "--properties",
+        type=str,
+        default=None,
+        help="Path to property index"
+    )
+    parser.add_argument(
+        "-a",
         "--api-key",
         type=str,
         default=None,
         help="OpenAI API key",
     )
     parser.add_argument(
+        "-m",
         "--model",
         type=str,
-        default="gpt-3.5-turbo",
+        default="gpt-4o",
+        help="OpenAI model to use"
     )
     return parser.parse_args()
 
@@ -158,6 +175,20 @@ def run(args: argparse.Namespace) -> None:
     args = parse_args()
     client = OpenAI(api_key=args.api_key)
 
+    kg = args.knowledge_graph
+    index_dir = os.getenv("SEARCH_INDEX_DIR", None)
+    if args.entities is None:
+        assert index_dir is not None, \
+            "SEARCH_INDEX_DIR environment variable must be set if " \
+            "--entities is not provided"
+        args.entities = os.path.join(index_dir, f"{kg}-entities")
+
+    if args.properties is None:
+        assert index_dir is not None, \
+            "SEARCH_INDEX_DIR environment variable must be set if " \
+            "--properties is not provided"
+        args.properties = os.path.join(index_dir, f"{kg}-properties")
+
     ent_index, ent_mapping = load_index_and_mapping(
         args.entities,
         "prefix"
@@ -166,11 +197,11 @@ def run(args: argparse.Namespace) -> None:
     prop_index, prop_mapping = load_index_and_mapping(
         args.properties,
         "prefix",
-        WikidataPropertyMapping if args.kg == "wikidata" else None,
+        WikidataPropertyMapping if kg == "wikidata" else None,
     )
 
     manager = get_kg_manager(
-        args.kg,
+        kg,
         ent_index,
         prop_index,
         ent_mapping,

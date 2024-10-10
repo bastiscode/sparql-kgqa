@@ -250,11 +250,11 @@ def prettify(
 ) -> str:
     if is_prefix:
         parse, rest = parser.prefix_parse(
-            sparql.encode(),
+            (sparql + " ").encode(),
             skip_empty=True,
             collapse_single=False
         )
-        rest_str = bytes(rest).decode(errors="replace")
+        rest_str = bytes(rest[:-1]).decode(errors="replace")
     else:
         parse = parser.parse(
             sparql,

@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import random
 from typing import Iterator
@@ -49,6 +50,20 @@ class SPARQLGenerationCli(TextProcessingCli):
             force_exact=self.args.force_exact,
         )
 
+        kg = self.args.knowledge_graph
+        index_dir = os.environ.get("SEARCH_INDEX_DIR", None)
+        if self.args.entities is None:
+            assert index_dir is not None, \
+                "SEARCH_INDEX_DIR environment variable must be set if " \
+                "--entities is not provided"
+            self.args.entities = os.path.join(index_dir, f"{kg}-entities")
+
+        if self.args.properties is None:
+            assert index_dir is not None, \
+                "SEARCH_INDEX_DIR environment variable must be set if " \
+                "--properties is not provided"
+            self.args.properties = os.path.join(index_dir, f"{kg}-properties")
+
         ent_index, ent_mapping = load_index_and_mapping(
             self.args.entities,
             self.args.index_type,
@@ -63,7 +78,7 @@ class SPARQLGenerationCli(TextProcessingCli):
         )
 
         gen.set_kg_indices(
-            self.args.knowledge_graph,
+            kg,
             ent_index,
             prop_index,
             ent_mapping,
@@ -166,25 +181,24 @@ def main():
         choices=["wikidata", "freebase", "dbpedia", "dblp"],
         default="wikidata",
         help="Knowledge graph to use for generation",
-        required=True
     )
     parser.add_argument(
         "--entities",
         type=str,
-        required=True,
+        default=None,
         help="Directory of entity index"
     )
     parser.add_argument(
         "--properties",
         type=str,
-        required=True,
+        default=None,
         help="Directory of property index"
     )
     parser.add_argument(
         "--index-type",
         type=str,
-        required=True,
         choices=["prefix", "qgram"],
+        default="prefix",
         help="Index type to use for entity and property indices"
     )
     parser.add_argument(
