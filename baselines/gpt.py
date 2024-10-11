@@ -13,6 +13,7 @@ from sparql_kgqa.sparql.utils import QLEVER_URLS
 from sparql_kgqa.sparql.utils2 import (
     KgManager,
     WikidataPropertyMapping,
+    get_index_dir,
     get_kg_manager,
     load_index_and_mapping
 )
@@ -82,6 +83,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Save the generation process to the given text file"
     )
+    parser.add_argument(
+        "--no-examples",
+        action="store_true",
+        help="Do not include examples in the generation process"
+    )
     return parser.parse_args()
 
 
@@ -131,11 +137,16 @@ determine how they can be used to help you generate the final SPARQL query
 why and how you are changing it
 - Your SPARQL queries should always include the entities and properties \
 themselves, and not only their labels
-- Do not use the SERVICE keyword in SPARQL queries, as it is not supported \
-by the used SPARQL endpoint
 - Keep refining your SPARQL query if its results are not what you expect, \
 e.g. when obvious entries are missing or too many irrelevant entries are \
-included"""
+included
+- Do not manually build SPARQL queries using VALUES clauses and identifiers \
+from your search results
+- Do not stop early if there are still obvious improvements to be made to \
+your SPARQL query
+
+DO NOT USE THE wikibase:label SERVICE IN YOU SPARQL QUERIES, AS IT IS NOT \
+SPARQL STANDARD AND NOT SUPPORTED BY THE SPARQL ENGINE USED HERE"""
     }
 
 
@@ -144,8 +155,7 @@ def prompt(question: str, manager: KgManager) -> dict:
     return {
         "role": "user",
         "content": f"""\
-Write a SPARQL query over {kg} to answer the given question. \
-Follow a step-by-step process to generate the SPARQL query.
+Write a SPARQL query over {kg} to answer the given question.
 
 Question:
 {question}"""
@@ -248,8 +258,9 @@ def execute_fn(
 def execute_sparql(manager: KgManager, sparql: str) -> str:
     try:
         sparql = manager.fix_prefixes(sparql)
-    except Exception:
-        return "Failed to fix prefixes in SPARQL query"
+    except Exception as e:
+        return "Failed to fix prefixes in SPARQL query, " \
+            f"most likely the query is invalid:\n{e}"
 
     return manager.get_formatted_result(sparql)
 
@@ -296,11 +307,121 @@ def response_format(initial: bool) -> Type[BaseModel]:
         return Continuation
 
 
+def easy_example(manager: KgManager) -> list[dict]:
+    return [
+        prompt("What is the capital of France?", manager),
+        {
+            "role": "assistant",
+            "content": """\
+Plan:
+- find the entity for France
+- find the property for capital
+- combine them in a SPARQL query""",
+            "tool_calls": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search_entities",
+                        "arguments": json.dumps({"query": "France"}),
+                    },
+                    "id": "1"
+                }
+            ]
+        },
+        {
+            "role": "tool",
+            "content": search_index(manager, manager.entity_index, "France"),
+            "tool_call_id": "1"
+        },
+        {
+            "role": "assistant",
+            "content": """\
+I identified the entity for France as wd:Q142. Now I will search for the \
+property for capital""",
+            "tool_calls": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search_properties",
+                        "arguments": json.dumps({"query": "capital"}),
+                    },
+                    "id": "2"
+                }
+            ]
+        },
+        {
+            "role": "tool",
+            "content": search_index(
+                manager,
+                manager.property_index,
+                "capital"
+            ),
+            "tool_call_id": "2"
+        },
+        {
+            "role": "assistant",
+            "content": """\
+I identified the property for capital as wdt:P36. Now I will combine them \
+in a SPARQL query.""",
+            "tool_calls": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "execute_sparql",
+                        "arguments": json.dumps({
+                            "sparql": "SELECT ?capital WHERE { wd:Q142 \
+wdt:P36 ?capital }"
+                        }),
+                    },
+                    "id": "3"
+                }
+            ]
+        },
+        {
+            "role": "tool",
+            "content": execute_sparql(
+                manager,
+                "SELECT ?capital WHERE { wd:Q142 wdt:P36 ?capital }"
+            ),
+            "tool_call_id": "3"
+        },
+        {
+            "role": "assistant",
+            "content": """\
+The capital of France is Paris""",
+            "tool_calls": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "stop",
+                        "arguments": "{}",
+                    },
+                    "id": "4"
+                }
+            ]
+        },
+        {
+            "role": "tool",
+            "content": "Stopping the SPARQL generation process",
+            "tool_call_id": "4"
+        }
+    ]
+
+
+def examples(manager: KgManager, ignore: bool = False) -> list[dict]:
+    if ignore:
+        return []
+    else:
+        return [
+            *easy_example(manager)
+        ]
+
+
 def run(args: argparse.Namespace) -> None:
     args = parse_args()
 
     kg = args.knowledge_graph
-    index_dir = os.getenv("SEARCH_INDEX_DIR", None)
+    index_dir = get_index_dir()
     if args.entities is None:
         assert index_dir is not None, \
             "SEARCH_INDEX_DIR environment variable must be set if " \
@@ -336,119 +457,93 @@ def run(args: argparse.Namespace) -> None:
 
     fns = functions()
 
-    system_msg = system_message(manager)
-    system_fmt = format_message(system_msg)
-    print(system_fmt)
-    prompt_msg = prompt(args.question, manager)
-    prompt_fmt = format_message(prompt_msg)
-    print(prompt_fmt)
-
     api_messages: list = [
-        system_msg,
-        prompt_msg
+        system_message(manager),
+        *examples(manager, args.no_examples),
+        prompt(args.question, manager)
     ]
-
-    content_messages: list[str] = [
-        system_fmt,
-        prompt_fmt,
-    ]
+    content_messages: list[str] = []
+    for msg in api_messages:
+        fmt = format_message(msg)
+        print(fmt)
+        content_messages.append(fmt)
 
     sparqls = []
-    # initial = True
 
     while True:
-        while True:
-            response = client.chat.completions.create(
-                messages=api_messages,  # type: ignore
-                model=args.model,
-                tools=[
-                    {"type": "function", "function": fn, "strict": True}
-                    for fn in fns
-                ],  # type: ignore
-                # response_format=response_format(initial),  # type: ignore
-                parallel_tool_calls=False
-            )  # type: ignore
-            # initial = False
+        response = client.chat.completions.create(
+            messages=api_messages,  # type: ignore
+            model=args.model,
+            tools=[
+                {"type": "function", "function": fn, "strict": True}
+                for fn in fns
+            ],  # type: ignore
+            # response_format=response_format(initial),  # type: ignore
+            parallel_tool_calls=False
+        )  # type: ignore
 
-            choice = response.choices[0]
-            api_messages.append(choice.message)
-
-            if choice.finish_reason == "stop":
-                fmt = format_message({
-                    "role": "assistant",
-                    "content": choice.message.content or ""
-                })
-                print(fmt)
-                content_messages.append(fmt)
-                break
-
-            elif not choice.message.tool_calls:
-                fmt = format_message({
-                    "role": "assistant",
-                    "content": choice.message.content or ""
-                })
-                print(fmt)
-                content_messages.append(fmt)
-                continue
-
-            tool_call = choice.message.tool_calls[0]
-            fn_name = tool_call.function.name
-            if fn_name == "stop":
-                api_messages.append({
-                    "role": "tool",
-                    "content": "Stopping the SPARQL generation process",
-                    "tool_call_id": tool_call.id
-                })
-                break
-
-            fn_args = json.loads(tool_call.function.arguments)
-            if fn_name == "execute_sparql":
-                sparqls.append(fn_args["sparql"])
-
+        choice = response.choices[0]
+        api_messages.append(choice.message)
+        if choice.message.content:
             fmt = format_message({
-                "role": "tool call",
-                "content": f"Calling function {fn_name} with arguments:\n"
-                f"{pformat(fn_args, indent=2)}",
+                "role": "assistant",
+                "content": choice.message.content or ""
             })
             print(fmt)
             content_messages.append(fmt)
 
-            result = execute_fn(manager, fn_name, fn_args, args)
-            tool_msg = {
-                "role": "tool",
-                "content": result,
-                "tool_call_id": tool_call.id
-            }
-            fmt = format_message(tool_msg)
-            print(fmt)
-            content_messages.append(fmt)
-            api_messages.append(tool_msg)
-
-        if sparqls:
-            sparql = sparqls[-1]
-            try:
-                sparql = manager.fix_prefixes(sparql)
-                sparql = manager.prettify(sparql)
-            except Exception:
-                pass
-
-            fmt = format_message({
-                "role": "sparql",
-                "content": sparql
-            })
-            print(fmt)
-            content_messages.append(fmt)
-
-        instruction = input(">> ")
-        if instruction.strip().lower() in ["", "q", "quit", "exit"]:
+        if choice.finish_reason == "stop":
             break
 
-        msg = {
-            "role": "user",
-            "content": instruction
+        elif not choice.message.tool_calls:
+            continue
+
+        tool_call = choice.message.tool_calls[0]
+        fn_name = tool_call.function.name
+        if fn_name == "stop":
+            api_messages.append({
+                "role": "tool",
+                "content": "Stopping the SPARQL generation process",
+                "tool_call_id": tool_call.id
+            })
+            break
+
+        fn_args = json.loads(tool_call.function.arguments)
+        if fn_name == "execute_sparql":
+            sparqls.append(fn_args["sparql"])
+
+        fmt = format_message({
+            "role": "tool call",
+            "content": f"Calling function {fn_name} with arguments:\n"
+            f"{pformat(fn_args, indent=2)}",
+        })
+        print(fmt)
+        content_messages.append(fmt)
+
+        result = execute_fn(manager, fn_name, fn_args, args)
+        tool_msg = {
+            "role": "tool",
+            "content": result,
+            "tool_call_id": tool_call.id
         }
-        fmt = format_message(msg)
-        api_messages.append(msg)
+        fmt = format_message(tool_msg)
+        print(fmt)
+        content_messages.append(fmt)
+        api_messages.append(tool_msg)
+
+    if sparqls:
+        sparql = sparqls[-1]
+        try:
+            sparql = manager.fix_prefixes(sparql)
+            sparql = manager.prettify(sparql)
+        except Exception:
+            pass
+
+        fmt = format_message({
+            "role": "sparql",
+            "content": sparql
+        })
+        print(fmt)
         content_messages.append(fmt)
 
     if args.save_to is not None:

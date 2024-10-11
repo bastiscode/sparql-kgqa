@@ -23,20 +23,25 @@ from sparql_kgqa.sparql.utils import (
     find_all,
     find,
     parse_to_string,
-    ask_to_select,
     prettify,
     query_qlever
 )
 
+
 LOGGER = logging.getLogger(__name__)
 CLEAN_PATTERN = re.compile(r"\s+", flags=re.MULTILINE)
+
+
+def clean(s: str) -> str:
+    return CLEAN_PATTERN.sub(" ", s).strip()
+
 
 OBJ_TYPES = ["entity", "property", "other", "literal"]
 SEARCH_TOKEN = "<|search|>"
 
 
-def clean(s: str) -> str:
-    return CLEAN_PATTERN.sub(" ", s).strip()
+def get_index_dir() -> str | None:
+    return os.getenv("SEARCH_INDEX_DIR", None)
 
 
 def load_sparql_grammar() -> tuple[str, str]:
@@ -76,8 +81,7 @@ class Alternative:
         identifier: str,
         short_identifier: str | None = None,
         label: str | None = None,
-        variants: list[str] | None = None,
-        display_variants: list[str] | None = None,
+        variants: dict[str, str] | None = None,
         aliases: list[str] | None = None,
         infos: list[str] | None = None
     ) -> None:
@@ -86,11 +90,11 @@ class Alternative:
         self.label = label
         self.aliases = aliases
         self.variants = variants
-        self.display_variants = display_variants
         self.infos = infos
 
     def __repr__(self) -> str:
-        return f"Alternative('{self.label}', '{self.identifier}')"
+        return f"Alternative({self.label}, {self.get_identifier()}, " \
+            f"{self.variants})"
 
     @staticmethod
     def _clip(s: str | None, max_len: int = 128) -> str:
@@ -99,55 +103,63 @@ class Alternative:
 
         return s[:max_len] + "..." if len(s) > max_len else s
 
-    def get_label(self, variant: str | None = None) -> str:
-        label = (
-            self._clip(self.label)
-            or self.short_identifier
-            or self.identifier
-        )
-        if variant:
-            label += f" ({variant})"
+    def get_identifier(self) -> str:
+        return self.short_identifier or self.identifier
 
-        return label
+    def get_variant_or_identifier(
+        self,
+        variant: str | None
+    ) -> str | None:
+        if not variant:
+            return self.get_identifier()
+        elif not self.variants:
+            return None
+        else:
+            return self.variants.get(variant, None)
 
     def get_string(
         self,
-        max_aliases: int | None = 5,
+        max_aliases: int = 5,
         add_infos: bool = True
     ) -> str:
-        s = self.get_label()
+        if self.variants:
+            s = ", ".join(sorted(self.variants.values()))
+        else:
+            s = self.get_identifier()
 
-        if add_infos and (self.label or self.infos):
-            infos = []
-            if self.label:
-                infos.append(self.short_identifier or self.identifier)
-            if self.infos:
-                infos.extend(self.infos)
-            if infos:
-                info_str = ", ".join(self._clip(info) for info in infos)
-                s += f" ({info_str})"
+        added_infos = []
+        if self.label:
+            added_infos.append(("name", self._clip(self.label)))
 
-        if self.aliases and (max_aliases or True):
+        if add_infos and self.infos:
+            info_str = ", ".join(self._clip(info) for info in self.infos)
+            added_infos.append(("infos", info_str))
+
+        if max_aliases and self.aliases:
             aliases = random.sample(
                 self.aliases,
                 min(len(self.aliases), max_aliases or len(self.aliases))
             )
             alias_str = ", ".join(self._clip(a) for a in aliases)
-            s += f", also known as {alias_str}"
+            added_infos.append(("aliases", alias_str))
 
-        variants = self.display_variants or self.variants
-        if variants:
-            s += f" ({'|'.join(variants)})"
+        if added_infos:
+            s += " (" + " | ".join(
+                f"{key}: {val}"
+                for key, val in added_infos
+            ) + ")"
 
         return s
 
     def get_regex(self) -> str:
-        r = re.escape(self.get_label())
-        if self.variants:
-            r += re.escape(" (") \
-                + "(?:" + "|".join(map(re.escape, self.variants)) + ")" \
-                + re.escape(")")
-        return r
+        if not self.variants:
+            return re.escape(self.get_identifier())
+
+        return re.escape(" (") \
+            + "(?:" + "|".join(map(
+                re.escape,
+                self.variants.values()
+            )) + ")" + re.escape(")")
 
 
 class NoneAlternative(Alternative):
@@ -179,21 +191,6 @@ WIKIDATA_PROPERTY_VARIANTS = {
     "<http://www.wikidata.org/prop/statement/": "ps",
     "<http://www.wikidata.org/prop/statement/value-normalized/": "psn",
     "<http://www.wikidata.org/prop/statement/value/": "psv",
-    # "<http://www.wikidata.org/prop/direct-normalized/": "direct norm",
-    # "<http://www.wikidata.org/prop/direct/": "direct",
-    # "<http://www.wikidata.org/prop/": "prop",
-    # "<http://www.wikidata.org/prop/qualifier/": "qualifier",
-    # "<http://www.wikidata.org/prop/qualifier/value-normalized/":
-    # "qualifier norm",
-    # "<http://www.wikidata.org/prop/qualifier/value/": "qualifier value",
-    # "<http://www.wikidata.org/prop/reference/": "reference",
-    # "<http://www.wikidata.org/prop/reference/value-normalized/":
-    # "reference norm",
-    # "<http://www.wikidata.org/prop/reference/value/": "reference value",
-    # "<http://www.wikidata.org/prop/statement/": "statement",
-    # "<http://www.wikidata.org/prop/statement/value-normalized/":
-    # "statement norm",
-    # "<http://www.wikidata.org/prop/statement/value/": "statement value",
 }
 
 
@@ -268,7 +265,7 @@ class WikidataPropertyMapping(Mapping):
         return pfx + key[len(self.NORM_PREFIX):]
 
     def default_variants(self) -> set[str]:
-        return set(WIKIDATA_PROPERTY_VARIANTS.values())
+        return {"wdt", "p"}
 
 
 class KgManager:
@@ -834,15 +831,8 @@ Answer: (?:yes|no)"""
         parse: dict[str, Any],
         with_iri: bool = True
     ) -> bool:
-        assert parse["name"] == "iri", "obj is not an iri parse tree"
-        child = parse["children"][0]
-        if child["name"] == "PrefixedName":
-            child = child["children"][0]
-            start, end = child["byte_span"]
-            if start == end:
-                return False
-
-            short = child["value"]
+        if parse["name"] == "PNAME_LN":
+            short = parse["value"]
             # convert to long form iri
             pfx, val = short.split(":", 1)
             if pfx not in self.custom_prefixes:
@@ -850,12 +840,12 @@ Answer: (?:yes|no)"""
 
             iri = self.custom_prefixes[pfx] + val + ">"
 
-        elif child["name"] == "IRIREF":
-            start, end = child["byte_span"]
+        elif parse["name"] == "IRIREF":
+            start, end = parse["byte_span"]
             if start == end:
                 return False
 
-            iri = child["value"]
+            iri = parse["value"]
 
         else:
             return False
@@ -879,9 +869,9 @@ Answer: (?:yes|no)"""
         elif variant:
             label += f" ({variant})"
 
-        child["name"] = "IRIREF"
-        child.pop("children", None)
-        child["value"] = f"<{label}>"
+        parse["name"] = "IRIREF"
+        parse.pop("children", None)
+        parse["value"] = f"<{label}>"
         return False
 
     def replace_iris(
@@ -908,7 +898,7 @@ Answer: (?:yes|no)"""
 
         incomplete = False
 
-        for obj in find_all(parse, "iri", skip={"Prologue"}):
+        for obj in find_all(parse, {"PNAME_LN", "IRIREF"}, skip={"Prologue"}):
             iri_incomplete = self.replace_iri(obj, with_iri)
             incomplete |= iri_incomplete
 
@@ -979,20 +969,38 @@ Answer: (?:yes|no)"""
 
         return parse_to_string(parse)
 
+    def build_variants(
+        self,
+        mapping: Mapping,
+        identifier: str,
+        variants: set[str] | None = None
+    ) -> dict[str, str]:
+        denorm_variants = {}
+        for var in (variants or mapping.default_variants()):
+            denorm = mapping.denormalize(identifier, var)
+            if denorm is None:
+                continue
+
+            denorm_variants[var] = self.format_iri(denorm)
+
+        return denorm_variants
+
     def build_alternative(
         self,
         data: str,
-        variants: set[str] | None = None,
-        display_variants: set[str] | None = None
+        map: Mapping | None = None,
+        variants: set[str] | None = None
     ) -> Alternative:
         label, _, syns, id, infos = data.rstrip("\r\n").split("\t")
         return Alternative(
             id,
             short_identifier=self.format_iri(id),
             label=label,
-            variants=sorted(variants) if variants else None,
-            display_variants=sorted(display_variants)
-            if display_variants else None,
+            variants=self.build_variants(
+                map,
+                id,
+                variants
+            ) if map is not None else None,
             aliases=[s for s in syns.split(";;;") if s != ""],
             infos=[i for i in infos.split(";;;") if i != ""]
         )
@@ -1046,11 +1054,9 @@ Answer: (?:yes|no)"""
                 matching = set()
                 for id, _ in index.find_matches(search, **kwargs)[:k]:
                     matching.add(id)
-                    default = map.default_variants()
                     alternatives.append(self.build_alternative(
                         index.get_row(id),
-                        variants=map.default_variants(),
-                        display_variants={"all"} if default else None
+                        map
                     ))
 
                 all_alternatives[index_type] = alternatives
@@ -1113,9 +1119,10 @@ Answer: (?:yes|no)"""
         )
 
         start = time.perf_counter()
-        for index_type, id_map, index in [
-            ("entity", entities, self.entity_index),
-            ("property", properties, self.property_index)
+        for index_type, id_map, index, map in [
+            ("entity", entities, self.entity_index, self.entity_mapping),
+            ("property", properties, self.property_index,
+             self.property_mapping)
         ]:
             alternatives = []
 
@@ -1126,6 +1133,7 @@ Answer: (?:yes|no)"""
                 matching.add(id)
                 alternatives.append(self.build_alternative(
                     sub_index.get_row(id),
+                    map,
                     id_map[id]
                 ))
 
@@ -1184,8 +1192,7 @@ Answer: (?:yes|no)"""
                 for id, _ in index.find_matches(search, **kwargs)[:k]:
                     matching.add(id)
                     alternatives.append(self.build_alternative(
-                        index.get_row(id),
-                        None
+                        index.get_row(id)
                     ))
 
                 # fill alternatives with non-matching other iris
@@ -1217,7 +1224,7 @@ Answer: (?:yes|no)"""
         prefix: str,
         search_query: str,
         alternatives: dict[str, list[Alternative]],
-        max_aliases: int | None = 5,
+        max_aliases: int = 5,
         add_infos: bool = True,
         selections: list[tuple[str, str, str | None]] | None = None,
         failures: set[tuple[str, str, str | None]] | None = None,
@@ -1237,14 +1244,17 @@ Answer: (?:yes|no)"""
                 continue
 
             idx, alt = nxt
+            lab = alt.get_variant_or_identifier(variant)
+            if lab is None:
+                continue
+
             offset = sum(
                 len(alternatives[obj_type])
                 for obj_type in OBJ_TYPES[:OBJ_TYPES.index(obj_type)]
                 if obj_type in alternatives
             )
             idx = offset + idx
-            fail = f"{idx + 1}. {alt.get_label(variant)}"
-            failed.append(fail)
+            failed.append(f"{idx + 1}. {lab}")
 
         prefix = prefix + "..."
 
@@ -1260,13 +1270,13 @@ Answer: (?:yes|no)"""
                 continue
 
             counts = Counter(
-                alternative.get_label().lower()
+                alternative.get_identifier().lower()
                 for alternative in alts
             )
             strings = []
             regexes = []
             for alternative in alts:
-                alt_label = alternative.get_label()
+                alt_label = alternative.get_identifier()
                 alt_idx_str = f"{alt_idx + 1}. "
                 strings.append(alt_idx_str + alternative.get_string(
                     max_aliases,
@@ -1377,7 +1387,7 @@ Selection:
             # parse variant
             # + 2 to account for opening " ("
             # - 1 to account for closing ")"
-            name_end = len(alternative.get_label())
+            name_end = len(alternative.get_identifier())
             variant = name[name_end + 2:-1]
             name = name[:name_end]
 
@@ -1482,9 +1492,10 @@ SPARQL query:
                     properties[id].add(variant)
 
         formatted = []
-        for obj_type, id_map, index in [
-            ("entities", entities, self.entity_index),
-            ("properties", properties, self.property_index)
+        for obj_type, id_map, index, map in [
+            ("entities", entities, self.entity_index, self.entity_mapping),
+            ("properties", properties, self.property_index,
+             self.property_mapping)
         ]:
             if not id_map:
                 continue
@@ -1494,6 +1505,7 @@ SPARQL query:
                 "\n".join(
                     self.build_alternative(
                         index.get_row(id),
+                        map,
                         variants
                     ).get_string()
                     for id, variants in id_map.items()
@@ -1708,7 +1720,8 @@ class ORKGManager(KgManager):
         self.custom_prefixes.update({
             "orkgc": "<http://orkg.org/orkg/class/",
             "orkgp": "<http://orkg.org/orkg/predicate/",
-            "orkgsh": "<http://orkg.org/orkg/shapes/"
+            "orkgsh": "<http://orkg.org/orkg/shapes/",
+            "orkgr": "<http://orkg.org/orkg/resource/",
         })
 
 

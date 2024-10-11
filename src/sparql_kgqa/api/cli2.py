@@ -14,6 +14,7 @@ from sparql_kgqa.api.generator2 import SPARQLGenerator
 from sparql_kgqa.api.server2 import SPARQLGenerationServer
 from sparql_kgqa.sparql.utils2 import (
     WikidataPropertyMapping,
+    get_index_dir,
     load_index_and_mapping
 )
 
@@ -51,7 +52,7 @@ class SPARQLGenerationCli(TextProcessingCli):
         )
 
         kg = self.args.knowledge_graph
-        index_dir = os.environ.get("SEARCH_INDEX_DIR", None)
+        index_dir = get_index_dir()
         if self.args.entities is None:
             assert index_dir is not None, \
                 "SEARCH_INDEX_DIR environment variable must be set if " \

@@ -316,3 +316,37 @@ dblp-search-indices:
 	data/search-index/dblp-properties/$(SEARCH_INDEX) \
 	--with-mapping \
 	--type $(SEARCH_INDEX)
+
+orkg-search-data:
+	# orkg entities
+	# https://qlever.cs.uni-freiburg.de/orkg/TnqXnv
+	@mkdir -p data/search-index/orkg-entities
+	@curl -s $(ORKG_URL) -H "Accept: text/tab-separated-values" \
+	--data-urlencode query="PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX dbo: <http://dbpedia.org/ontology/> PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> PREFIX dbp: <http://dbpedia.org/property/> PREFIX foaf: <http://xmlns.com/foaf/0.1/> PREFIX orkgp: <http://orkg.org/orkg/predicate/> SELECT DISTINCT ?label ?score (GROUP_CONCAT(DISTINCT ?alias; SEPARATOR=\";;;\") AS ?synonyms) ?id (GROUP_CONCAT(DISTINCT ?info; SEPARATOR=\";;;\") AS ?infos) WHERE { { SELECT ?id (COUNT(?id) AS ?score) WHERE { ?id ?p ?o } GROUP BY ?id } ?id rdfs:label ?label . BIND(\"\" AS ?alias) OPTIONAL { { ?id rdf:type/rdfs:label ?info } UNION { ?id orkgp:description ?info } } } GROUP BY ?label ?score ?id ORDER BY DESC(?score)" \
+	--data-urlencode timeout=$(QLEVER_TIMEOUT) \
+	--data-urlencode access-token=$(ORKG_ACCESS_TOKEN) \
+	| python scripts/prepare_search_index.py \
+	> data/search-index/orkg-entities/data.tsv
+	# orkg properties
+	# https://qlever.cs.uni-freiburg.de/orkg/SxQBdo
+	@mkdir -p data/search-index/orkg-properties
+	@curl -s $(ORKG_URL) -H "Accept: text/tab-separated-values" \
+	--data-urlencode query="PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> PREFIX orkgc: <http://orkg.org/orkg/class/> SELECT DISTINCT ?label ?score (GROUP_CONCAT(DISTINCT ?alias; SEPARATOR=\";;;\") AS ?synonyms) ?id (GROUP_CONCAT(DISTINCT ?info; SEPARATOR=\";;;\") AS ?infos) WHERE { { SELECT ?id (COUNT(?id) AS ?score) WHERE { ?s ?id ?o } GROUP BY ?id } ?id rdfs:label ?label . ?id rdf:type orkgc:Predicate . BIND(\"\" AS ?alias) BIND(\"\" AS ?info) } GROUP BY ?label ?score ?id ORDER BY DESC(?score)" \
+	--data-urlencode timeout=$(QLEVER_TIMEOUT) \
+	--data-urlencode access-token=$(ORKG_ACCESS_TOKEN) \
+	| python scripts/prepare_search_index.py \
+	> data/search-index/orkg-properties/data.tsv
+
+orkg-search-indices:
+	@mkdir -p data/search-index/orkg-entities/$(SEARCH_INDEX)
+	@python scripts/build_search_index.py \
+	data/search-index/orkg-entities/data.tsv \
+	data/search-index/orkg-entities/$(SEARCH_INDEX) \
+	--with-mapping \
+	--type $(SEARCH_INDEX)
+	@mkdir -p data/search-index/orkg-properties/$(SEARCH_INDEX)
+	@python scripts/build_search_index.py \
+	data/search-index/orkg-properties/data.tsv \
+	data/search-index/orkg-properties/$(SEARCH_INDEX) \
+	--with-mapping \
+	--type $(SEARCH_INDEX)

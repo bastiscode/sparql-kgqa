@@ -5,6 +5,7 @@ import random
 import os
 import re
 import json
+import string
 import collections
 import multiprocessing as mp
 
@@ -97,6 +98,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--seed", type=int, default=22)
     parser.add_argument("-n", "--num-workers", type=int, default=None)
+    parser.add_argument("--index-types", nargs="+", default=["prefix"],
+                        choices=["prefix", "qgram"])
     return parser.parse_args()
 
 
@@ -499,7 +502,7 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
 
 
 # nltk english stopwords
-STOP = [
+STOP = set([
     'i', 'me', 'my', 'myself', 'we', 'our', 'ours', 'ourselves', 'you',
     "you're", "you've", "you'll", "you'd", 'your', 'yours', 'yourself',
     'yourselves', 'he', 'him', 'his', 'himself', 'she', "she's", 'her',
@@ -521,7 +524,9 @@ STOP = [
     'haven', "haven't", 'isn', "isn't", 'ma', 'mightn', "mightn't", 'mustn',
     "mustn't", 'needn', "needn't", 'shan', "shan't", 'shouldn', "shouldn't",
     'wasn', "wasn't", 'weren', "weren't", 'won', "won't", 'wouldn', "wouldn't"
-]
+])
+
+PUNCT = set(string.punctuation)
 
 
 def get_search_query(question: str, name: str, index_type: str) -> str:
@@ -529,18 +534,18 @@ def get_search_query(question: str, name: str, index_type: str) -> str:
 
     if index_type == "prefix":
         # special handling of prefix index
-        qn = normalize(question)
         keywords = list(
             k for k in set(keywords)
-            if k not in STOP
+            if k not in STOP and k not in PUNCT
             and not any(
                 k.startswith(other) and k != other
                 for other in keywords
             )
         )
+        query_keywords = normalize(question).split()
         matching, non_matching = partition_by(
             keywords,
-            lambda kw: kw in qn
+            lambda kw: any(qk.startswith(kw) for qk in query_keywords)
         )
         random.shuffle(matching)
         random.shuffle(non_matching)
@@ -685,15 +690,15 @@ def prepare_stages(
             end = span(items[item_idx - 1][0])[1]
 
             try:
-                final_prefix_raw = manager.fix_prefixes(
+                final_prefix = manager.fix_prefixes(
                     sparql_encoded[:end].decode(),
                     is_prefix=True,
                     remove_known=True
                 )
-                final_prefix, _ = manager.replace_iris(
-                    final_prefix_raw,
-                    is_prefix=True
-                )
+                # final_prefix, _ = manager.replace_iris(
+                #     final_prefix_raw,
+                #     is_prefix=True
+                # )
             except Exception:
                 continue
 
@@ -723,15 +728,15 @@ def prepare_stages(
         is_ent_or_prop = obj_type in ["entity", "property"]
 
         try:
-            prefix_raw = manager.fix_prefixes(
+            prefix = manager.fix_prefixes(
                 sparql_encoded[:start].decode(),
                 is_prefix=True,
                 remove_known=True,
             )
-            prefix, _ = manager.replace_iris(
-                prefix_raw,
-                is_prefix=True
-            )
+            # prefix, _ = manager.replace_iris(
+            #     prefix_raw,
+            #     is_prefix=True
+            # )
 
             # 1. randomly drop items with type other or literal
             # such that some continuations are trained to
@@ -742,15 +747,15 @@ def prepare_stages(
             if item_idx > 0:
                 last_end = span(items[item_idx - 1][0])[1]
                 assert last_end < start, "invalid item order"
-                last_prefix_raw = manager.fix_prefixes(
+                last_prefix = manager.fix_prefixes(
                     sparql_encoded[:last_end].decode(),
                     is_prefix=True,
                     remove_known=True
                 )
-                last_prefix, _ = manager.replace_iris(
-                    last_prefix_raw,
-                    is_prefix=True
-                )
+                # last_prefix, _ = manager.replace_iris(
+                #     last_prefix_raw,
+                #     is_prefix=True
+                # )
             else:
                 last_prefix = ""
                 last_end = 0
@@ -825,7 +830,7 @@ def prepare_stages(
         )
 
         alts = manager.get_selection_alternatives(
-            prefix_raw,
+            prefix,
             search,
             selection_k,
             max_candidates=16384,
@@ -844,8 +849,8 @@ def prepare_stages(
             for obj_type, obj_alts in alts.items()
             for alt in obj_alts
             if (alt.identifier == identifier
-                or (is_lit_or_other and alt.label == label))
-            and (variant is None or variant in (alt.variants or []))
+                or alt.short_identifier == identifier)
+            and (variant is None or variant in (alt.variants or {}))
         ]
         target_obj_type, target_alt = random.choice(target_alts) \
             if target_alts else (obj_type, None)
@@ -908,9 +913,19 @@ def prepare_stages(
                 if obj_type in alts
             )
             select_idx = offset + alts[target_obj_type].index(target_alt)
-            selection = f"{select_idx + 1}. {target_alt.get_label(variant)}"
+            selection = f"{select_idx + 1}. " \
+                f"{target_alt.get_variant_or_identifier(variant)}"
 
         samples.append((select_prompt, selection))
+
+    for ipt, opt in samples:
+        if not isinstance(ipt, str):
+            ipt = "".join(m["text"] for m in ipt)
+
+        print(ipt)
+        print(opt)
+        print("=" * 40)
+        print()
 
     return samples
 
@@ -977,7 +992,7 @@ def init(kg: str, args: argparse.Namespace):
 
     ent_indices = []
     prop_indices = []
-    for index_type in ["qgram", "prefix"]:
+    for index_type in args.index_types:
         ent_index, ent_mapping = load_index_and_mapping(
             args.entities,
             index_type
