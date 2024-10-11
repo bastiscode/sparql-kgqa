@@ -918,15 +918,6 @@ def prepare_stages(
 
         samples.append((select_prompt, selection))
 
-    for ipt, opt in samples:
-        if not isinstance(ipt, str):
-            ipt = "".join(m["text"] for m in ipt)
-
-        print(ipt)
-        print(opt)
-        print("=" * 40)
-        print()
-
     return samples
 
 
