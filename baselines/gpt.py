@@ -74,7 +74,7 @@ def parse_args() -> argparse.Namespace:
         "-k",
         "--search-top-k",
         type=int,
-        default=5,
+        default=10,
         help="Number of top search results to show"
     )
     parser.add_argument(
