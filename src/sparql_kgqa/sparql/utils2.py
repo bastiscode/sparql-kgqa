@@ -117,6 +117,22 @@ class Alternative:
         else:
             return self.variants.get(variant, None)
 
+    def get_variant_by_name(
+        self,
+        name: str
+    ) -> str | None:
+        if not self.variants:
+            return None
+
+        return next((
+            item[0] for item in
+            filter(
+                lambda item: item[1] == name,
+                self.variants.items()
+            )),
+            None
+        )
+
     def get_string(
         self,
         max_aliases: int = 5,
@@ -135,7 +151,7 @@ class Alternative:
             info_str = ", ".join(self._clip(info) for info in self.infos)
             added_infos.append(("infos", info_str))
 
-        if max_aliases and self.aliases:
+        if add_infos and max_aliases and self.aliases:
             aliases = random.sample(
                 self.aliases,
                 min(len(self.aliases), max_aliases or len(self.aliases))
@@ -155,11 +171,10 @@ class Alternative:
         if not self.variants:
             return re.escape(self.get_identifier())
 
-        return re.escape(" (") \
-            + "(?:" + "|".join(map(
-                re.escape,
-                self.variants.values()
-            )) + ")" + re.escape(")")
+        return "(?:" + "|".join(map(
+            re.escape,
+            self.variants.values()
+        )) + ")"
 
 
 class NoneAlternative(Alternative):
@@ -361,11 +376,7 @@ class KgManager:
         # autocomplete by adding 1 to 3 variables to the query,
         # completing and then parsing it to find the current position
         # in the query triple block
-        parse, rest = self.parser.prefix_parse(
-            prefix.encode(),
-            skip_empty=False,
-            collapse_single=True
-        )
+        parse, rest = self.parser.prefix_parse(prefix.encode())
         rest_str = bytes(rest).decode(errors="replace")
 
         # build bracket stack to fix brackets later
@@ -401,16 +412,12 @@ class KgManager:
         for num_vars in range(3, 0, -1):
             vars = [uuid.uuid4().hex for _ in range(num_vars)]
 
-            full_query = prefix + " " + " ".join(f"?{v}" for v in vars)
+            full_query = prefix.strip() + " " + " ".join(f"?{v}" for v in vars)
             for b in reversed(bracket_stack):
                 if b == "{":
                     full_query += " }"
                 else:
                     full_query += " )"
-
-            # add limit clause
-            if limit is not None:
-                full_query += f" LIMIT {limit}"
 
             try:
                 parse = self.parser.parse(full_query)
@@ -418,23 +425,29 @@ class KgManager:
                 continue
 
             # replace all select vars with the last one
-            select_var = vars[-1]
+            select_var = vars[0]
 
             # replace first select or ask with select var
             query = find(parse, "QueryType")
             assert query is not None
             query = query["children"][0]
             if query["name"] == "SelectQuery":
-                query["children"][1:] = [
+                select_clause = query["children"][0]
+                select_clause["children"][1:] = [
                     {"name": "DISTINCT", "value": "DISTINCT"},
                     {"name": "VAR1", "value": f"?{select_var}"},
                 ]
             elif query["name"] == "AskQuery":
-                query["children"] = [
-                    {"name": "SELECT", "value": "SELECT"},
-                    {"name": "DISTINCT", "value": "DISTINCT"},
-                    {"name": "VAR1", "value": f"?{select_var}"},
-                ]
+                # ask to select here
+                query["name"] = "SelectQuery"
+                query["children"][0] = {
+                    "name": "SelectClause",
+                    "children": [
+                        {"name": "SELECT", "value": "SELECT"},
+                        {"name": "DISTINCT", "value": "DISTINCT"},
+                        {"name": "VAR1", "value": f"?{select_var}"},
+                    ]
+                }
             else:
                 continue
 
@@ -442,6 +455,10 @@ class KgManager:
             fix_latest_subselect(parse, select_var)
 
             final_query = parse_to_string(parse)
+            # add limit clause
+            if limit is not None:
+                final_query += f" LIMIT {limit}"
+
             break
 
         if final_query is None:
@@ -450,7 +467,7 @@ class KgManager:
         uris = None
         try:
             result = query_qlever(
-                prefix,
+                final_query,
                 self.parser,
                 self.kg,
                 qlever_endpoint,
@@ -1378,30 +1395,7 @@ Selection:
 
         alternative = alternatives[obj_type][idx - offset]
         identifier = alternative.identifier
-        variant = None
-        if not alternative.variants:
-            # no variants to parse
-            variant = None
-
-        else:
-            # parse variant
-            # + 2 to account for opening " ("
-            # - 1 to account for closing ")"
-            name_end = len(alternative.get_identifier())
-            variant = name[name_end + 2:-1]
-            name = name[:name_end]
-
-        if obj_type in ["property", "entity"]:
-            denorm = self.denormalize_selection(
-                obj_type,
-                identifier,
-                variant
-            )
-            assert denorm is not None, \
-                f"denormalizing selection '{result}' failed unexpectedly"
-            formatted = self.format_iri(denorm, self.custom_prefixes)
-            name = f"<{name} ({formatted})>"
-
+        variant = alternative.get_variant_by_name(name)
         return name, (obj_type, identifier, variant)
 
     def get_search_prompt_and_regex(

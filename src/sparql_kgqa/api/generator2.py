@@ -120,7 +120,7 @@ class SPARQLGenerator(TextProcessor):
         # maximum size where sub index is built
         self._max_candidates: int | None = 4096
         # add info to selection candidates (added automatically for duplicates)
-        self._add_infos = False
+        self._add_infos = True
 
         # SPARQL stuff
         self._exact = self.cfg["inference"].get("exact", False)
@@ -762,7 +762,7 @@ class SPARQLGenerator(TextProcessor):
         select_k: int = 8,
         select_max_candidates: int | None = 4096,
         select_max_aliases: int = 5,
-        select_add_infos: bool = False,
+        select_add_infos: bool = True,
         system_message: str | None = None,
         force_exact: bool = False
     ) -> None:

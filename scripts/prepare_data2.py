@@ -20,6 +20,7 @@ from sparql_kgqa.sparql.utils2 import (
     Chat,
     KgManager,
     WikidataPropertyMapping,
+    get_index_dir,
     get_kg_manager,
     clean,
     load_index_and_mapping,
@@ -69,9 +70,10 @@ def parse_args() -> argparse.Namespace:
     data.add_argument("--sci-qa", action="store_true")
 
     parser.add_argument("--output", type=str, required=True)
-    parser.add_argument("--entities", type=str, required=True)
-    parser.add_argument("--properties", type=str, required=True)
+    parser.add_argument("--entities", type=str)
+    parser.add_argument("--properties", type=str)
     parser.add_argument("--progress", action="store_true")
+    parser.add_argument("--sequential", action="store_true")
     parser.add_argument("--skip", nargs="+", default=[])
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--qlever-endpoint", type=str, default=None)
@@ -835,7 +837,7 @@ def prepare_stages(
             selection_k,
             max_candidates=16384,
             endpoint=args.qlever_endpoint,
-            max_retries=3
+            max_retries=3,
         )
         if alts is None:
             if is_lit_or_other:
@@ -1010,6 +1012,7 @@ def init(kg: str, args: argparse.Namespace):
 
 
 def prepare(args: argparse.Namespace):
+    random.seed(args.seed)
     logging.basicConfig(
         format="[%(asctime)s] {%(name)s - %(levelname)s} %(message)s",
         level=logging.INFO
@@ -1020,15 +1023,28 @@ def prepare(args: argparse.Namespace):
 
     os.makedirs(args.output, exist_ok=True)
 
+    index_dir = get_index_dir()
+    if args.entities is None:
+        assert index_dir is not None
+        args.entities = os.path.join(index_dir, f"{kg}-entities")
+
+    if args.properties is None:
+        assert index_dir is not None
+        args.properties = os.path.join(index_dir, f"{kg}-properties")
+
     if args.num_workers is None:
         args.num_workers = min(mp.cpu_count(), 4)
 
-    print(f"Starting {args.num_workers} workers")
-    pool = mp.Pool(
-        args.num_workers,
-        initializer=init,
-        initargs=(kg, args)
-    )
+    if not args.sequential:
+        print(f"Starting {args.num_workers} workers")
+        pool = mp.Pool(
+            args.num_workers,
+            initializer=init,
+            initargs=(kg, args)
+        )
+    else:
+        pool = None
+        init(kg, args)
 
     if (args.stages_per_sample or 1) < 0:
         train_samples = num_samples["train"]
@@ -1074,6 +1090,10 @@ def prepare(args: argparse.Namespace):
             f"{split}_raw.jsonl"
         )
         outputs = list(tqdm(
+            (
+                prepare_sample(sample, args, split)
+                for sample in samples
+            ) if pool is None else
             pool.imap(
                 prepare_sample_mp,
                 ((sample, args, split) for sample in samples)
@@ -1083,7 +1103,6 @@ def prepare(args: argparse.Namespace):
             total=len(samples),
             disable=not args.progress
         ))
-        random.seed(args.seed)
         random.shuffle(outputs)
 
         invalid = 0

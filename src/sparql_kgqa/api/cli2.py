@@ -46,7 +46,7 @@ class SPARQLGenerationCli(TextProcessingCli):
             select_k=self.args.select_k,
             select_max_candidates=self.args.select_max_candidates,
             select_max_aliases=self.args.select_max_aliases,
-            select_add_infos=self.args.select_add_info,
+            select_add_infos=not self.args.select_no_info_for_unique,
             system_message=self.args.system_message,
             force_exact=self.args.force_exact,
         )
@@ -279,9 +279,9 @@ def main():
         help="Maximum number of aliases for each selection candidate"
     )
     parser.add_argument(
-        "--select-add-info",
+        "--select-no-info-for-unique",
         action="store_true",
-        help="Whether to (forcefully) add additional information to selection "
+        help="Whether to only show additional info for non-unique selection "
         "candidates"
     )
     args = parser.parse_args()

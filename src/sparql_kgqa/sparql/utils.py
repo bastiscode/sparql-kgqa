@@ -502,7 +502,7 @@ def ask_to_select(
     var: str | None = None,
     distinct: bool = False
 ) -> str | None:
-    parse = parser.parse(sparql, skip_empty=False, collapse_single=False)
+    parse = parser.parse(sparql)
 
     sub_parse = find(parse, "QueryType")
     assert sub_parse is not None
