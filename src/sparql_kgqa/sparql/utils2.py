@@ -624,7 +624,7 @@ class KgManager:
             fix_latest_subselect(subsel, var)
 
         final_query = None
-        for num_vars in range(3, 0, -1):
+        for num_vars in range(1, 4):
             vars = [uuid.uuid4().hex for _ in range(num_vars)]
 
             full_query = prefix.strip() + " " + " ".join(f"?{v}" for v in vars)
@@ -638,6 +638,11 @@ class KgManager:
                 parse = self.parser.parse(full_query)
             except Exception:
                 continue
+
+            if len(vars) == 3:
+                # empty triple / subject position, everything is allowed
+                # here so return None
+                return None
 
             # replace all select vars with the last one
             select_var = vars[0]

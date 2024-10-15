@@ -490,7 +490,13 @@ class SPARQLGenerator(TextProcessor):
             # update state
             s = state()
 
-        yield prefix("sparql")
+        sparql = prefix("sparql")
+        try:
+            sparql = self._manager.fix_prefixes(sparql)
+        except Exception:
+            pass
+
+        yield sparql
 
     def _judge_sparql(
         self,

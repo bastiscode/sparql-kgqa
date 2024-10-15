@@ -596,7 +596,7 @@ def response_format(initial: bool) -> Type[BaseModel]:
         return Continuation
 
 
-def easy_example(manager: KgManager, k: int) -> list[dict]:
+def wikidata_examples(manager: KgManager, k: int) -> list[dict]:
     return [
         prompt("What is the capital of France?", manager),
         {
@@ -696,10 +696,10 @@ The capital of France is Paris""",
 def examples(manager: KgManager, k: int, ignore: bool = False) -> list[dict]:
     if ignore:
         return []
+    elif manager.kg == "wikidata":
+        return wikidata_examples(manager, k)
     else:
-        return [
-            *easy_example(manager, k)
-        ]
+        return []
 
 
 def run(args: argparse.Namespace) -> None:
