@@ -379,6 +379,59 @@ entities"
             "example": "find_subject_entities(object=\"wd:Q937\", property=\
 \"wdt:P22\") or find_subject_entities(object=\"wd:Q937\", property=\"wdt:P22\"\
 , subject_query=\"Hans\")"
+        },
+        {
+            "name": "find_subject_entities_with_property",
+            "description": """\
+Search for entities that have a given outgoing property. If query is \
+specified, then return only entities matching the query.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "property": {
+                        "type": "string",
+                        "description": "The outgoing property"
+                    },
+                    "subject_query": {
+                        "type": ["string", "null"],
+                        "description": "The search query to filter subject \
+entities"
+                    }
+                },
+                "required": ["property", "subject_query"],
+                "additionalProperties": False
+            },
+            "strict": True,
+            "example": "find_subject_entities_with_property(property=\
+\"wdt:P106\") or find_subject_entities_with_property(property=\
+\"wdt:P106\", subject_query=\"Peter\")"
+        },
+        {
+            "name": "find_object_entities_and_literals_with_property",
+            "description": """\
+Search for object entities and literals that have a given incoming property. \
+If query is specified, then return only entities and literals matching the \
+query.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "property": {
+                        "type": "string",
+                        "description": "The incoming property"
+                    },
+                    "object_query": {
+                        "type": ["string", "null"],
+                        "description": "The search query to filter object \
+entities and literals"
+                    },
+                },
+                "required": ["property", "object_query"],
+                "additionalProperties": False
+            },
+            "strict": True,
+            "example": "find_object_entities_and_literals_with_property(\
+property=\"wdt:P106\") or find_object_entities_and_literals_with_property(\
+property=\"wdt:P106\", object_query=\"politician\")"
         }
     ])
     return fns
@@ -450,6 +503,21 @@ SELECT ?o WHERE {{ {fn_args["subject"]} {fn_args["property"]} ?o }}"""
 SELECT ?s WHERE {{ ?s {fn_args["property"]} {fn_args["object"]} }}"""
         query = fn_args.get("subject_query", None)
         obj_types = {"entity": f"{kg} entities"}
+
+    elif fn_name == "find_subject_entities_with_property":
+        sparql = f"""\
+SELECT ?s WHERE {{ ?s {fn_args["property"]} ?o }}"""
+        query = fn_args.get("subject_query", None)
+        obj_types = {"entity": f"{kg} entities"}
+
+    elif fn_name == "find_object_entities_and_literals_with_property":
+        sparql = f"""\
+SELECT ?o WHERE {{ ?s {fn_args["property"]} ?o }}"""
+        query = fn_args.get("object_query", None)
+        obj_types = {
+            "entity": f"{kg} entities",
+            "literal": "literals"
+        }
 
     else:
         raise ValueError(f"Unknown function: {fn_name}")
@@ -791,7 +859,19 @@ def run(args: argparse.Namespace) -> None:
             content_messages.append(fmt)
 
         if choice.finish_reason == "stop":
-            break
+            if sparqls:
+                break
+
+            msg = {
+                "role": "user",
+                "content": "No SPARQL query was generated yet. \
+Please continue."
+            }
+            fmt = format_message(msg)
+            print(fmt)
+            content_messages.append(fmt)
+            api_messages.append(msg)
+            continue
 
         elif not choice.message.tool_calls:
             continue
