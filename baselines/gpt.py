@@ -80,11 +80,25 @@ def parse_args() -> argparse.Namespace:
         help="Set of functions to use"
     )
     parser.add_argument(
-        "-k",
+        "-t",
+        "--temperature",
+        type=float,
+        default=0.0,
+        help="Temperature to use during decoding"
+    )
+    parser.add_argument(
+        "-sk",
         "--search-top-k",
         type=int,
         default=10,
         help="Number of top search results to show"
+    )
+    parser.add_argument(
+        "-rk",
+        "--result-top-bottom-k",
+        type=int,
+        default=10,
+        help="Number of top and bottom rows to show for a SPARQL query result"
     )
     parser.add_argument(
         "--save-to",
@@ -248,7 +262,9 @@ wdt:P106 ?job }\")"
         "name": "search_constrained",
         "description": "Search for entities, properties or literals in the \
 knowledge graph while respecting some given constraints in terms of known \
-entities, properties, or literals.",
+entities, properties, or literals. The constraints must be properly formatted \
+IRIs or literals, like wdt:P31 or \
+<http://www.wikidata.org/property/direct/P31>.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -271,8 +287,8 @@ entities, properties, or literals.",
 constraining parameter should be null)",
                 },
                 "query": {
-                    "type": ["string", "null"],
-                    "description": "An optional search query, used to filter \
+                    "type": "string",
+                    "description": "A search query used to filter \
 the search results"
                 }
             },
@@ -300,7 +316,11 @@ def execute_fn(
     args: argparse.Namespace
 ) -> str:
     if fn_name == "execute_sparql":
-        return execute_sparql(manager, fn_args["sparql"])
+        return execute_sparql(
+            manager,
+            fn_args["sparql"],
+            args.result_top_bottom_k
+        )
 
     elif fn_name == "search_entities":
         return search_entities(
@@ -323,146 +343,50 @@ def execute_fn(
             args.search_top_k
         )
 
-    kg = manager.kg.capitalize()
-
-    if fn_name == "find_outgoing_properties":
-        sparql = f"""\
-SELECT ?p WHERE {{ {fn_args["subject"]} ?p ?o }}"""
-        query = fn_args.get("property_query", None)
-        obj_types = {
-            "property": f"{kg} properties",
-            "other": "other properties"
-        }
-
-    elif fn_name == "find_incoming_properties":
-        sparql = f"""\
-SELECT ?p WHERE {{ ?s ?p {fn_args["object"]} }}"""
-        query = fn_args.get("property_query", None)
-        obj_types = {
-            "property": f"{kg} properties",
-            "other": "other properties"
-        }
-
-    elif fn_name == "find_connecting_properties":
-        sparql = f"""\
-SELECT ?p WHERE {{ {fn_args["subject"]} ?p {fn_args["object"]} }}"""
-        query = None
-        obj_types = {
-            "property": f"{kg} properties",
-            "other": "other properties"
-        }
-
-    elif fn_name == "find_object_entities_and_literals":
-        sparql = f"""\
-SELECT ?o WHERE {{ {fn_args["subject"]} {fn_args["property"]} ?o }}"""
-        query = fn_args.get("object_query", None)
-        obj_types = {
-            "entity": f"{kg} entities",
-            "literal": "literals"
-        }
-
-    elif fn_name == "find_subject_entities":
-        sparql = f"""\
-SELECT ?s WHERE {{ ?s {fn_args["property"]} {fn_args["object"]} }}"""
-        query = fn_args.get("subject_query", None)
-        obj_types = {"entity": f"{kg} entities"}
-
-    elif fn_name == "find_subject_entities_with_property":
-        sparql = f"""\
-SELECT ?s WHERE {{ ?s {fn_args["property"]} ?o }}"""
-        query = fn_args.get("subject_query", None)
-        obj_types = {"entity": f"{kg} entities"}
-
-    elif fn_name == "find_object_entities_and_literals_with_property":
-        sparql = f"""\
-SELECT ?o WHERE {{ ?s {fn_args["property"]} ?o }}"""
-        query = fn_args.get("object_query", None)
-        obj_types = {
-            "entity": f"{kg} entities",
-            "literal": "literals"
-        }
-
     else:
         raise ValueError(f"Unknown function: {fn_name}")
 
-    try:
-        result = query_sparql(manager, sparql)
-    except Exception as e:
-        return f"Failed executing SPARQL query\n{sparql}\n" \
-            f"for function {fn_name} with error:\n{e}"
 
-    assert isinstance(result, list)
-    result_set = set(result[i][0] for i in range(1, len(result)))
-    (
-        entity_map,
-        property_map,
-        other,
-        literal
-    ) = manager.parse_autocompletion_result(result_set)
-
-    formatted = []
-    for obj_type, name in obj_types.items():
-        if obj_type == "property":
-            alts = manager.get_property_alternatives(
-                id_map=property_map,
-                query=query,
-                k=args.search_top_k
-            )
-        elif obj_type == "entity":
-            alts = manager.get_entity_alternatives(
-                id_map=entity_map,
-                query=query,
-                k=args.search_top_k
-            )
-        elif obj_type == "literal":
-            alts = manager.get_temporary_index_alternatives(
-                data=literal,
-                query=query,
-                k=args.search_top_k
-            )
-        else:
-            alts = manager.get_temporary_index_alternatives(
-                data=other,
-                query=query,
-                k=args.search_top_k
-            )
-
-        formatted.append(format_alternatives(
-            name,
-            alts,
-            args.search_top_k
-        ))
-
-    return "\n\n".join(formatted)
-
-
-def search_constrained(manager: KgManager, args: dict, k: int) -> str:
-    search_for = args.get("search_for", None)
-    search_for_constr = args.get(search_for, None)
+def search_constrained(
+    manager: KgManager,
+    args: dict,
+    k: int,
+    max_results: int = 1024 * 64
+) -> str:
+    search_for = args["search_for"]
+    search_for_constr = args[search_for]
     if search_for_constr is not None:
         return f"Cannot search for {search_for} and constrain it to \
-{search_for_constr} at the same time"
+{search_for_constr} at the same time."
 
-    subject_constr = args["subject"]
-    property_constr = args["property"]
-    object_constr = args["object"]
-    if (
-        subject_constr is None
-        and property_constr is None
-        and object_constr is None
-    ):
+    positions = ["subject", "property", "object"]
+    if all(args[p] is None for p in positions):
         return "At least one of subject, property, or object should be \
-constrained"
+constrained."
+
+    for p in positions:
+        constr = args[p]
+        if constr is None:
+            continue
+
+        if manager.process_iri_or_literal(constr) is None:
+            return f"Constraint {constr} for {p} is not a valid iri or \
+literal. Consider fixing the {p} format and searching again."
+
+    subject_constr = args["subject"] or "?s"
+    property_constr = args["property"] or "?p"
+    object_constr = args["object"] or "?o"
 
     query = args["query"]
     select_var = f"?{search_for[0]}"
 
     sparql = f"""\
-SELECT {select_var} WHERE {{
-    {subject_constr or "?s"}
-    {property_constr or "?p"}
-    {object_constr or "?o"}
-}}"""
+SELECT DISTINCT {select_var} WHERE {{
+    {subject_constr}
+    {property_constr}
+    {object_constr}
+}}
+LIMIT {max_results + 1}"""
     try:
         result = query_sparql(manager, sparql)
     except Exception as e:
@@ -471,6 +395,14 @@ SELECT {select_var} WHERE {{
 
     assert isinstance(result, list)
     result_set = set(result[i][0] for i in range(1, len(result)))
+    if len(result_set) > max_results:
+        if search_for == "property":
+            search_for = "propertie"
+        return f"Constrained search returned more than the maximum \
+number of {search_for}s of {max_results:,} before further filtering with \
+the query '{query}'. Consider constraining the search further if possible or \
+try out using a standalone SPARQL query via the execute_sparql function."
+
     (
         entity_map,
         property_map,
@@ -549,14 +481,14 @@ def query_sparql(manager: KgManager, sparql: str) -> AskResult | SelectResult:
     return manager.execute_sparql(sparql)
 
 
-def execute_sparql(manager: KgManager, sparql: str) -> str:
+def execute_sparql(manager: KgManager, sparql: str, k: int) -> str:
     try:
         result = query_sparql(manager, sparql)
     except Exception as e:
         return f"Failed executing SPARQL query\n{sparql}\n" \
             f"with error:\n{e}"
 
-    return manager.format_sparql_result(result)
+    return manager.format_sparql_result(result, show_top_bottom_rows=k)
 
 
 def format_alternatives(
@@ -698,7 +630,8 @@ wdt:P36 ?capital }"
             "role": "tool",
             "content": execute_sparql(
                 manager,
-                "SELECT ?capital WHERE { wd:Q142 wdt:P36 ?capital }"
+                "SELECT ?capital WHERE { wd:Q142 wdt:P36 ?capital }",
+                args.top_bottom
             ),
             "tool_call_id": "3"
         },
@@ -810,6 +743,7 @@ def run(args: argparse.Namespace) -> None:
             ],  # type: ignore
             # response_format=response_format(initial),  # type: ignore
             parallel_tool_calls=False,
+            temperature=args.temperature
         )  # type: ignore
 
         choice = response.choices[0]

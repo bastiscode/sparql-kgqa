@@ -902,6 +902,10 @@ Answer: (?:yes|no)"""
                 formatted = self.format_iri(data, prefixes, safe=False)
                 return "iri", formatted, None
 
+            case "PNAME_LN":
+                formatted = self.format_iri(data, prefixes, safe=False)
+                return "iri", formatted, None
+
             case lit if lit.startswith("STRING"):
                 return "literal", self.format_string_literal(data), None
 
