@@ -1,6 +1,7 @@
 from collections import Counter
 from urllib.parse import quote_plus
 import time
+import requests
 import tempfile
 import os
 import random
@@ -18,26 +19,28 @@ from search_index.mapping import Mapping as SearchIndexMapping
 from text_utils.api.table import generate_table
 
 from sparql_kgqa.api.utils import Chat
-from sparql_kgqa.sparql.utils import (
-    AskResult,
-    find_all,
-    find,
-    parse_to_string,
-    prettify,
-    query_qlever
-)
-
 
 LOGGER = logging.getLogger(__name__)
 CLEAN_PATTERN = re.compile(r"\s+", flags=re.MULTILINE)
 
-
-def clean(s: str) -> str:
-    return CLEAN_PATTERN.sub(" ", s).strip()
-
+QLEVER_API = "https://qlever.cs.uni-freiburg.de/api"
+QLEVER_URLS = {
+    "wikidata": f"{QLEVER_API}/wikidata",
+    "dbpedia": f"{QLEVER_API}/dbpedia",
+    "freebase": f"{QLEVER_API}/freebase",
+    "dblp": f"{QLEVER_API}/dblp",
+    "orkg": f"{QLEVER_API}/orkg",
+}
 
 OBJ_TYPES = ["entity", "property", "other", "literal"]
 SEARCH_TOKEN = "<|search|>"
+
+SelectResult = list[list[str]]
+AskResult = bool
+
+
+def clean(s: str) -> str:
+    return CLEAN_PATTERN.sub(" ", s).strip()
 
 
 def get_index_dir() -> str | None:
@@ -73,6 +76,153 @@ def is_prefix_of_iri(prefix: str, iri: str) -> bool:
     # e.g. <http://www.wikidata.org/entity/
     # and  <http://www.wikidata.org/entity/statement/
     return iri.startswith(prefix) and iri.find("/", len(prefix)) == -1
+
+
+def parse_to_string(parse: dict) -> str:
+    def _flatten(parse: dict) -> str:
+        if "value" in parse:
+            return parse["value"]
+        elif "children" in parse:
+            children = []
+            for p in parse["children"]:
+                child = _flatten(p)
+                if child != "":
+                    children.append(child)
+            return " ".join(children)
+        else:
+            return ""
+
+    return _flatten(parse)
+
+
+def find(
+    parse: dict,
+    name: str | set[str],
+    skip: set[str] | None = None
+) -> dict | None:
+    return next(find_all(parse, name, skip), None)
+
+
+def find_all(
+    parse: dict,
+    name: str | set[str],
+    skip: set[str] | None = None
+) -> Iterator[dict]:
+    if skip is not None and parse["name"] in skip:
+        return
+    elif isinstance(name, str) and parse["name"] == name:
+        yield parse
+    elif isinstance(name, set) and parse["name"] in name:
+        yield parse
+    else:
+        for child in parse.get("children", []):
+            yield from find_all(child, name, skip)
+
+
+def ask_to_select(
+    sparql: str,
+    parser: grammar.LR1Parser,
+    var: str | None = None,
+    distinct: bool = False
+) -> str | None:
+    parse = parser.parse(sparql)
+
+    sub_parse = find(parse, "QueryType")
+    assert sub_parse is not None
+
+    ask_query = sub_parse["children"][0]
+    if ask_query["name"] != "AskQuery":
+        return None
+
+    # we have an ask query
+    # find the first var or iri
+    if var is not None:
+        ask_var = next(
+            filter(
+                lambda p: p["children"][0]["value"] == var,
+                find_all(sub_parse, "Var", skip={"SubSelect"})
+            ),
+            None
+        )
+        assert ask_var is not None, "could not find specified var"
+    else:
+        ask_var = find(sub_parse, "Var", skip={"SubSelect"})
+
+    if ask_var is not None:
+        var = ask_var["children"][0]["value"]
+        # ask query has a var, convert to select
+        ask_query["name"] = "SelectQuery"
+        # replace ASK terminal with SelectClause
+        sel_clause = [
+            {
+                'name': 'SELECT',
+                'value': 'SELECT',
+            },
+            {
+                'name': 'DISTINCT',
+                'value': 'DISTINCT' * distinct
+            },
+            {
+                'name': 'Var',
+                'value': var
+            }
+        ]
+        ask_query["children"][0] = {
+            'name': 'SelectClause',
+            'children': sel_clause
+        }
+        return parse_to_string(parse)
+
+    # ask query does not have a var, convert to select
+    # and introduce own var
+    # generate unique var name with uuid
+    var = f"?{uuid.uuid4().hex}"
+    iri = find(sub_parse, "iri", skip={"SubSelect"})
+    assert iri is not None, "could not find an iri in ask query"
+
+    child = iri["children"][0]
+    if child["name"] == "PrefixedName":
+        iri = child["children"][0]["value"]
+        child["children"][0]["value"] = var
+    elif child["name"] == "IRIREF":
+        iri = child["value"]
+        child["value"] = var
+    else:
+        raise ValueError(f"unsupported iri format {iri}")
+
+    where_clause = ask_query["children"][2]
+    group_graph_pattern = find(
+        where_clause,
+        "GroupGraphPattern",
+        skip={"SubSelect"}
+    )
+    assert group_graph_pattern is not None
+    values = {
+        "name": "CustomValuesClause",
+        "value": f"VALUES {var} {{ {iri} }}"
+    }
+    group_graph_pattern["children"].insert(1, values)
+
+    ask_query["name"] = "SelectQuery"
+    # replace ASK terminal with SelectClause
+    ask_query["children"][0] = {
+        'name': 'SelectClause',
+        'children': [
+            {
+                'name': 'SELECT',
+                'value': 'SELECT',
+            },
+            {
+                'name': 'DISTINCT',
+                'value': 'DISTINCT' * distinct
+            },
+            {
+                'name': 'Var',
+                'value': var
+            }
+        ],
+    }
+    return parse_to_string(parse)
 
 
 class Alternative:
@@ -323,7 +473,7 @@ class KgManager:
         self.iri_literal_parser = grammar.LR1Parser(
             *load_iri_and_literal_grammar()
         )
-        self.search_pattern = re.compile(r"<\|search\|>")
+        self.search_pattern = re.compile(re.escape(SEARCH_TOKEN))
 
     def get_constraint(
         self,
@@ -343,36 +493,101 @@ class KgManager:
         is_prefix: bool = False
     ) -> str:
         try:
-            sparql = self.fix_prefixes(
-                sparql,
-                is_prefix
-            )
-            return prettify(
-                sparql,
-                self.parser,
-                indent,
-                is_prefix
-            )
+            if is_prefix:
+                parse, rest = self.parser.prefix_parse(
+                    (sparql + " ").encode(),
+                    skip_empty=True,
+                    collapse_single=False
+                )
+                rest_str = bytes(rest[:-1]).decode(errors="replace")
+            else:
+                parse = self.parser.parse(
+                    sparql,
+                    skip_empty=True,
+                    collapse_single=False
+                )
+                rest_str = ""
         except Exception as e:
-            LOGGER.debug(
-                f"prettify failed for sparql '{sparql}': {e}"
-            )
+            LOGGER.debug(f"prettifying sparql '{sparql}' failed: {e}")
             return sparql
+
+        # some simple rules for prettifing:
+        # 1. new lines after prologue (PrologueDecl) and triple blocks
+        # (TriplesBlock)
+        # 2. new lines after { and before }
+        # 3. increase indent after { and decrease before }
+
+        assert indent > 0, "indent step must be positive"
+        current_indent = 0
+        s = ""
+
+        def _pretty(parse: dict) -> bool:
+            nonlocal current_indent
+            nonlocal s
+            newline = False
+
+            if "value" in parse:
+                if parse["name"] in [
+                    "UNION",
+                    "MINUS"
+                ]:
+                    s = s.rstrip() + " "
+
+                elif parse["name"] == "}":
+                    current_indent -= indent
+                    s = s.rstrip()
+                    s += "\n" + " " * current_indent
+
+                elif parse["name"] == "{":
+                    current_indent += indent
+
+                s += parse["value"]
+
+            elif len(parse["children"]) == 1:
+                newline = _pretty(parse["children"][0])
+
+            else:
+                for i, child in enumerate(parse["children"]):
+                    if i > 0 and not newline and child["name"] != "(":
+                        s += " "
+
+                    newline = _pretty(child)
+
+            if not newline and parse["name"] in [
+                "{",
+                "}",
+                ".",
+                "PrefixDecl",
+                "BaseDecl",
+                "TriplesBlock",
+                "GroupClause",
+                "HavingClause",
+                "OrderClause",
+                "LimitClause",
+                "OffsetClause",
+                "GraphPatternNotTriples"
+            ]:
+                s += "\n" + " " * current_indent
+                newline = True
+
+            return newline
+
+        newline = _pretty(parse)
+        if newline:
+            s = s.rstrip()
+
+        return (s.strip() + " " + rest_str).strip()
 
     def autocomplete_prefix(
         self,
         prefix: str,
-        qlever_endpoint: str | None = None,
-        limit: int | None = None,
-        max_retries: int = 1
-    ) -> set[str] | None:
+        limit: int | None = None
+    ) -> str | None:
         """
-        Autocomplete the SPARQL prefix,
-        run it against Qlever and return the IRIs
-        and literals that can come next.
-        Assumes that the prefix is a valid SPARQL prefix.
+        Autocomplete the SPARQL prefix by running
+        it against the SPARQL grammar parser.
+        Assumes the prefix is somewhere in a triple block.
         """
-
         # autocomplete by adding 1 to 3 variables to the query,
         # completing and then parsing it to find the current position
         # in the query triple block
@@ -461,53 +676,58 @@ class KgManager:
 
             break
 
-        if final_query is None:
-            return None
+        return final_query
 
-        uris = None
-        try:
-            result = query_qlever(
-                final_query,
-                self.parser,
-                self.kg,
-                qlever_endpoint,
-                timeout=10.0,
-                max_retries=max_retries
-            )
-            assert isinstance(result, list)
-            uris = set(result[i][0] for i in range(1, len(result)))
-        except Exception as e:
-            LOGGER.debug(
-                "querying qlever within autocomplete_prefix "
-                f"failed for prefix '{prefix}': {e}"
-            )
-        return uris
-
-    def get_formatted_result(
+    def execute_sparql(
         self,
         sparql: str,
-        qlever_endpoint: str | None = None,
-        max_retries: int = 1,
+        endpoint: str | None = None,
+        timeout: float | tuple[float, float] | None = None,
+        max_retries: int = 1
+    ) -> SelectResult | AskResult:
+        # ask_to_select returns None if sparql is not an ask query
+        select_sparql = ask_to_select(sparql, self.parser)
+        sparql = select_sparql or sparql
+
+        if endpoint is None:
+            assert self.kg in QLEVER_URLS, \
+                f"no QLever endpoint for knowledge graph {self.kg}"
+            endpoint = QLEVER_URLS[self.kg]
+
+        response = None
+        for _ in range(max(1, max_retries)):
+            response = requests.post(
+                endpoint,
+                headers={
+                    "Content-type": "application/sparql-query",
+                    "Accept": "text/tab-separated-values"
+                },
+                data=sparql,
+                timeout=timeout
+            )
+            if response.status_code == 200:
+                break
+
+        assert response is not None, "cannot happen"
+
+        if response.status_code != 200:
+            exception = response.json().get("exception", "")
+            raise RuntimeError(exception)
+
+        result = response.text.splitlines()
+        if select_sparql is not None:
+            # > 1 because of header
+            return AskResult(len(result) > 1)
+        else:
+            return [row.split("\t") for row in result]
+
+    def format_sparql_result(
+        self,
+        result: SelectResult | AskResult,
         show_top_bottom_rows: int = 10,
         show_columns: int = 5,
     ) -> str:
         # run sparql against endpoint, format result as string
-        try:
-            result = query_qlever(
-                sparql,
-                self.parser,
-                self.kg,
-                qlever_endpoint,
-                timeout=10.0,
-                max_retries=max_retries
-            )
-        except Exception as e:
-            LOGGER.debug(
-                f"querying qlever within get_formatted_result "
-                f"failed for sparql '{sparql}': {e}"
-            )
-            return f"Query failed with error:\n{e}"
-
         if isinstance(result, AskResult):
             return f"Ask query returned {result}"
 
@@ -1022,72 +1242,19 @@ Answer: (?:yes|no)"""
             infos=[i for i in infos.split(";;;") if i != ""]
         )
 
-    def get_selection_alternatives(
+    def parse_autocompletion_result(
         self,
-        prefix: str,
-        search: str,
-        k: int,
-        max_candidates: int | None = None,
-        endpoint: str | None = None,
-        max_retries: int = 1,
-        skip_autocomplete: bool = False,
-        **kwargs: Any
-    ) -> dict[str, list[Alternative]]:
-        result = None
-        try:
-            if not skip_autocomplete:
-                result = self.autocomplete_prefix(
-                    prefix,
-                    endpoint,
-                    max_candidates + 1
-                    if max_candidates is not None else None,
-                    max_retries
-                )
-                LOGGER.debug(
-                    f"Got {len(result or set())} results "
-                    f"for prefix {prefix}"
-                )
-        except Exception as e:
-            LOGGER.debug(
-                f"autocomplete_prefix failed for prefix '{prefix}': "
-                f"{e}"
-            )
-
-        all_alternatives = {}
-
-        if result is None or len(result) > (max_candidates or len(result)):
-            # select result being None means that there is no way
-            # to constrain / filter the knowledge graph with the
-            # current prefix, just search in the full index
-            # with the guess;
-            # we also do this if the number of results is greater
-            # than max_results, because creating an extra index
-            # for that would be too expensive
-            for index_type, index, map in [
-                ("entity", self.entity_index, self.entity_mapping),
-                ("property", self.property_index, self.property_mapping)
-            ]:
-                alternatives = []
-                matching = set()
-                for id, _ in index.find_matches(search, **kwargs)[:k]:
-                    matching.add(id)
-                    alternatives.append(self.build_alternative(
-                        index.get_row(id),
-                        map
-                    ))
-
-                all_alternatives[index_type] = alternatives
-
-            return all_alternatives
-
+        result: set[str],
+    ) -> tuple[
+        dict[int, set[str]],
+        dict[int, set[str]],
+        list[tuple[str, str, str]],
+        list[tuple[str, str, str]]
+    ]:
         entities = {}
         properties = {}
         others = []
         literals = []
-
-        # split result into entities, properties, other iris
-        # and literals
-        start = time.perf_counter()
         for res in result:
             processed = self.process_iri_or_literal(res)
             if processed is None:
@@ -1125,115 +1292,243 @@ Answer: (?:yes|no)"""
 
         # sort others by whether they are from one of our known
         # prefixes or not
-        others.sort(
-            key=lambda item: self.find_longest_prefix(item[0]) is None
+        others.sort(key=lambda item: self.find_longest_prefix(item[0]) is None)
+        return entities, properties, others, literals
+
+    def get_autocompletion_result(
+        self,
+        prefix: str,
+        max_candidates: int | None = None,
+        endpoint: str | None = None,
+        timeout: float | tuple[float, float] | None = None,
+        max_retries: int = 1,
+    ) -> set[str] | None:
+        sparql = self.autocomplete_prefix(
+            prefix,
+            max_candidates + 1
+            if max_candidates is not None else None,
+        )
+        if sparql is None:
+            return None
+
+        result = self.execute_sparql(
+            sparql,
+            endpoint,
+            timeout,
+            max_retries
+        )
+        # some checks
+        if not isinstance(result, list):
+            return None
+        elif not all(len(row) == 1 for row in result):
+            return None
+
+        # skip header
+        return {result[i][0] for i in range(1, len(result))}
+
+    def get_entity_alternatives(
+        self,
+        id_map: dict[int, set[str]] | None = None,
+        query: str | None = None,
+        k: int = 10,
+    ) -> list[Alternative]:
+        return self.get_index_alternatives(
+            self.entity_index,
+            self.entity_mapping,
+            id_map,
+            query,
+            k
         )
 
-        end = time.perf_counter()
-        LOGGER.debug(
-            f"parsing {len(result):,} results "
-            f"took {1000 * (end - start):.2f}ms"
+    def get_property_alternatives(
+        self,
+        id_map: dict[int, set[str]] | None = None,
+        query: str | None = None,
+        k: int = 10,
+    ) -> list[Alternative]:
+        return self.get_index_alternatives(
+            self.property_index,
+            self.property_mapping,
+            id_map,
+            query,
+            k
         )
 
-        start = time.perf_counter()
-        for index_type, id_map, index, map in [
-            ("entity", entities, self.entity_index, self.entity_mapping),
-            ("property", properties, self.property_index,
-             self.property_mapping)
-        ]:
-            alternatives = []
+    def get_index_alternatives(
+        self,
+        index: SearchIndex,
+        mapping: Mapping | None = None,
+        id_map: dict[int, set[str]] | None = None,
+        query: str | None = None,
+        k: int = 10,
+    ) -> list[Alternative]:
+        if id_map is not None:
+            index = index.sub_index_by_ids(list(id_map))
 
-            # build sub index and search in it
-            matching = set()
-            sub_index = index.sub_index_by_ids(list(id_map))
-            for id, _ in sub_index.find_matches(search, **kwargs)[:k]:
-                matching.add(id)
-                alternatives.append(self.build_alternative(
-                    sub_index.get_row(id),
-                    map,
-                    id_map[id]
-                ))
+        if query is None:
+            if id_map is None:
+                ids = list(range(min(k, len(index))))
+            else:
+                ids = sorted(id_map)[:k]
+        else:
+            ids = [id for id, _ in index.find_matches(query)[:k]]
 
-            # fill alternatives with popular non-matching entities
-            # or properties; lower ids mean higher scores, so just
-            # iterate over sorted id_map keys while ignoring already
-            # machted ids, and breaking when reaching k total datapoints
-            # for id in sorted(id_map):
-            #     if len(alternatives) >= k:
-            #         break
-            #     elif id in matching:
-            #         continue
-            #
-            #     alternatives.append(self.build_alternative(
-            #         index.get_row(id),
-            #         id_map[id]
-            #     ))
+        return [
+            self.build_alternative(
+                index.get_row(id),
+                mapping,
+                id_map[id] if id_map is not None else None
+            ) for id in ids
+        ]
 
-            all_alternatives[index_type] = alternatives
-
-        end = time.perf_counter()
-        LOGGER.debug(
-            f"preparing entities and properties "
-            f"took {1000 * (end - start):.2f}ms"
-        )
-
-        start = time.perf_counter()
+    def get_temporary_index_alternatives(
+        self,
+        data: list[tuple[str, str, str]],
+        query: str | None = None,
+        k: int = 10,
+        index_cls: Type[SearchIndex] = PrefixIndex,
+    ) -> list[Alternative]:
         with tempfile.TemporaryDirectory() as temp_dir:
-            for index_type, raw in [
-                ("other", others),
-                ("literal", literals)
-            ]:
-                # build index and search in it
-                alternatives = []
+            # build index and search in it
+            data_file = os.path.join(temp_dir, "data.tsv")
+            index_dir = os.path.join(temp_dir, "index")
+            os.makedirs(index_dir, exist_ok=True)
+            LOGGER.debug(
+                f"building temporary index in {temp_dir} "
+                f"with data at {data_file} and index in {index_dir}"
+            )
 
-                data_file = os.path.join(temp_dir, f"{index_type}_data.tsv")
-                index_dir = os.path.join(temp_dir, f"{index_type}_index")
-                os.makedirs(index_dir, exist_ok=True)
+            # write raw data to temp file in temp dir
+            with open(data_file, "w") as f:
+                f.write("label\tscore\tsynonyms\tid\tinfos\n")
+                for res, formatted, info in data:
+                    f.write(f"{formatted}\t0\t\t{res}\t{info}\n")
+
+            index_cls.build(
+                data_file,
+                index_dir,
+
+            )
+            index = index_cls.load(data_file, index_dir)
+            if query is None:
+                ids = list(range(min(k, len(data))))
+            else:
+                ids = [id for id, _ in index.find_matches(query)[:k]]
+
+            return [self.build_alternative(index.get_row(id)) for id in ids]
+
+    def get_selection_alternatives(
+        self,
+        prefix: str,
+        search: str,
+        k: int,
+        max_candidates: int | None = None,
+        endpoint: str | None = None,
+        timeout: float | tuple[float, float] | None = None,
+        max_retries: int = 1,
+        skip_autocomplete: bool = False,
+    ) -> dict[str, list[Alternative]]:
+        result = None
+        try:
+            if not skip_autocomplete:
+                result = self.get_autocompletion_result(
+                    prefix,
+                    max_candidates + 1
+                    if max_candidates is not None else None,
+                    endpoint,
+                    timeout,
+                    max_retries
+                )
                 LOGGER.debug(
-                    f"building temporary {index_type} index in {temp_dir} "
-                    f"with data at {data_file} and index in {index_dir}"
+                    f"Got {len(result or set())} results "
+                    f"for prefix {prefix}"
                 )
+        except Exception as e:
+            LOGGER.debug(
+                f"autocompleting prefix {prefix} failed: {e}"
+            )
 
-                # write raw data to temp file in temp dir
-                with open(data_file, "w") as f:
-                    f.write("label\tscore\tsynonyms\tid\tinfos\n")
-                    for res, formatted, info in raw:
-                        f.write(f"{formatted}\t0\t\t{res}\t{info}\n")
-
-                QGramIndex.build(
-                    data_file,
-                    index_dir,
+        if result is None or len(result) > (max_candidates or len(result)):
+            # select result being None means that there is no way
+            # to constrain / filter the knowledge graph with the
+            # current prefix, just search in the full index
+            # with the guess;
+            # we also do this if the number of results is greater
+            # than max_results, because creating an extra index
+            # for that would be too expensive
+            return {
+                "entity": self.get_index_alternatives(
+                    self.entity_index,
+                    self.entity_mapping,
+                    None,
+                    search,
+                    k
+                ),
+                "property": self.get_index_alternatives(
+                    self.property_index,
+                    self.property_mapping,
+                    None,
+                    search,
+                    k
                 )
-                index = QGramIndex.load(data_file, index_dir)
-                matching = set()
-                for id, _ in index.find_matches(search, **kwargs)[:k]:
-                    matching.add(id)
-                    alternatives.append(self.build_alternative(
-                        index.get_row(id)
-                    ))
+            }
 
-                # fill alternatives with non-matching other iris
-                # or literals
-                # id = 0
-                # while len(alternatives) < k and id < len(index):
-                #     if id in matching:
-                #         id += 1
-                #         continue
-                #
-                #     alternatives.append(self.build_alternative(
-                #         index.get_row(id), None
-                #     ))
-                #     id += 1
-
-                all_alternatives[index_type] = alternatives
-
+        # split result into entities, properties, other iris
+        # and literals
+        start = time.perf_counter()
+        (
+            entity_map,
+            property_map,
+            others,
+            literals
+        ) = self.parse_autocompletion_result(result)
         end = time.perf_counter()
         LOGGER.debug(
-            f"preparing other iris and literals "
+            f"parsing {len(result):,} autocompletion results "
             f"took {1000 * (end - start):.2f}ms"
         )
 
-        return all_alternatives
+        start = time.perf_counter()
+        alternatives = {
+            "entity": self.get_index_alternatives(
+                self.entity_index,
+                self.entity_mapping,
+                entity_map,
+                search,
+                k
+            ),
+            "property": self.get_index_alternatives(
+                self.property_index,
+                self.property_mapping,
+                property_map,
+                search,
+                k
+            )
+        }
+        end = time.perf_counter()
+        LOGGER.debug(
+            f"getting entity and property alternatives "
+            f"took {1000 * (end - start):.2f}ms"
+        )
+
+        start = time.perf_counter()
+        alternatives["other"] = self.get_temporary_index_alternatives(
+            others,
+            search,
+            k
+        )
+        alternatives["literal"] = self.get_temporary_index_alternatives(
+            literals,
+            search,
+            k,
+        )
+        end = time.perf_counter()
+        LOGGER.debug(
+            f"getting other and literal alternatives "
+            f"took {1000 * (end - start):.2f}ms"
+        )
+
+        return alternatives
 
     def get_selection_prompt_and_regex(
         self,

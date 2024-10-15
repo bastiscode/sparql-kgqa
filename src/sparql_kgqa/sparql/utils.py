@@ -5,7 +5,6 @@ import os
 import uuid
 import collections
 import copy
-import requests
 from collections import Counter
 from importlib import resources
 from typing import Iterator
@@ -600,82 +599,6 @@ def ask_to_select(
         ],
     }
     return parse_to_string(parse)
-
-
-def query_qlever(
-    sparql_query: str,
-    parser: grammar.LR1Parser,
-    kg: str,
-    qlever_endpoint: str | None,
-    timeout: float | tuple[float, float] | None = None,
-    max_retries: int = 1
-) -> SelectResult | AskResult:
-    # ask_to_select return None if sparql is not an ask query
-    select_query = ask_to_select(sparql_query, parser)
-
-    sparql_query = select_query or sparql_query
-
-    if qlever_endpoint is None:
-        assert kg in QLEVER_URLS, \
-            f"no QLever endpoint for knowledge graph {kg}"
-        qlever_endpoint = QLEVER_URLS[kg]
-
-    response = None
-    for _ in range(max(1, max_retries)):
-        response = requests.post(
-            qlever_endpoint,
-            headers={
-                "Content-type": "application/sparql-query",
-                "Accept": "text/tab-separated-values"
-            },
-            data=sparql_query,
-            timeout=timeout
-        )
-        if response.status_code == 200:
-            break
-
-    assert response is not None, "cannot happen"
-
-    if response.status_code != 200:
-        exception = response.json().get("exception", "")
-        raise RuntimeError(exception)
-
-    result = response.text.splitlines()
-    if select_query is not None:
-        # > 1 because of header
-        return AskResult(len(result) > 1)
-    else:
-        return [row.split("\t") for row in result]
-
-
-def query_entities(
-    sparql: str,
-    parser: grammar.LR1Parser,
-    kg: str = "wikidata",
-    qlever_endpoint: str | None = None
-) -> tuple[Counter | None, str | None]:
-    if qlever_endpoint is None:
-        assert kg in QLEVER_URLS, \
-            f"no QLever endpoint for knowledge graph {kg}"
-        qlever_endpoint = QLEVER_URLS[kg]
-
-    try:
-        result = query_qlever(
-            sparql,
-            parser,
-            kg,
-            qlever_endpoint,
-            timeout=(5.0, 60.0)
-        )
-        if isinstance(result, AskResult):
-            return Counter({result: 1}), None
-        else:
-            return Counter((
-                tuple(result[i]) for i in range(1, len(result))
-            )), None
-
-    except Exception as e:
-        return None, str(e)
 
 
 def calc_f1(
