@@ -129,9 +129,8 @@ explicitly defining them:
 You should follow a step-by-step process to generate the SPARQL query:
 1. Generate a high-level plan about what you need to do to answer the question.
 2. Find all entities and properties needed to answer the question. \
-Try to use already identified entities and properties to find more relevant \
-entities and properties as much as possible by using the appropriate \
-functions provided to you.
+Try to use already identified entities and properties to constrain your \
+search for new entities and properties as much as possible.
 3. Iteratively try to find a single SPARQL query answering the question, \
 starting with simple queries first and making them more complex as needed.
 4. Once you have a final working SPARQL query, execute it and formulate your \
@@ -245,195 +244,52 @@ wdt:P106 ?job }\")"
     if fn_set == "execute_search":
         return fns
 
-    fns.extend([
-        {
-            "name": "find_outgoing_properties",
-            "description": """\
-Search for outgoing properties of a subject entity. If query is specified, \
-then return only properties matching the query.""",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "subject": {
-                        "type": "string",
-                        "description": "The subject entity"
-                    },
-                    "property_query": {
-                        "type": ["string", "null"],
-                        "description": "The search query to filter properties"
-                    }
+    fns.append({
+        "name": "search_constrained",
+        "description": "Search for entities, properties or literals in the \
+knowledge graph while respecting some given constraints in terms of known \
+entities, properties, or literals.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "subject": {
+                    "type": ["string", "null"],
+                    "description": "An optional known subject entity"
                 },
-                "required": ["subject", "property_query"],
-                "additionalProperties": False
+                "property": {
+                    "type": ["string", "null"],
+                    "description": "An optional known property"
+                },
+                "object": {
+                    "type": ["string", "null"],
+                    "description": "An optional known object entity or literal"
+                },
+                "search_for": {
+                    "type": "string",
+                    "enum": ["subject", "property", "object"],
+                    "description": "What to search for (the respective \
+constraining parameter should be null)",
+                },
+                "query": {
+                    "type": ["string", "null"],
+                    "description": "An optional search query, used to filter \
+the search results"
+                }
             },
-            "strict": True,
-            "example": "find_outgoing_properties(subject=\"wd:Q937\") or \
-find_outgoing_properties(subject=\"wd:Q937\", property_query=\"occupation\")"
+            "required": [
+                "subject",
+                "property",
+                "object",
+                "search_for",
+                "query"
+            ],
+            "additionalProperties": False
         },
-        {
-            "name": "find_incoming_properties",
-            "description": """\
-Search for properties leading to an object entity. If query is specified, \
-then return only properties matching the query.""",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "object": {
-                        "type": "string",
-                        "description": "The object entity"
-                    },
-                    "property_query": {
-                        "type": ["string", "null"],
-                        "description": "The search query to filter properties"
-                    }
-                },
-                "required": ["object", "property_query"],
-                "additionalProperties": False
-            },
-            "strict": True,
-            "example": "find_incoming_properties(object=\"wd:Q937\") or \
-find_incoming_properties(object=\"wd:Q937\", property_query=\"father\")"
-        },
-        {
-            "name": "find_connecting_properties",
-            "description": """\
-Search for properties connecting a subject entity with an object entity or \
-literal.""",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "subject": {
-                        "type": "string",
-                        "description": "The subject entity"
-                    },
-                    "object": {
-                        "type": "string",
-                        "description": "The object entity or literal"
-                    },
-                },
-                "required": ["subject", "object"],
-                "additionalProperties": False
-            },
-            "strict": True,
-            "example": "find_connecting_properties(subject=\"wd:Q937\", \
-object=\"wd:Q39\")"
-        },
-        {
-            "name": "find_object_entities_and_literals",
-            "description": """\
-Search for object entities and literals that are connected to a given subject \
-entity by a given property. If query is specified, then return only entities \
-and literals matching the query.""",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "subject": {
-                        "type": "string",
-                        "description": "The subject entity"
-                    },
-                    "property": {
-                        "type": "string",
-                        "description": "The connecting property"
-                    },
-                    "object_query": {
-                        "type": ["string", "null"],
-                        "description": "The search query to filter object \
-entities and literals"
-                    }
-                },
-                "required": ["subject", "property", "object_query"],
-                "additionalProperties": False
-            },
-            "strict": True,
-            "example": "find_object_entities_and_literals(subject=\"wd:Q937\"\
-, property=\"wdt:P106\") or find_object_entities_and_literals(subject=\
-\"wd:Q937\", property=\"wdt:P106\", object_query=\"politician\")"
-        },
-        {
-            "name": "find_subject_entities",
-            "description": """\
-Search for entities that are connected to a given object entity or literal by \
-a given property. If query is specified, then return only entities matching \
-the query.""",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "object": {
-                        "type": "string",
-                        "description": "The object entity or literal"
-                    },
-                    "property": {
-                        "type": "string",
-                        "description": "The connecting property"
-                    },
-                    "subject_query": {
-                        "type": ["string", "null"],
-                        "description": "The search query to filter subject \
-entities"
-                    }
-                },
-                "required": ["property", "object", "subject_query"],
-                "additionalProperties": False
-            },
-            "strict": True,
-            "example": "find_subject_entities(object=\"wd:Q937\", property=\
-\"wdt:P22\") or find_subject_entities(object=\"wd:Q937\", property=\"wdt:P22\"\
-, subject_query=\"Hans\")"
-        },
-        {
-            "name": "find_subject_entities_with_property",
-            "description": """\
-Search for entities that have a given outgoing property. If query is \
-specified, then return only entities matching the query.""",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "property": {
-                        "type": "string",
-                        "description": "The outgoing property"
-                    },
-                    "subject_query": {
-                        "type": ["string", "null"],
-                        "description": "The search query to filter subject \
-entities"
-                    }
-                },
-                "required": ["property", "subject_query"],
-                "additionalProperties": False
-            },
-            "strict": True,
-            "example": "find_subject_entities_with_property(property=\
-\"wdt:P106\") or find_subject_entities_with_property(property=\
-\"wdt:P106\", subject_query=\"Peter\")"
-        },
-        {
-            "name": "find_object_entities_and_literals_with_property",
-            "description": """\
-Search for object entities and literals that have a given incoming property. \
-If query is specified, then return only entities and literals matching the \
-query.""",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "property": {
-                        "type": "string",
-                        "description": "The incoming property"
-                    },
-                    "object_query": {
-                        "type": ["string", "null"],
-                        "description": "The search query to filter object \
-entities and literals"
-                    },
-                },
-                "required": ["property", "object_query"],
-                "additionalProperties": False
-            },
-            "strict": True,
-            "example": "find_object_entities_and_literals_with_property(\
-property=\"wdt:P106\") or find_object_entities_and_literals_with_property(\
-property=\"wdt:P106\", object_query=\"politician\")"
-        }
-    ])
+        "strict": True,
+        "example": "search_constrained(subject=\"wd:Q937\", \
+property=\"wdt:P106\", object=None, search_for=\"object\") to get a list of \
+Albert Einstein's jobs"
+    })
     return fns
 
 
@@ -457,6 +313,13 @@ def execute_fn(
         return search_properties(
             manager,
             fn_args["query"],
+            args.search_top_k
+        )
+
+    elif fn_name == "search_constrained":
+        return search_constrained(
+            manager,
+            fn_args,
             args.search_top_k
         )
 
@@ -573,16 +436,117 @@ SELECT ?o WHERE {{ ?s {fn_args["property"]} ?o }}"""
     return "\n\n".join(formatted)
 
 
+def search_constrained(manager: KgManager, args: dict, k: int) -> str:
+    search_for = args.get("search_for", None)
+    search_for_constr = args.get(search_for, None)
+    if search_for_constr is not None:
+        return f"Cannot search for {search_for} and constrain it to \
+{search_for_constr} at the same time"
+
+    subject_constr = args["subject"]
+    property_constr = args["property"]
+    object_constr = args["object"]
+    if (
+        subject_constr is None
+        and property_constr is None
+        and object_constr is None
+    ):
+        return "At least one of subject, property, or object should be \
+constrained"
+
+    query = args["query"]
+    select_var = f"?{search_for[0]}"
+
+    sparql = f"""\
+SELECT {select_var} WHERE {{
+    {subject_constr or "?s"}
+    {property_constr or "?p"}
+    {object_constr or "?o"}
+}}"""
+    try:
+        result = query_sparql(manager, sparql)
+    except Exception as e:
+        return f"Failed executing SPARQL query\n{sparql}\n" \
+            f"with error:\n{e}"
+
+    assert isinstance(result, list)
+    result_set = set(result[i][0] for i in range(1, len(result)))
+    (
+        entity_map,
+        property_map,
+        other,
+        literal
+    ) = manager.parse_autocompletion_result(result_set)
+
+    kg = manager.kg.capitalize()
+
+    formatted = []
+    if search_for == "subject":
+        alts = manager.get_entity_alternatives(
+            id_map=entity_map,
+            query=query,
+            k=k
+        )
+        formatted.append(format_alternatives(
+            f"{kg} entities",
+            alts,
+            k
+        ))
+
+    elif search_for == "property":
+        alts = manager.get_property_alternatives(
+            id_map=property_map,
+            query=query,
+            k=k
+        )
+        formatted.append(format_alternatives(
+            f"{kg} properties",
+            alts,
+            k
+        ))
+        alts = manager.get_temporary_index_alternatives(
+            data=other,
+            query=query,
+            k=k
+        )
+        formatted.append(format_alternatives(
+            "other properties",
+            alts,
+            k
+        ))
+
+    elif search_for == "object":
+        alts = manager.get_entity_alternatives(
+            id_map=entity_map,
+            query=query,
+            k=k
+        )
+        formatted.append(format_alternatives(
+            f"{kg} entities",
+            alts,
+            k
+        ))
+        alts = manager.get_temporary_index_alternatives(
+            data=literal,
+            query=query,
+            k=k
+        )
+        formatted.append(format_alternatives(
+            "literals",
+            alts,
+            k
+        ))
+
+    return "\n\n".join(formatted)
+
+
 def query_sparql(manager: KgManager, sparql: str) -> AskResult | SelectResult:
     try:
         sparql = manager.fix_prefixes(sparql)
     except Exception as e:
-        raise RuntimeError(f"Failed to fix prefixes in SPARQL query:\n{e}")
+        raise RuntimeError(f"Failed to fix prefixes:\n{e}")
 
-    try:
-        return manager.execute_sparql(sparql)
-    except Exception as e:
-        raise RuntimeError(f"Failed to execute SPARQL query:\n{e}")
+    return manager.execute_sparql(sparql)
 
 
 def execute_sparql(manager: KgManager, sparql: str) -> str:
