@@ -1,25 +1,12 @@
 import argparse
 import json
-import sys
 import os
 from typing import TextIO
 from urllib.parse import unquote_plus
 
 from tqdm import tqdm
 
-from sparql_kgqa.sparql.utils import clean
-from sparql_kgqa.sparql.utils2 import (
-    KgManager,
-    WikidataPropertyMapping,
-    get_kg_manager,
-    load_index_and_mapping
-)
-
-
-def get_prompt(kg: str) -> str:
-    return f"""\
-Generate a natural language SPARQL query over {kg}:
-"""
+from sparql_kgqa.sparql.utils2 import clean
 
 
 def prepare_file(
@@ -73,6 +60,9 @@ def prepare(args: argparse.Namespace):
             continue
         files[source] = open(out_file, "w")
 
+    if not files:
+        return
+
     num_total = 0
     num_duplicate = 0
     seen = set()
@@ -97,7 +87,7 @@ def prepare(args: argparse.Namespace):
 
     print(
         f"{num_duplicate:,} / {num_total:,} duplicate "
-        f"({num_duplicate / num_total:.1%})"
+        f"({num_duplicate / max(num_total, 1):.1%})"
     )
     print(f"sources: {sources}")
 

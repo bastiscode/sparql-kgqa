@@ -16,9 +16,7 @@ for b in data/*; do
             --input $b/test_input.jsonl \
             --target $b/test_target.jsonl \
             --prediction $f \
-            --kg wikidata \
             --allow-subset \
-            --prediction-format jsonl \
             ${@:2}
         echo ""
     done

@@ -2,20 +2,22 @@ import argparse
 import os
 import json
 from typing import Any
+from collections import Counter
 
 from tqdm import tqdm
 
 from text_utils.io import load_text_file
-from text_utils import grammar
 
 
-from sparql_kgqa.sparql.utils import (
-    QLEVER_URLS,
-    calc_f1
-)
 from sparql_kgqa.sparql.utils2 import (
+    QLEVER_URLS,
+    AskResult,
+    KgManager,
     run_parallel,
-    load_sparql_grammar,
+    get_index_dir,
+    load_index_and_mapping,
+    get_kg_manager,
+    WikidataPropertyMapping
 )
 
 
@@ -28,18 +30,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--allow-subset", action="store_true")
     parser.add_argument("--empty-target-invalid", action="store_true")
     parser.add_argument(
-        "--kg",
+        "-kg",
+        "--knowledge_graph",
         type=str,
         choices=list(QLEVER_URLS),
         default="wikidata"
     )
-    parser.add_argument("--qlever-endpoint", type=str, default=None)
+    parser.add_argument("--entities", type=str)
+    parser.add_argument("--properties", type=str)
+    parser.add_argument("--index-type", type=str,
+                        choices=["prefix", "qgram"],
+                        default="prefix")
+    parser.add_argument("--endpoint", type=str, default=None)
+    parser.add_argument("--timeout", type=float, default=None)
+    parser.add_argument("--max-retries", type=int, default=1)
     parser.add_argument("-n", "--num-workers", type=int, default=None)
+    parser.add_argument("--limit", type=int, default=None)
     parser.add_argument(
         "--prediction-format",
         type=str,
         choices=["text", "jsonl"],
-        default="text"
+        default="jsonl"
     )
     return parser.parse_args()
 
@@ -48,6 +59,83 @@ def create_dir(path: str):
     dirname = os.path.dirname(path)
     if dirname:
         os.makedirs(dirname, exist_ok=True)
+
+
+def get_result_set_or_error(
+    sparql: str,
+    manager: KgManager,
+    endpoint: str | None = None,
+    timeout: float | None = None,
+    max_retries: int = 1
+) -> tuple[Counter | None, str | None]:
+    try:
+        result = manager.execute_sparql(
+            sparql,
+            endpoint,
+            timeout,
+            max_retries
+        )
+    except Exception as e:
+        return None, str(e)
+
+    if isinstance(result, AskResult):
+        return Counter({result: 1}), None
+    else:
+        return Counter(
+            tuple(result[i])
+            for i in range(1, len(result))
+        ), None
+
+
+def calc_f1(
+    pred: str,
+    target: str,
+    manager: KgManager,
+    allow_empty_target: bool = True,
+    endpoint: str | None = None,
+    timeout: float | None = None,
+    max_retries: int = 1
+) -> tuple[float | None, str | Counter, str | Counter]:
+    pred_set, pred_err = get_result_set_or_error(
+        pred,
+        manager,
+        endpoint,
+        timeout,
+        max_retries
+    )
+    target_set, target_err = get_result_set_or_error(
+        target,
+        manager,
+        endpoint,
+        timeout,
+        max_retries
+    )
+    if pred_err is not None or target_err is not None:
+        return (
+            None,
+            pred_err or pred_set,
+            target_err or target_set
+        )  # type: ignore
+
+    assert pred_set is not None and target_set is not None
+    if len(target_set) == 0 and not allow_empty_target:
+        return None, pred_set, "target set is empty"
+
+    if len(pred_set) == 0 and len(target_set) == 0:
+        return 1.0, pred_set, target_set
+
+    tp = (pred_set & target_set).total()
+    fp = (pred_set - target_set).total()
+    fn = (target_set - pred_set).total()
+    # calculate precision, recall and f1
+    if tp > 0:
+        p = tp / (tp + fp)
+        r = tp / (tp + fn)
+        f1 = 2 * p * r / (p + r)
+    else:
+        f1 = 0.0
+
+    return f1, pred_set, target_set
 
 
 def evaluate(args: argparse.Namespace):
@@ -82,15 +170,53 @@ def evaluate(args: argparse.Namespace):
             assert len(targets) == len(predictions), \
                 "expected same number of predictions and targets"
 
-        gram, lex = load_sparql_grammar()
-        parser = grammar.LR1Parser(gram, lex)
+        if args.limit:
+            targets = targets[:args.limit]
+            inputs = inputs[:args.limit]
+            predictions = predictions[:args.limit]
+
+        kg = args.knowledge_graph
+        index_dir = get_index_dir()
+        if args.entities is None:
+            assert index_dir is not None, \
+                "SEARCH_INDEX_DIR environment variable must be set if " \
+                "--entities is not provided"
+            args.entities = os.path.join(index_dir, f"{kg}-entities")
+
+        if args.properties is None:
+            assert index_dir is not None, \
+                "SEARCH_INDEX_DIR environment variable must be set if " \
+                "--properties is not provided"
+            args.properties = os.path.join(index_dir, f"{kg}-properties")
+
+        ent_index, ent_mapping = load_index_and_mapping(
+            args.entities,
+            args.index_type,
+        )
+        is_wikidata = args.knowledge_graph == "wikidata"
+        prop_index, prop_mapping = load_index_and_mapping(
+            args.properties,
+            args.index_type,
+            # wikidata properties need special mapping
+            # because of wdt, p, ps, pq, ... variants
+            WikidataPropertyMapping if is_wikidata else None,
+        )
+
+        manager = get_kg_manager(
+            kg,
+            ent_index,
+            prop_index,
+            ent_mapping,
+            prop_mapping
+        )
 
         incorrect = {}
         invalid = {}
         f1s = []
         iter = (
-            (pred, target, parser,
-             not args.empty_target_invalid, args.kg, args.qlever_endpoint)
+            (pred, target, manager,
+             not args.empty_target_invalid,
+             args.endpoint, args.timeout, args.max_retries)
             for pred, target in zip(predictions, targets)
         )
         for i, (f1, pred, tgt) in tqdm(

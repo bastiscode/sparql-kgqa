@@ -139,7 +139,7 @@ class SPARQLGenerator(TextProcessor):
         self._examples: Examples | None = None
         self._num_examples: int = 3
         self._max_failures: int = 3
-        self._min_tries: int | None = None
+        self._min_tries: int = 0
         self._max_alternatives: int = 3
         self._default_system_message: str | None = self.cfg["inference"].get(
             "system_message", None
@@ -177,6 +177,7 @@ class SPARQLGenerator(TextProcessor):
 
         messages = self._manager.get_sparql_continuation_prompt(
             question,
+            "",
             "",
             examples=examples
         )
@@ -350,7 +351,7 @@ class SPARQLGenerator(TextProcessor):
             for i, val in enumerate(current):
                 s = state(i)
                 if s == "sparql":
-                    pfx += " " * (i > 0) + val[0]
+                    pfx += val[0]
                 elif s == "select" and typ == "natural":
                     pfx += val[0]
                 elif s == "select" and typ == "sparql":
@@ -360,7 +361,10 @@ class SPARQLGenerator(TextProcessor):
                         identifier,
                         variant
                     )
-                    pfx += iri or identifier
+                    pfx += self._manager.format_iri(
+                        iri or identifier,
+                        safe=True
+                    )
                 # skip search, done and none states
             return pfx
 
@@ -419,7 +423,7 @@ class SPARQLGenerator(TextProcessor):
 
             # force different path if not
             # enough were already tried
-            min_tries_reached = num >= (self._min_tries or num)
+            min_tries_reached = num >= self._min_tries
 
             if s == "done":
                 accept = self._judge_sparql(
@@ -490,13 +494,7 @@ class SPARQLGenerator(TextProcessor):
             # update state
             s = state()
 
-        sparql = prefix("sparql")
-        try:
-            sparql = self._manager.fix_prefixes(sparql)
-        except Exception:
-            pass
-
-        yield sparql
+        yield prefix("sparql")
 
     def _judge_sparql(
         self,
@@ -549,6 +547,7 @@ class SPARQLGenerator(TextProcessor):
         assert self._sparql_constraint is not None, "sparql constraint not set"
         prompt = self._manager.get_sparql_continuation_prompt(
             question,
+            sparql_prefix,
             natural_prefix,
             selections=selections,
             failures=failures
@@ -605,7 +604,7 @@ class SPARQLGenerator(TextProcessor):
         self.logger.debug(
             "continuation:\n"
             f"{prompt[-2]['text']}"
-            f"{(prompt[-1]['text'] + ' ' + cont + search_token).lstrip()}"
+            f"{(prompt[-1]['text'] + cont + search_token).lstrip()}"
         )
         return cont, search_token
 
@@ -763,7 +762,7 @@ class SPARQLGenerator(TextProcessor):
         disable_subgraph_constraint: bool = False,
         disable_sparql_judgement: bool = False,
         max_failures: int = 3,
-        min_tries: int = 1,
+        min_tries: int = 0,
         num_examples: int = 3,
         select_k: int = 8,
         select_max_candidates: int | None = 4096,

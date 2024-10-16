@@ -256,6 +256,24 @@ class Alternative:
     def get_identifier(self) -> str:
         return self.short_identifier or self.identifier
 
+    def get_label(self) -> str:
+        if self.label:
+            return self._clip(self.label)
+
+        return self.get_identifier()
+
+    def has_variants(self) -> bool:
+        return bool(self.variants)
+
+    def get_sparql_label(self, variant: str | None = None) -> str:
+        identifier = self.get_variant_or_identifier(variant)
+        assert identifier is not None, \
+            "failed to get sparql label due to invalid variant"
+        if not self.label:
+            return identifier
+
+        return f"{self.get_label()} ({identifier})"
+
     def get_variant_or_identifier(
         self,
         variant: str | None
@@ -288,43 +306,37 @@ class Alternative:
         max_aliases: int = 5,
         add_infos: bool = True
     ) -> str:
-        if self.variants:
-            s = ", ".join(sorted(self.variants.values()))
-        else:
-            s = self.get_identifier()
+        s = self.get_label()
 
-        added_infos = []
-        if self.label:
-            added_infos.append(("name", self._clip(self.label)))
+        desc = []
+        if self.variants:
+            desc.append("/".join(sorted(self.variants.values())))
+        elif self.label:
+            desc.append(self.get_identifier())
 
         if add_infos and self.infos:
-            info_str = ", ".join(self._clip(info) for info in self.infos)
-            added_infos.append(("infos", info_str))
+            desc.extend(self._clip(info) for info in self.infos)
+
+        if desc:
+            s += " (" + ", ".join(desc) + ")"
 
         if add_infos and max_aliases and self.aliases:
             aliases = random.sample(
                 self.aliases,
                 min(len(self.aliases), max_aliases or len(self.aliases))
             )
-            alias_str = ", ".join(self._clip(a) for a in aliases)
-            added_infos.append(("aliases", alias_str))
-
-        if added_infos:
-            s += " (" + " | ".join(
-                f"{key}: {val}"
-                for key, val in added_infos
-            ) + ")"
+            s += ", also known as " + ", ".join(self._clip(a) for a in aliases)
 
         return s
 
     def get_regex(self) -> str:
-        if not self.variants:
-            return re.escape(self.get_identifier())
-
-        return "(?:" + "|".join(map(
-            re.escape,
-            self.variants.values()
-        )) + ")"
+        r = re.escape(self.get_label())
+        if self.variants:
+            r += re.escape(" (") + "(?:" + "|".join(map(
+                re.escape,
+                self.variants.values()
+            )) + ")" + re.escape(")")
+        return r
 
 
 class NoneAlternative(Alternative):
@@ -694,6 +706,8 @@ class KgManager:
         select_sparql = ask_to_select(sparql, self.parser)
         sparql = select_sparql or sparql
 
+        sparql = self.fix_prefixes(sparql)
+
         if endpoint is None:
             assert self.kg in QLEVER_URLS, \
                 f"no QLever endpoint for knowledge graph {self.kg}"
@@ -806,18 +820,27 @@ for the first {show_columns} variables at maximum below:
         question: str,
         sparql: str,
         natural_sparql: str,
-        qlever_endpoint: str | None = None,
+        endpoint: str | None = None,
+        timeout: float | None = None,
         max_retries: int = 1,
         max_rows: int = 10,
         max_columns: int = 5,
     ) -> tuple[str, str]:
-        result = self.get_formatted_result(
-            sparql,
-            qlever_endpoint,
-            max_retries,
-            max_rows,
-            max_columns
-        )
+        try:
+            result = self.execute_sparql(
+                sparql,
+                endpoint,
+                timeout,
+                max_retries
+            )
+            formatted = self.format_sparql_result(
+                result,
+                max_rows,
+                max_columns
+            )
+        except Exception as e:
+            formatted = f"SPARQL execution failed:\n{e}"
+
         prompt = f"""\
 Given a question and a SPARQL query together with its execution result, \
 judge whether the SPARQL query makes sense for answering the question. \
@@ -831,7 +854,7 @@ SPARQL query over {self.kg}:
 {natural_sparql}
 
 Result:
-{result}
+{formatted}
 """
         regex = """\
 Explanation: [\\w ]{1, 128}
@@ -1565,17 +1588,13 @@ Answer: (?:yes|no)"""
                 continue
 
             idx, alt = nxt
-            lab = alt.get_variant_or_identifier(variant)
-            if lab is None:
-                continue
-
             offset = sum(
                 len(alternatives[obj_type])
                 for obj_type in OBJ_TYPES[:OBJ_TYPES.index(obj_type)]
                 if obj_type in alternatives
             )
             idx = offset + idx
-            failed.append(f"{idx + 1}. {lab}")
+            failed.append(f"{idx + 1}. {alt.get_sparql_label(variant)}")
 
         prefix = prefix + "..."
 
@@ -1665,7 +1684,7 @@ Search query:
         if failed:
             failed = "\n".join(failed)
             prompt += f"""
-The following alternatives were already tried and unsuccessful:
+The following alternatives were already selected and unsuccessful:
 {failed}
 """
 
@@ -1680,7 +1699,7 @@ Selection:
         alternatives: dict[str, list[Alternative]],
         result: str
     ) -> tuple[str, tuple[str, str, str | None]] | None:
-        num, name = result.split(". ", 1)
+        num, selection = result.split(". ", 1)
         idx = int(num)
         if idx == 0:
             # the none alternative was selected
@@ -1698,9 +1717,16 @@ Selection:
             offset += obj_alts
 
         alternative = alternatives[obj_type][idx - offset]
-        identifier = alternative.identifier
-        variant = alternative.get_variant_by_name(name)
-        return name, (obj_type, identifier, variant)
+
+        if alternative.has_variants():
+            label = alternative.get_label()
+            rest = selection[len(label) + 2:-1]
+            variant = alternative.get_variant_by_name(rest)
+        else:
+            variant = None
+
+        name = "<" + alternative.get_sparql_label(variant) + ">"
+        return name, (obj_type, alternative.identifier, variant)
 
     def get_search_prompt_and_regex(
         self,
@@ -1818,7 +1844,8 @@ SPARQL query:
     def get_sparql_continuation_prompt(
         self,
         question: str,
-        prefix: str,
+        sparql_prefix: str,
+        natural_prefix: str,
         selections: list[tuple[str, str, str | None]] | None = None,
         failures: set[str] | None = None,
         examples: list[tuple[str, str]] | None = None
@@ -1833,7 +1860,7 @@ Question:
 {question.strip()}
 
 SPARQL prefix over {self.kg}:
-{prefix}
+{natural_prefix}
 """
 
         if selections:
@@ -1844,7 +1871,7 @@ SPARQL prefix over {self.kg}:
         if failures:
             failed = "\n".join(failures)
             prompt += f"""
-The following continuations were already tried and unsuccessful:
+The following continuations were already generated and unsuccessful:
 {failed}
 """
         prompt += """
@@ -1879,7 +1906,7 @@ Continuation:
             },
             {
                 "role": "assistant",
-                "text": prefix,
+                "text": sparql_prefix,
                 "partial": True
             }
         ])

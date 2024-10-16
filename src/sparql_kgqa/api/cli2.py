@@ -42,6 +42,8 @@ class SPARQLGenerationCli(TextProcessingCli):
             disable_sparql_constraint=self.args.no_sparql_constraint,
             disable_subgraph_constraint=self.args.no_subgraph_constraint,
             disable_sparql_judgement=self.args.no_sparql_judgement,
+            max_failures=self.args.max_failures,
+            min_tries=self.args.min_tries,
             num_examples=self.args.num_examples,
             select_k=self.args.select_k,
             select_max_candidates=self.args.select_max_candidates,
@@ -228,6 +230,20 @@ def main():
         default=3,
         help="Number of examples to add to the generation process; top_k "
         "for example index, randomly selected for examples file"
+    )
+    parser.add_argument(
+        "--min-tries",
+        type=int,
+        default=0,
+        help="Minimum number of different paths to take in each state before "
+        "backtracking"
+    )
+    parser.add_argument(
+        "--max-failures",
+        type=int,
+        default=3,
+        help="Maximum number of failures allowed in each state before "
+        "backtracking"
     )
     parser.add_argument(
         "--no-sparql-constraint",
