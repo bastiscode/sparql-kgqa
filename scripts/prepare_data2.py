@@ -42,6 +42,7 @@ def parse_args() -> argparse.Namespace:
     data.add_argument("--kqa-pro", type=str)
     data.add_argument("--qa-wiki", type=str)
     data.add_argument("--qlever-wikidata", type=str)
+    data.add_argument("--instruct-to-sparql", action="store_true")
     # data.add_argument("--time-questions", type=str)
     # data.add_argument("--cron-questions", type=str)
     # data.add_argument("--mkqa", type=str)
@@ -319,6 +320,36 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
                 query, sparql = line.split("\t")
                 samples.append(Sample(query, sparql))
         output["train"] = samples
+
+    elif args.instruct_to_sparql:
+        kg = "wikidata"
+        full = load_dataset("PaDaS-Lab/Instruct-to-SPARQL", split="full")
+        full_ids = set(item["id"] for item in full)
+        split_ids = set()
+        for split in ["train", "validation", "test"]:
+            items = load_dataset("PaDaS-Lab/Instruct-to-SPARQL", split=split)
+            split = SPLIT_RENAME.get(split, split)
+            assert split in {"train", "val", "test"}
+            samples = []
+            for item in items:
+                split_ids.add(item["id"])
+                for q in item["instructions"]:
+                    samples.append(Sample(q, item["sparql_query"]))
+                    if split == "test":
+                        break
+
+            output[split] = samples
+
+        not_found = full_ids - split_ids
+        for item in full:
+            if item["id"] not in not_found:
+                continue
+
+            # add not found items to train
+            # not found usually means the sparql timed out
+            # during execution
+            for q in item["instructions"]:
+                output["train"].append(Sample(q, item["sparql_query"]))
 
     elif args.grail_qa:
         kg = "freebase"

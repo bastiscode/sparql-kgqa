@@ -95,6 +95,13 @@ wikidata-data:
 	--properties $(WD_PROP) \
 	--progress \
 	-n $(NUM_PROCESSES) $(OVERWRITE)
+	@python scripts/prepare_data2.py \
+	--instruct-to-sparql \
+	--output data/wikidata-instruct-to-sparql \
+	--entities $(WD_ENT) \
+	--properties $(WD_PROP) \
+	--progress \
+	-n $(NUM_PROCESSES) $(OVERWRITE)
 	@mkdir -p data/wikidata-query-logs
 	@python scripts/prepare_wikidata_query_logs.py \
 	--files data/raw/wikidata-query-logs/*.tsv \
