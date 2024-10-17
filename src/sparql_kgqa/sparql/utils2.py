@@ -12,7 +12,7 @@ from importlib import resources
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Iterable, Iterator, Type, TypeVar, Any
 
-from text_utils import grammar, tokenization
+from text_utils import grammar
 from search_index import PrefixIndex, QGramIndex
 from search_index.index import SearchIndex
 from search_index.mapping import Mapping as SearchIndexMapping
@@ -465,16 +465,15 @@ class KgManager:
         "wikibase": "<http://wikiba.se/ontology#",
     }
     custom_prefixes: dict[str, str] = {}
+    kg: str = "kg"
 
     def __init__(
         self,
-        kg: str,
         entity_index: SearchIndex,
         property_index: SearchIndex,
         entity_mapping: Mapping,
         property_mapping: Mapping,
     ):
-        self.kg = kg
         assert entity_index.get_type() == property_index.get_type(), \
             "entity and property index types do not match"
         self.entity_index = entity_index
@@ -594,11 +593,13 @@ class KgManager:
         self,
         prefix: str,
         limit: int | None = None
-    ) -> str | None:
+    ) -> tuple[str, str] | None:
         """
         Autocomplete the SPARQL prefix by running
         it against the SPARQL grammar parser.
         Assumes the prefix is somewhere in a triple block.
+        Returns the full SPARQL query and the current position
+        in the query triple block (subject, property, object).
         """
         # autocomplete by adding 1 to 3 variables to the query,
         # completing and then parsing it to find the current position
@@ -635,8 +636,10 @@ class KgManager:
             selclause["children"][-1] = {"name": "Var", "value": f"?{var}"}
             fix_latest_subselect(subsel, var)
 
-        final_query = None
-        for num_vars in range(1, 4):
+        positions = ["subject", "property", "object"]
+        query_and_position = None
+        for num_vars in range(len(positions), 0, -1):
+            position = positions[num_vars - 1]
             vars = [uuid.uuid4().hex for _ in range(num_vars)]
 
             full_query = prefix.strip() + " " + " ".join(f"?{v}" for v in vars)
@@ -650,11 +653,6 @@ class KgManager:
                 parse = self.parser.parse(full_query)
             except Exception:
                 continue
-
-            if len(vars) == 3:
-                # empty triple / subject position, everything is allowed
-                # here so return None
-                return None
 
             # replace all select vars with the last one
             select_var = vars[0]
@@ -691,9 +689,10 @@ class KgManager:
             if limit is not None:
                 final_query += f" LIMIT {limit}"
 
+            query_and_position = (final_query, position)
             break
 
-        return final_query
+        return query_and_position
 
     def execute_sparql(
         self,
@@ -1274,7 +1273,7 @@ Answer: (?:yes|no)"""
             infos=[i for i in infos.split(";;;") if i != ""]
         )
 
-    def parse_autocompletion_result(
+    def parse_autocompletions(
         self,
         result: set[str],
     ) -> tuple[
@@ -1334,29 +1333,38 @@ Answer: (?:yes|no)"""
         endpoint: str | None = None,
         timeout: float | tuple[float, float] | None = None,
         max_retries: int = 1,
-    ) -> set[str] | None:
-        sparql = self.autocomplete_prefix(
+    ) -> tuple[set[str] | None, str] | None:
+        autocompletion = self.autocomplete_prefix(
             prefix,
             max_candidates + 1
             if max_candidates is not None else None,
         )
-        if sparql is None:
+        if autocompletion is None:
             return None
 
-        result = self.execute_sparql(
-            sparql,
-            endpoint,
-            timeout,
-            max_retries
-        )
+        sparql, position = autocompletion
+        try:
+            result = self.execute_sparql(
+                sparql,
+                endpoint,
+                timeout,
+                max_retries
+            )
+        except Exception as e:
+            LOGGER.debug(
+                f"getting autocompletion result with sparql\n{sparql}\n"
+                f"failed with error:\n{e}"
+            )
+            return None, position
+
         # some checks
         if not isinstance(result, list):
-            return None
+            return None, position
         elif not all(len(row) == 1 for row in result):
-            return None
+            return None, position
 
         # skip header
-        return {result[i][0] for i in range(1, len(result))}
+        return {result[i][0] for i in range(1, len(result))}, position
 
     def get_entity_alternatives(
         self,
@@ -1480,30 +1488,42 @@ Answer: (?:yes|no)"""
                 f"autocompleting prefix {prefix} failed: {e}"
             )
 
-        if result is None or len(result) > (max_candidates or len(result)):
-            # select result being None means that there is no way
+        if result is None:
+            objects, position = None, None
+        else:
+            objects, position = result
+
+        # determine which alternatives to add
+        # entities can be subjects and objects
+        add_entities = (position or "subject") in ["subject", "object"]
+        # properties can only be properties
+        add_properties = (position or "property") == "property"
+        # literals can only be objects
+        add_literals = (position or "object") == "object"
+        # other iris can always be subjects, properties, and objects
+
+        alternatives = {}
+        if objects is None or len(objects) > (max_candidates or len(objects)):
+            # objects being None means that there is no way
             # to constrain / filter the knowledge graph with the
             # current prefix, just search in the full index
-            # with the guess;
+            # with the search query;
             # we also do this if the number of results is greater
             # than max_results, because creating an extra index
             # for that would be too expensive
-            return {
-                "entity": self.get_index_alternatives(
-                    self.entity_index,
-                    self.entity_mapping,
-                    None,
-                    search,
-                    k
-                ),
-                "property": self.get_index_alternatives(
-                    self.property_index,
-                    self.property_mapping,
+            if add_entities:
+                alternatives["entity"] = self.get_entity_alternatives(
                     None,
                     search,
                     k
                 )
-            }
+            if add_properties:
+                alternatives["property"] = self.get_property_alternatives(
+                    None,
+                    search,
+                    k
+                )
+            return alternatives
 
         # split result into entities, properties, other iris
         # and literals
@@ -1513,30 +1533,26 @@ Answer: (?:yes|no)"""
             property_map,
             others,
             literals
-        ) = self.parse_autocompletion_result(result)
+        ) = self.parse_autocompletions(objects)
         end = time.perf_counter()
         LOGGER.debug(
-            f"parsing {len(result):,} autocompletion results "
+            f"parsing {len(objects):,} autocompletion results "
             f"took {1000 * (end - start):.2f}ms"
         )
 
         start = time.perf_counter()
-        alternatives = {
-            "entity": self.get_index_alternatives(
-                self.entity_index,
-                self.entity_mapping,
+        if add_entities:
+            alternatives["entity"] = self.get_entity_alternatives(
                 entity_map,
                 search,
                 k
-            ),
-            "property": self.get_index_alternatives(
-                self.property_index,
-                self.property_mapping,
+            )
+        if add_properties:
+            alternatives["property"] = self.get_property_alternatives(
                 property_map,
                 search,
                 k
             )
-        }
         end = time.perf_counter()
         LOGGER.debug(
             f"getting entity and property alternatives "
@@ -1549,11 +1565,12 @@ Answer: (?:yes|no)"""
             search,
             k
         )
-        alternatives["literal"] = self.get_temporary_index_alternatives(
-            literals,
-            search,
-            k,
-        )
+        if add_literals:
+            alternatives["literal"] = self.get_temporary_index_alternatives(
+                literals,
+                search,
+                k,
+            )
         end = time.perf_counter()
         LOGGER.debug(
             f"getting other and literal alternatives "
@@ -1914,54 +1931,9 @@ Continuation:
         return messages
 
 
-def get_kg_manager(
-    kg: str,
-    entity_index: SearchIndex,
-    property_index: SearchIndex,
-    entity_mapping: Mapping,
-    property_mapping: Mapping,
-) -> KgManager:
-    if kg == "freebase":
-        return FreebaseManager(
-            entity_index,
-            property_index,
-            entity_mapping,
-            property_mapping
-        )
-    elif kg == "dbpedia":
-        return DBPediaManager(
-            entity_index,
-            property_index,
-            entity_mapping,
-            property_mapping
-        )
-    elif kg == "dblp":
-        return DBLPManager(
-            entity_index,
-            property_index,
-            entity_mapping,
-            property_mapping
-        )
-    elif kg == "wikidata":
-        assert isinstance(property_mapping, WikidataPropertyMapping)
-        return WikidataManager(
-            entity_index,
-            property_index,
-            entity_mapping,
-            property_mapping
-        )
-    elif kg == "orkg":
-        return ORKGManager(
-            entity_index,
-            property_index,
-            entity_mapping,
-            property_mapping
-        )
-    else:
-        raise ValueError(f"unknown kg {kg}")
-
-
 class DBLPManager(KgManager):
+    kg = "dblp"
+
     def __init__(
         self,
         entity_index: SearchIndex,
@@ -1970,7 +1942,6 @@ class DBLPManager(KgManager):
         property_mapping: Mapping,
     ):
         super().__init__(
-            "dblp",
             entity_index,
             property_index,
             entity_mapping,
@@ -1983,6 +1954,8 @@ class DBLPManager(KgManager):
 
 
 class FreebaseManager(KgManager):
+    kg = "freebase"
+
     def __init__(
         self,
         entity_index: SearchIndex,
@@ -1991,7 +1964,6 @@ class FreebaseManager(KgManager):
         property_mapping: Mapping,
     ):
         super().__init__(
-            "freebase",
             entity_index,
             property_index,
             entity_mapping,
@@ -2004,6 +1976,8 @@ class FreebaseManager(KgManager):
 
 
 class DBPediaManager(KgManager):
+    kg = "dbpedia"
+
     def __init__(
         self,
         entity_index: SearchIndex,
@@ -2012,7 +1986,6 @@ class DBPediaManager(KgManager):
         property_mapping: Mapping,
     ):
         super().__init__(
-            "dbpedia",
             entity_index,
             property_index,
             entity_mapping,
@@ -2027,6 +2000,8 @@ class DBPediaManager(KgManager):
 
 
 class ORKGManager(KgManager):
+    kg = "orkg"
+
     def __init__(
         self,
         entity_index: SearchIndex,
@@ -2035,7 +2010,6 @@ class ORKGManager(KgManager):
         property_mapping: Mapping,
     ):
         super().__init__(
-            "orkg",
             entity_index,
             property_index,
             entity_mapping,
@@ -2052,6 +2026,7 @@ class ORKGManager(KgManager):
 
 class WikidataManager(KgManager):
     property_mapping_cls = WikidataPropertyMapping
+    kg = "wikidata"
 
     def __init__(
         self,
@@ -2061,7 +2036,6 @@ class WikidataManager(KgManager):
         property_mapping: WikidataPropertyMapping,
     ):
         super().__init__(
-            "wikidata",
             entity_index,
             property_index,
             entity_mapping,
@@ -2077,6 +2051,100 @@ class WikidataManager(KgManager):
                 for long, short in WIKIDATA_PROPERTY_VARIANTS.items()
             }
         })
+
+
+KG_TO_MANAGER: dict[str, Type[KgManager]] = {
+    "freebase": FreebaseManager,
+    "dbpedia": DBPediaManager,
+    "dblp": DBLPManager,
+    "wikidata": WikidataManager,
+    "orkg": ORKGManager,
+}
+
+
+def get_kg_manager(
+    kg: str,
+    entity_index: SearchIndex,
+    property_index: SearchIndex,
+    entity_mapping: Mapping,
+    property_mapping: Mapping,
+) -> KgManager:
+    if kg not in KG_TO_MANAGER:
+        raise ValueError(f"unknown knowledge graph {kg}")
+
+    kg_manager_cls = KG_TO_MANAGER[kg]
+    return kg_manager_cls(
+        entity_index,
+        property_index,
+        entity_mapping,
+        property_mapping
+    )
+
+
+def load_index_and_mapping(
+    index_dir: str,
+    index_type: str,
+    mapping_cls: Type[Mapping] | None = None,
+    **kwargs: Any
+) -> tuple[SearchIndex, Mapping]:
+    if index_type == "prefix":
+        index_cls = PrefixIndex
+    elif index_type == "qgram":
+        index_cls = QGramIndex
+    else:
+        raise ValueError(f"unknown index type {index_type}")
+
+    index = index_cls.load(
+        os.path.join(index_dir, "data.tsv"),
+        os.path.join(index_dir, index_type),
+        **kwargs
+    )
+
+    if mapping_cls is None:
+        mapping_cls = Mapping
+
+    mapping = mapping_cls.load(
+        index,
+        os.path.join(index_dir, index_type, "index.mapping")
+    )
+    return index, mapping
+
+
+def load_kg_manager(
+    kg: str,
+    entities: str | None = None,
+    properties: str | None = None,
+    index_type: str = "prefix"
+) -> KgManager:
+    index_dir = get_index_dir()
+    if entities is None:
+        assert index_dir is not None, \
+            "SEARCH_INDEX_DIR environment variable not set"
+        entities = os.path.join(index_dir, f"{kg}-entities")
+
+    if properties is None:
+        assert index_dir is not None, \
+            "SEARCH_INDEX_DIR environment variable not set"
+        properties = os.path.join(index_dir, f"{kg}-properties")
+
+    ent_index, ent_mapping = load_index_and_mapping(
+        entities,
+        index_type
+    )
+
+    is_wikidata = kg == "wikidata"
+    prop_index, prop_mapping = load_index_and_mapping(
+        properties,
+        index_type,
+        WikidataPropertyMapping if is_wikidata else None
+    )
+    return get_kg_manager(
+        kg,
+        ent_index,
+        prop_index,
+        ent_mapping,
+        prop_mapping
+    )
 
 
 def run_parallel(
@@ -2138,43 +2206,3 @@ def partition_by(
     return a, b
 
 
-def load_index_and_mapping(
-    index_dir: str,
-    index_type: str,
-    mapping_cls: Type[Mapping] | None = None,
-    **kwargs: Any
-) -> tuple[SearchIndex, Mapping]:
-    if index_type == "prefix":
-        index_cls = PrefixIndex
-    elif index_type == "qgram":
-        index_cls = QGramIndex
-    else:
-        raise ValueError(f"unknown index type {index_type}")
-
-    index = index_cls.load(
-        os.path.join(index_dir, "data.tsv"),
-        os.path.join(index_dir, index_type),
-        **kwargs
-    )
-
-    if mapping_cls is None:
-        mapping_cls = Mapping
-    mapping = mapping_cls.load(
-        index,
-        os.path.join(index_dir, index_type, "index.mapping")
-    )
-    return index, mapping
-
-
-def de_tokenize_incremental(
-    tokenizer: tokenization.Tokenizer,
-    initial_token_ids: list[int]
-) -> Callable[[list[int]], str]:
-    initial = tokenizer.de_tokenize(initial_token_ids)
-
-    def _inc(token_ids: list[int]):
-        assert all(i == t for i, t in zip(initial_token_ids, token_ids))
-        dec = tokenizer.de_tokenize(token_ids)
-        return dec[len(initial):]
-
-    return _inc

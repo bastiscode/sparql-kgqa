@@ -729,21 +729,8 @@ class SPARQLGenerator(TextProcessor):
         else:
             raise ValueError("either examples or example_index must be set")
 
-    def set_kg_indices(
-        self,
-        kg: str,
-        entity_index: SearchIndex,
-        property_index: SearchIndex,
-        entity_mapping: Mapping,
-        property_mapping: Mapping
-    ) -> None:
-        self._manager = get_kg_manager(
-            kg,
-            entity_index,
-            property_index,
-            entity_mapping,
-            property_mapping
-        )
+    def set_kg_manager(self, manager: KgManager) -> None:
+        self._manager = manager
         self._sparql_constraint = self._manager.get_constraint(
             self._continuations,
             self._exact or self._force_exact

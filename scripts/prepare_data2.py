@@ -24,6 +24,7 @@ from sparql_kgqa.sparql.utils2 import (
     get_kg_manager,
     clean,
     load_index_and_mapping,
+    load_kg_manager,
     partition_by,
 )
 
@@ -592,6 +593,14 @@ def get_search_query(question: str, name: str, index_type: str) -> str:
     return " ".join(keywords)
 
 
+def is_lit_or_other(obj_type: str) -> bool:
+    return obj_type in ["literal", "other"]
+
+
+def is_ent_or_prop(obj_type: str) -> bool:
+    return obj_type in ["entity", "property"]
+
+
 def prepare_stages(
     question: str,
     sparql: str,
@@ -719,109 +728,120 @@ def prepare_stages(
             for _, (obj_type, identifier, variant, *_) in items[:item_idx]
         ]
 
-        if item_idx >= len(items) and item_idx > 0:
-            end = span(items[item_idx - 1][0])[1]
+        if item_idx >= len(items):
+            if item_idx == 0:
+                end = 0
+            else:
+                end = span(items[item_idx - 1][0])[1]
 
-            try:
-                final_prefix = manager.fix_prefixes(
-                    sparql_encoded[:end].decode(),
-                    is_prefix=True,
-                    remove_known=True
-                )
-                # final_prefix, _ = manager.replace_iris(
-                #     final_prefix_raw,
-                #     is_prefix=True
-                # )
-            except Exception:
+            sparql_prefix = manager.fix_prefixes(
+                sparql_encoded[:end].decode(),
+                is_prefix=True,
+                remove_known=True
+            )
+            natural_prefix, inc = manager.replace_iris(
+                sparql_prefix,
+                is_prefix=True
+            )
+            if inc:
                 continue
 
             final_cont = sparql_encoded[end:].decode()
             final_cont_prompt = manager.get_sparql_continuation_prompt(
                 question,
-                final_prefix,
+                sparql_prefix,
+                natural_prefix,
                 selections
             )
             samples.append((final_cont_prompt, final_cont))
-            continue
-
-        elif item_idx >= len(items) and item_idx == 0:
-            final_cont_prompt = manager.get_sparql_continuation_prompt(
-                question,
-                "",
-                selections
-            )
-            samples.append((final_cont_prompt, sparql))
             continue
 
         item, processed = items[item_idx]
         start, end = span(item)
         assert end >= start, "invalid span"
         obj_type, identifier, variant, label, syns = processed
-        is_lit_or_other = obj_type in ["literal", "other"]
-        is_ent_or_prop = obj_type in ["entity", "property"]
 
-        try:
-            prefix = manager.fix_prefixes(
-                sparql_encoded[:start].decode(),
+        sparql_prefix = manager.fix_prefixes(
+            sparql_encoded[:start].decode(),
+            is_prefix=True,
+            remove_known=True,
+        )
+        natural_prefix, inc = manager.replace_iris(
+            sparql_prefix,
+            is_prefix=True
+        )
+        if inc:
+            continue
+
+        # 1. randomly drop items with type other or literal
+        # such that some continuations are trained to
+        # predict them directly rather than searching for them
+        # 2. randomly drop entities or properties that already
+        # occured in the previous triples
+
+        if item_idx > 0:
+            last_end = span(items[item_idx - 1][0])[1]
+            assert last_end < start, "invalid item order"
+            last_sparql_prefix = manager.fix_prefixes(
+                sparql_encoded[:last_end].decode(),
                 is_prefix=True,
-                remove_known=True,
+                remove_known=True
             )
-            # prefix, _ = manager.replace_iris(
-            #     prefix_raw,
-            #     is_prefix=True
-            # )
+            last_natural_prefix, inc = manager.replace_iris(
+                last_sparql_prefix,
+                is_prefix=True
+            )
+            if inc:
+                continue
 
-            # 1. randomly drop items with type other or literal
-            # such that some continuations are trained to
-            # predict them directly rather than searching for them
-            # 2. randomly drop entities or properties that already
-            # occured in the previous triples
+        else:
+            last_sparql_prefix = ""
+            last_natural_prefix = ""
+            last_end = 0
 
-            if item_idx > 0:
-                last_end = span(items[item_idx - 1][0])[1]
-                assert last_end < start, "invalid item order"
-                last_prefix = manager.fix_prefixes(
-                    sparql_encoded[:last_end].decode(),
-                    is_prefix=True,
-                    remove_known=True
-                )
-                # last_prefix, _ = manager.replace_iris(
-                #     last_prefix_raw,
-                #     is_prefix=True
-                # )
-            else:
-                last_prefix = ""
-                last_end = 0
-
-            is_known_ent_or_prop = (
-                is_ent_or_prop
+        def is_known_ent_or_prop(
+            obj_type: str,
+            identifier: str,
+        ) -> bool:
+            return is_ent_or_prop(obj_type) \
                 and any(
                     items[i][1][1] == identifier
                     for i in range(item_idx)
                 )
-            )
 
+        start_idx = item_idx
+        while start_idx < len(items):
+            _, (start_obj_type, start_identifier, *_) = items[start_idx]
+            if random.random() < 0.5:
+                break
+
+            is_other = is_lit_or_other(start_obj_type)
+            is_known = is_known_ent_or_prop(
+                start_obj_type,
+                start_identifier
+            )
+            if is_other or is_known:
+                start_idx += 1
+            else:
+                break
+
+        if start_idx < len(items) - 1:
+            start, _ = span(items[item_idx + 1][0])
             token = SEARCH_TOKEN
-            can_skip = random.random() > 0.5
-            if can_skip and (is_lit_or_other or is_known_ent_or_prop):
-                if item_idx < len(items) - 1:
-                    start, _ = span(items[item_idx + 1][0])
-                else:
-                    start = len(sparql_encoded)
-                    token = ""
+        else:
+            start = len(sparql_encoded)
+            token = ""
 
-            cont = sparql_encoded[last_end:start].decode() + token
+        cont = sparql_encoded[last_end:start].decode() + token
 
-            cont_prompt = manager.get_sparql_continuation_prompt(
-                question,
-                last_prefix,
-                selections
-            )
+        cont_prompt = manager.get_sparql_continuation_prompt(
+            question,
+            last_sparql_prefix,
+            last_natural_prefix,
+            selections
+        )
 
-            samples.append((cont_prompt, cont))
-
-        except Exception:
-            continue
+        samples.append((cont_prompt, cont))
 
         if len(syns) > 0:
             num_search_failures = min(random.sample(
@@ -851,7 +871,7 @@ def prepare_stages(
 
         search_prompt, _ = manager.get_search_prompt_and_regex(
             question,
-            prefix,
+            natural_prefix,
             selections,
             search_failures
         )
@@ -863,7 +883,7 @@ def prepare_stages(
         )
 
         alts = manager.get_selection_alternatives(
-            prefix,
+            sparql_prefix,
             search,
             selection_k,
             max_candidates=16384,
@@ -931,7 +951,7 @@ def prepare_stages(
 
         select_prompt, _ = manager.get_selection_prompt_and_regex(
             question,
-            prefix,
+            natural_prefix,
             search,
             alts,
             selections=selections,
@@ -945,9 +965,8 @@ def prepare_stages(
                 for obj_type in OBJ_TYPES[:OBJ_TYPES.index(target_obj_type)]
                 if obj_type in alts
             )
-            select_idx = offset + alts[target_obj_type].index(target_alt)
-            selection = f"{select_idx + 1}. " \
-                f"{target_alt.get_variant_or_identifier(variant)}"
+            idx = offset + alts[target_obj_type].index(target_alt)
+            selection = f"{idx + 1}. {target_alt.get_sparql_label(variant)}"
 
         samples.append((select_prompt, selection))
 
@@ -968,39 +987,24 @@ def prepare_sample(
     )
     manager = random.choice(managers)
 
-    if split == "test":
-        try:
-            sparql = manager.fix_prefixes(sample.sparql)
-        except Exception:
-            sparql = sample.sparql
-        return sample.question, sparql, []
-
     try:
-        raw_sparql = manager.fix_prefixes(
-            sample.sparql,
-            remove_known=True
-        )
-
-        prompt = manager.get_sparql_prompt(sample.question)
-        sparql, inc = manager.replace_iris(
-            raw_sparql,
-            with_iri=False
-        )
-        if inc:
-            return None
-
+        sparql = manager.fix_prefixes(sample.sparql)
     except Exception:
+        sparql = None
+
+    if split == "test":
+        return sample.question, sparql or sample.sparql, []
+    elif sparql is None:
         return None
 
-    sparqls: list[tuple[str | Chat, str]] = [(prompt, sparql)]
-    sparqls = prepare_stages(
+    stages = prepare_stages(
         sample.question,
-        raw_sparql,
+        sample.sparql,
         managers,
         args
     )
 
-    return sample.question, raw_sparql, sparqls
+    return sample.question, sparql, stages
 
 
 def prepare_sample_mp(args: tuple[Sample, argparse.Namespace, str]):
@@ -1014,30 +1018,12 @@ def init(kg: str, args: argparse.Namespace):
     global managers
     random.seed(args.seed)
 
-    ent_indices = []
-    prop_indices = []
     for index_type in args.index_types:
-        ent_index, ent_mapping = load_index_and_mapping(
+        manager = load_kg_manager(
+            kg,
             args.entities,
-            index_type
-        )
-        prop_index, prop_mapping = load_index_and_mapping(
             args.properties,
             index_type,
-            WikidataPropertyMapping if kg == "wikidata" else None
-        )
-        ent_indices.append((ent_index, ent_mapping))
-        prop_indices.append((prop_index, prop_mapping))
-
-    for ent, prop in zip(ent_indices, prop_indices):
-        ent_index, ent_mapping = ent
-        prop_index, prop_mapping = prop
-        manager = get_kg_manager(
-            kg,
-            ent_index,
-            prop_index,
-            ent_mapping,
-            prop_mapping,
         )
         managers.append(manager)
 
@@ -1053,18 +1039,6 @@ def prepare(args: argparse.Namespace):
     print(f"Number of raw samples: {num_samples}")
 
     os.makedirs(args.output, exist_ok=True)
-
-    index_dir = get_index_dir()
-    if args.entities is None:
-        assert index_dir is not None
-        args.entities = os.path.join(index_dir, f"{kg}-entities")
-
-    if args.properties is None:
-        assert index_dir is not None
-        args.properties = os.path.join(index_dir, f"{kg}-properties")
-
-    if args.num_workers is None:
-        args.num_workers = min(mp.cpu_count(), 4)
 
     if not args.sequential:
         print(f"Starting {args.num_workers} workers")

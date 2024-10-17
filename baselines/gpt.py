@@ -11,12 +11,9 @@ from sparql_kgqa.sparql.utils2 import (
     QLEVER_URLS,
     Alternative,
     KgManager,
-    WikidataPropertyMapping,
-    get_index_dir,
-    get_kg_manager,
     AskResult,
     SelectResult,
-    load_index_and_mapping
+    load_kg_manager
 )
 
 
@@ -408,7 +405,7 @@ try out using a standalone SPARQL query via the execute_sparql function."
         property_map,
         other,
         literal
-    ) = manager.parse_autocompletion_result(result_set)
+    ) = manager.parse_autocompletions(result_set)
 
     kg = manager.kg.capitalize()
 
@@ -670,39 +667,13 @@ def examples(manager: KgManager, k: int, ignore: bool = False) -> list[dict]:
 def run(args: argparse.Namespace) -> None:
     args = parse_args()
 
-    kg = args.knowledge_graph
-    index_dir = get_index_dir()
-    if args.entities is None:
-        assert index_dir is not None, \
-            "SEARCH_INDEX_DIR environment variable must be set if " \
-            "--entities is not provided"
-        args.entities = os.path.join(index_dir, f"{kg}-entities")
-
-    if args.properties is None:
-        assert index_dir is not None, \
-            "SEARCH_INDEX_DIR environment variable must be set if " \
-            "--properties is not provided"
-        args.properties = os.path.join(index_dir, f"{kg}-properties")
-
     client = OpenAI(api_key=args.api_key)
 
-    ent_index, ent_mapping = load_index_and_mapping(
+    manager = load_kg_manager(
+        args.knowledge_graph,
         args.entities,
-        args.index_type,
-    )
-
-    prop_index, prop_mapping = load_index_and_mapping(
         args.properties,
         args.index_type,
-        WikidataPropertyMapping if kg == "wikidata" else None,
-    )
-
-    manager = get_kg_manager(
-        kg,
-        ent_index,
-        prop_index,
-        ent_mapping,
-        prop_mapping,
     )
 
     fns = functions(args.fn_set)

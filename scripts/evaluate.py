@@ -14,11 +14,9 @@ from sparql_kgqa.sparql.utils2 import (
     AskResult,
     KgManager,
     run_parallel,
-    get_index_dir,
-    load_index_and_mapping,
-    get_kg_manager,
-    WikidataPropertyMapping
+    load_kg_manager
 )
+from sparql_kgqa.sparql.metrics import calculate_f1_score
 
 
 def parse_args() -> argparse.Namespace:
@@ -46,6 +44,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-retries", type=int, default=1)
     parser.add_argument("-n", "--num-workers", type=int, default=None)
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--exact", action="store_true")
     parser.add_argument(
         "--prediction-format",
         type=str,
@@ -87,57 +86,6 @@ def get_result_set_or_error(
         ), None
 
 
-def calc_f1(
-    pred: str,
-    target: str,
-    manager: KgManager,
-    allow_empty_target: bool = True,
-    endpoint: str | None = None,
-    timeout: float | None = None,
-    max_retries: int = 1
-) -> tuple[float | None, str | Counter, str | Counter]:
-    pred_set, pred_err = get_result_set_or_error(
-        pred,
-        manager,
-        endpoint,
-        timeout,
-        max_retries
-    )
-    target_set, target_err = get_result_set_or_error(
-        target,
-        manager,
-        endpoint,
-        timeout,
-        max_retries
-    )
-    if pred_err is not None or target_err is not None:
-        return (
-            None,
-            pred_err or pred_set,
-            target_err or target_set
-        )  # type: ignore
-
-    assert pred_set is not None and target_set is not None
-    if len(target_set) == 0 and not allow_empty_target:
-        return None, pred_set, "target set is empty"
-
-    if len(pred_set) == 0 and len(target_set) == 0:
-        return 1.0, pred_set, target_set
-
-    tp = (pred_set & target_set).total()
-    fp = (pred_set - target_set).total()
-    fn = (target_set - pred_set).total()
-    # calculate precision, recall and f1
-    if tp > 0:
-        p = tp / (tp + fp)
-        r = tp / (tp + fn)
-        f1 = 2 * p * r / (p + r)
-    else:
-        f1 = 0.0
-
-    return f1, pred_set, target_set
-
-
 def evaluate(args: argparse.Namespace):
     base = os.path.splitext(args.prediction)[0]
     result_file = f"{base}.result.json"
@@ -175,39 +123,11 @@ def evaluate(args: argparse.Namespace):
             inputs = inputs[:args.limit]
             predictions = predictions[:args.limit]
 
-        kg = args.knowledge_graph
-        index_dir = get_index_dir()
-        if args.entities is None:
-            assert index_dir is not None, \
-                "SEARCH_INDEX_DIR environment variable must be set if " \
-                "--entities is not provided"
-            args.entities = os.path.join(index_dir, f"{kg}-entities")
-
-        if args.properties is None:
-            assert index_dir is not None, \
-                "SEARCH_INDEX_DIR environment variable must be set if " \
-                "--properties is not provided"
-            args.properties = os.path.join(index_dir, f"{kg}-properties")
-
-        ent_index, ent_mapping = load_index_and_mapping(
+        manager = load_kg_manager(
+            args.knowledge_graph,
             args.entities,
-            args.index_type,
-        )
-        is_wikidata = args.knowledge_graph == "wikidata"
-        prop_index, prop_mapping = load_index_and_mapping(
             args.properties,
-            args.index_type,
-            # wikidata properties need special mapping
-            # because of wdt, p, ps, pq, ... variants
-            WikidataPropertyMapping if is_wikidata else None,
-        )
-
-        manager = get_kg_manager(
-            kg,
-            ent_index,
-            prop_index,
-            ent_mapping,
-            prop_mapping
+            args.index_type
         )
 
         incorrect = {}
@@ -216,11 +136,15 @@ def evaluate(args: argparse.Namespace):
         iter = (
             (pred, target, manager,
              not args.empty_target_invalid,
-             args.endpoint, args.timeout, args.max_retries)
+             args.endpoint, args.timeout, args.max_retries, args.exact)
             for pred, target in zip(predictions, targets)
         )
         for i, (f1, pred, tgt) in tqdm(
-            enumerate(run_parallel(calc_f1, iter, args.num_workers)),
+            enumerate(run_parallel(
+                calculate_f1_score,
+                iter,
+                args.num_workers
+            )),
             desc="evaluating",
             total=len(predictions),
             leave=False

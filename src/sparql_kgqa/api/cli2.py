@@ -15,7 +15,8 @@ from sparql_kgqa.api.server2 import SPARQLGenerationServer
 from sparql_kgqa.sparql.utils2 import (
     WikidataPropertyMapping,
     get_index_dir,
-    load_index_and_mapping
+    load_index_and_mapping,
+    load_kg_manager
 )
 
 
@@ -53,40 +54,12 @@ class SPARQLGenerationCli(TextProcessingCli):
             force_exact=self.args.force_exact,
         )
 
-        kg = self.args.knowledge_graph
-        index_dir = get_index_dir()
-        if self.args.entities is None:
-            assert index_dir is not None, \
-                "SEARCH_INDEX_DIR environment variable must be set if " \
-                "--entities is not provided"
-            self.args.entities = os.path.join(index_dir, f"{kg}-entities")
-
-        if self.args.properties is None:
-            assert index_dir is not None, \
-                "SEARCH_INDEX_DIR environment variable must be set if " \
-                "--properties is not provided"
-            self.args.properties = os.path.join(index_dir, f"{kg}-properties")
-
-        ent_index, ent_mapping = load_index_and_mapping(
+        gen.set_kg_manager(load_kg_manager(
+            self.args.knowledge_graph,
             self.args.entities,
-            self.args.index_type,
-        )
-        is_wikidata = self.args.knowledge_graph == "wikidata"
-        prop_index, prop_mapping = load_index_and_mapping(
             self.args.properties,
             self.args.index_type,
-            # wikidata properties need special mapping
-            # because of wdt, p, ps, pq, ... variants
-            WikidataPropertyMapping if is_wikidata else None,
-        )
-
-        gen.set_kg_indices(
-            kg,
-            ent_index,
-            prop_index,
-            ent_mapping,
-            prop_mapping,
-        )
+        ))
 
         if self.args.example_index is not None:
             gen.set_examples(example_index=self.args.example_index)
