@@ -2,21 +2,22 @@ import argparse
 import sys
 import os
 import json
-from pprint import pprint, pformat
 from enum import Enum
 from pydantic import BaseModel
+from typing import Any
 
 from openai import OpenAI
 from tqdm import tqdm
 
-from sparql_kgqa.sparql.metrics import assignment_f1_score, calculate_f1_score
+from sparql_kgqa.sparql.metrics import calculate_f1_score, f1_score
 from sparql_kgqa.sparql.utils2 import (
     QLEVER_URLS,
+    AskResult,
     KgManager,
     find,
     find_all,
     load_kg_manager,
-    parse_to_string
+    parse_to_string,
 )
 
 
@@ -25,42 +26,24 @@ DIR = os.path.dirname(os.path.realpath(__file__))
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
+    parser.add_argument("-i", "--input", type=str, help="Input file")
+    parser.add_argument("--entities", type=str)
+    parser.add_argument("--properties", type=str)
     parser.add_argument(
-        "-i",
-        "--input",
-        type=str,
-        help="Input file"
-    )
-    parser.add_argument(
-        "--entities",
-        type=str
-    )
-    parser.add_argument(
-        "--properties",
-        type=str
-    )
-    parser.add_argument(
-        "--index-type",
-        type=str,
-        choices=["prefix", "qgram"],
-        default="prefix"
+        "--index-type", type=str, choices=["prefix", "qgram"], default="prefix"
     )
     parser.add_argument(
         "-kg",
         "--knowledge-graph",
         type=str,
         choices=list(QLEVER_URLS),
-        default="wikidata"
+        default="wikidata",
     )
     parser.add_argument(
         "--api-key",
         type=str,
     )
-    parser.add_argument(
-        "--model",
-        type=str,
-        default="gpt-4o"
-    )
+    parser.add_argument("--model", type=str, default="gpt-4o")
     parser.add_argument(
         "--examples",
         type=str,
@@ -105,11 +88,7 @@ features
 - the paraphrases should be as concise as possible"""
 
 
-def prompt(
-    sparql: str,
-    natural_sparql: str,
-    examples: list[tuple[str, str]]
-) -> str:
+def prompt(sparql: str, natural_sparql: str, examples: list[tuple[str, str]]) -> str:
     prompt = ""
     if examples:
         prompt += """\
@@ -118,8 +97,7 @@ queries:
 
 """
         prompt += "\n\n".join(
-            f"Question:\n{q}\n\nNatural language SPARQL:\n{s}"
-            for q, s in examples
+            f"Question:\n{q}\n\nNatural language SPARQL:\n{s}" for q, s in examples
         )
         prompt += "\n\n"
 
@@ -161,10 +139,7 @@ class Output(BaseModel):
 
 def prepare_sparql(manager: KgManager, sparql: str) -> str | None:
     try:
-        sparql = manager.fix_prefixes(
-            sparql,
-            remove_known=True
-        )
+        sparql = manager.fix_prefixes(sparql, remove_known=True)
         sparql, inc = manager.replace_iris(sparql)
         if inc:
             return None
@@ -188,6 +163,109 @@ def remove_service(manager: KgManager, sparql: str) -> str:
     return parse_to_string(parse)
 
 
+def generate_question(
+    sparql: str,
+    manager: KgManager,
+    client: OpenAI,
+    examples: list[tuple[str, str]],
+    args: argparse.Namespace,
+) -> dict:
+    output: dict = {"raw_sparql": sparql}
+
+    try:
+        sparql = manager.fix_prefixes(sparql, remove_known=True)
+    except Exception as e:
+        output["error"] = {
+            "type": "fix_prefixes",
+            "message": str(e),
+        }
+        return output
+
+    output["fixed_sparql"] = sparql
+    sparql_no_service = remove_service(manager, sparql)
+    output["fixed_sparql_no_service"] = sparql_no_service
+
+    try:
+        original_result = manager.execute_sparql(sparql_no_service)
+    except Exception as e:
+        output["error"] = {
+            "type": "execute_original_sparql",
+            "message": str(e),
+        }
+        return output
+
+    if not isinstance(original_result, AskResult) and len(original_result[1]) == 0:
+        output["error"] = {
+            "type": "empty_original_result",
+            "message": "original SPARQL query returns an empty result",
+        }
+        return output
+
+    natural_sparql, inc = manager.replace_iris(sparql)
+    output["natural_sparql"] = natural_sparql
+
+    if inc:
+        output["error"] = {
+            "type": "replace_iris",
+            "message": "some entities or properties mentioned in the "
+            "SPARQL could not be replaced with their labels",
+        }
+        return output
+
+    messages = [
+        {"role": "system", "content": system_prompt(manager)},
+        {"role": "user", "content": prompt(sparql, natural_sparql, examples)},
+    ]
+
+    try:
+        response = client.beta.chat.completions.parse(
+            messages=messages,  # type: ignore
+            response_format=Output,
+            model=args.model,
+            temperature=1.0,
+            top_p=0.9,
+        )
+        message = response.choices[0].message
+        content = message.content
+        parsed = message.parsed
+    except Exception as e:
+        output["error"] = {
+            "type": "question_generation",
+            "message": str(e),
+        }
+        return output
+
+    if content is None or parsed is None:
+        output["error"] = {
+            "type": "response_parsing",
+            "message": "no response",
+        }
+        return output
+
+    output["output"] = json.loads(content)
+
+    try:
+        cleaned_result = manager.execute_sparql(parsed.sparql)
+    except Exception as e:
+        output["error"] = {
+            "type": "execute_cleaned_sparql",
+            "message": str(e),
+        }
+        return output
+
+    f1 = f1_score(original_result, cleaned_result, exact=False)
+    if f1 < 1.0:
+        output["error"] = {
+            "type": "results_mismatch",
+            "message": "results of original and cleaned sparql do not "
+            "match (up to leaving out unnecessary columns and variables)",
+            "assignment_f1_score": f1,
+        }
+        return output
+
+    return output
+
+
 def run(args: argparse.Namespace) -> None:
     if args.input:
         io = open(args.input, "r")
@@ -202,10 +280,7 @@ def run(args: argparse.Namespace) -> None:
 
     io.close()
     manager = load_kg_manager(
-        args.knowledge_graph,
-        args.entities,
-        args.properties,
-        args.index_type
+        args.knowledge_graph, args.entities, args.properties, args.index_type
     )
 
     examples = []
@@ -225,101 +300,9 @@ def run(args: argparse.Namespace) -> None:
 
     client = OpenAI(api_key=args.api_key)
 
-    outputs = []
     for sparql in tqdm(sparqls, desc="processing", leave=False):
-        outputs.append({
-            "raw_sparql": sparql,
-        })
-        try:
-            sparql = manager.fix_prefixes(
-                sparql,
-                remove_known=True
-            )
-        except Exception as e:
-            outputs[-1]["error"] = {
-                "type": "fix_prefixes",
-                "message": str(e),
-            }
-            continue
-
-        outputs[-1]["fixed_sparql"] = sparql
-
-        natural_sparql, inc = manager.replace_iris(sparql)
-        outputs[-1]["natural_sparql"] = natural_sparql
-
-        if inc:
-            outputs[-1]["error"] = {
-                "type": "replace_iris",
-                "message": "some entities or properties mentioned in the "
-                "SPARQL could not be replaced with their labels",
-            }
-            continue
-
-        messages = [
-            {"role": "system", "content": system_prompt(manager)},
-            {
-                "role": "user",
-                "content": prompt(sparql, natural_sparql, examples)
-            }
-        ]
-
-        try:
-            response = client.beta.chat.completions.parse(
-                messages=messages,  # type: ignore
-                response_format=Output,
-                model=args.model
-            )
-            message = response.choices[0].message
-            content = message.content
-            parsed = message.parsed
-        except Exception as e:
-            print(
-                "Failed to generate completion for messages\n"
-                f"{pformat(messages)}\nwith error:\n{e}"
-            )
-            outputs[-1]["error"] = {
-                "type": "question_generation",
-                "message": str(e),
-            }
-            continue
-
-        if content is None or parsed is None:
-            print(f"Failed to parse completion for messages\n{messages}")
-            outputs[-1]["error"] = {
-                "type": "response_parsing",
-                "message": "no response",
-            }
-            continue
-
-        sparql_no_service = remove_service(manager, sparql)
-        outputs[-1]["fixed_sparql_no_service"] = sparql_no_service
-        outputs[-1]["model"] = json.loads(content)
-
-        f1, new_err, org_err = calculate_f1_score(
-            sparql_no_service,
-            parsed.sparql,
-            manager,
-            allow_empty_target=False,
-            exact=False
-        )
-        if f1 is None:
-            outputs[-1]["error"] = {
-                "type": "result_comparison_error",
-                "original_sparql_message": org_err,
-                "cleaned_sparql_message": new_err,
-            }
-            continue
-
-        elif f1 < 1.0:
-            outputs[-1]["error"] = {
-                "type": "result_comparison_unequal",
-                "message": "results of original and cleaned sparql do not "
-                "match (up to leaving out unnecessary columns and variables)",
-                "assignment_f1_score": f1,
-            }
-            continue
-
-    pprint(outputs)
+        output = generate_question(sparql, manager, client, examples, args)
+        print(json.dumps(output), flush=True)
 
 
 if __name__ == "__main__":
