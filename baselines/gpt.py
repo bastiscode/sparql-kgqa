@@ -85,6 +85,13 @@ def parse_args() -> argparse.Namespace:
         help="Number of top search results to show",
     )
     parser.add_argument(
+        "-lk",
+        "--list-top-k",
+        type=int,
+        default=30,
+        help="Number of top list results to show",
+    )
+    parser.add_argument(
         "-rk",
         "--result-top-bottom-k",
         type=int,
@@ -118,7 +125,7 @@ def system_message(fns: list[dict], manager: KgManager) -> dict:
     )
     functions = "\n".join(
         f"- {fn['name']}: {fn['description']}"
-        + (f" E.g., {fn['example']}" if "example" in fn else "")
+        + (f" E.g., {fn['example']}" if False and "example" in fn else "")
         for fn in fns
     )
     return {
@@ -137,28 +144,30 @@ explicitly defining them:
 {prefixes}
 
 You should follow a step-by-step process to generate the SPARQL query:
-1. Generate a high-level plan about what you need to do to answer the question.
+1. Generate a high-level plan about what you need to do to answer the question. \
+This plan can be subject to change as you gather more information.
 2. Find all entities and properties needed to answer the question. \
-Try to use already identified entities and properties to constrain your \
-search for new entities and properties as much as possible.
-3. Iteratively try to find a single SPARQL query answering the question, \
+Always use already identified entities and properties to constrain further \
+lookups.
+3. Iteratively build up a single SPARQL query answering the question, \
 starting with simple queries first and making them more complex as needed.
 4. Once you have a final working SPARQL query, execute it and formulate your \
 answer. Then call stop to end the generation process.
 
 Important rules:
-- Do not make up information that is not present in the knowledge graph. \
-Also do not make up identifiers for entities or properties, but use the \
-provided search functions to find them.
+- Do not make up identifiers for entities or properties, but use the \
+provided functions to find them.
+- When looking for entities or properties, always use the most constraining \
+lookup method first, e.g. start with search_constrained before using \
+list_constrained, and only use search_entities or search_properties if \
+no constraints are available or the other methods failed.
 - After each function call, interpret and think about its results and \
 determine how they can be used to help you generate the final SPARQL query.
-- You can change your initial plan as you go along, but make sure to explain \
-why and how you are changing it.
 - Your SPARQL queries should always include the entities and properties \
 themselves, and not only their labels.
 - Keep refining your SPARQL query if its results are not what you expect, \
-e.g. when obvious entries are missing or too many irrelevant entries are \
-included.
+e.g. if they are empty when they should not be, when obvious entries are missing \
+or too many irrelevant entries are included.
 - Do not use results from intermediate SPARQL queries directly in your final \
 SPARQL query, e.g. by using them in VALUES clauses.
 - Do not stop early if there are still obvious improvements to be made to \
@@ -250,49 +259,91 @@ wdt:P106 ?job }")',
     if fn_set == "execute_search":
         return fns
 
-    fns.append(
-        {
-            "name": "search_constrained",
-            "description": "Search for entities, properties or literals in the \
-knowledge graph while respecting some given constraints in terms of known \
-entities, properties, or literals. The constraints must be properly formatted \
-IRIs or literals, like wdt:P31 or \
+    fns.extend(
+        [
+            {
+                "name": "list_constrained",
+                "description": "List entities, properties or literals \
+given known entities, properties, or literals. The constraints must be properly \
+formatted IRIs or literals, e.g. wdt:P31 or \
 <http://www.wikidata.org/property/direct/P31>.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "subject": {
-                        "type": ["string", "null"],
-                        "description": "An optional known subject entity",
-                    },
-                    "property": {
-                        "type": ["string", "null"],
-                        "description": "An optional known property",
-                    },
-                    "object": {
-                        "type": ["string", "null"],
-                        "description": "An optional known object entity or literal",
-                    },
-                    "search_for": {
-                        "type": "string",
-                        "enum": ["subject", "property", "object"],
-                        "description": "What to search for (the respective \
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "subject": {
+                            "type": ["string", "null"],
+                            "description": "An optional known subject entity",
+                        },
+                        "property": {
+                            "type": ["string", "null"],
+                            "description": "An optional known property",
+                        },
+                        "object": {
+                            "type": ["string", "null"],
+                            "description": "An optional known object entity or literal",
+                        },
+                        "list_for": {
+                            "type": "string",
+                            "enum": ["subject", "property", "object"],
+                            "description": "What to list (the respective \
 constraining parameter should be null)",
+                        },
                     },
-                    "query": {
-                        "type": "string",
-                        "description": "A search query used to filter \
-the search results",
-                    },
+                    "required": ["subject", "property", "object", "list_for"],
+                    "additionalProperties": False,
                 },
-                "required": ["subject", "property", "object", "search_for", "query"],
-                "additionalProperties": False,
+                "strict": True,
+                "example": 'list_constrained(subject="wd:Q937", property="wdt:P106", \
+object=None, list_for="object") to get a list of Albert Einstein\'s jobs',
             },
-            "strict": True,
-            "example": 'search_constrained(subject="wd:Q937", \
-property="wdt:P106", object=None, search_for="object") to get a list of \
-Albert Einstein\'s jobs',
-        }
+            {
+                "name": "search_constrained",
+                "description": "Search for entities, properties or literals \
+given known entities, properties, or literals. The constraints must be properly \
+formatted IRIs or literals, e.g. wdt:P31 or \
+<http://www.wikidata.org/property/direct/P31>.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "subject": {
+                            "type": ["string", "null"],
+                            "description": "An optional known subject entity",
+                        },
+                        "property": {
+                            "type": ["string", "null"],
+                            "description": "An optional known property",
+                        },
+                        "object": {
+                            "type": ["string", "null"],
+                            "description": "An optional known object entity or literal",
+                        },
+                        "search_for": {
+                            "type": "string",
+                            "enum": ["subject", "property", "object"],
+                            "description": "What to search for (the respective \
+constraining parameter should be null)",
+                        },
+                        "query": {
+                            "type": "string",
+                            "description": "A search query used to filter \
+the search results",
+                        },
+                    },
+                    "required": [
+                        "subject",
+                        "property",
+                        "object",
+                        "search_for",
+                        "query",
+                    ],
+                    "additionalProperties": False,
+                },
+                "strict": True,
+                "example": 'search_constrained(subject=None, \
+property="wdt:P31", object="wd:Q515", search_for="subject", query="Amsterdam") to \
+search for all cities that have Amsterdam in their name',
+            },
+        ]
     )
     return fns
 
@@ -313,24 +364,38 @@ def execute_fn(
         return search_properties(manager, fn_args["query"], args.search_top_k)
 
     elif fn_name == "search_constrained":
-        return search_constrained(manager, fn_args, args.search_top_k)
+        return list_or_search_constrained(
+            manager, fn_args["search_for"], fn_args["query"], fn_args, args.search_top_k
+        )
+
+    elif fn_name == "list_constrained":
+        return list_or_search_constrained(
+            manager, fn_args["list_for"], None, fn_args, args.list_top_k
+        )
 
     else:
         raise ValueError(f"Unknown function: {fn_name}")
 
 
-def search_constrained(
-    manager: KgManager, args: dict, k: int, max_results: int = 1024 * 64
+def list_or_search_constrained(
+    manager: KgManager,
+    target_position: str,
+    query: str | None,
+    args: dict,
+    k: int,
+    max_results: int = 1024 * 64,
 ) -> str:
-    search_for = args["search_for"]
-    search_for_constr = args[search_for]
-    if search_for_constr is not None:
-        return f"Cannot search for {search_for} and constrain it to \
-{search_for_constr} at the same time."
+    target_constr = args[target_position]
+    if target_constr is not None:
+        return f"Cannot look for {target_position} and constrain it to \
+{target_constr} at the same time."
 
     positions = ["subject", "property", "object"]
-    if all(args[p] is None for p in positions):
-        return "At least one of subject, property, or object should be constrained."
+    fully_specified = all(args[p] is not None for p in positions)
+    none_specified = all(args[p] is None for p in positions)
+    if fully_specified or none_specified:
+        return "At least one and at most two of subject, property, and \
+object should be specified at the same time."
 
     for p in positions:
         constr = args[p]
@@ -339,14 +404,13 @@ def search_constrained(
 
         if manager.process_iri_or_literal(constr) is None:
             return f"Constraint {constr} for {p} is not a valid iri or \
-literal. Consider fixing the {p} format and searching again."
+literal. Consider fixing its format and try again."
 
     subject_constr = args["subject"] or "?s"
     property_constr = args["property"] or "?p"
     object_constr = args["object"] or "?o"
 
-    query = args["query"]
-    select_var = f"?{search_for[0]}"
+    select_var = f"?{target_position[0]}"
 
     sparql = f"""\
 SELECT DISTINCT {select_var} WHERE {{
@@ -364,12 +428,11 @@ LIMIT {max_results + 1}"""
     _, rows = result
     result_set = set(row[0] for row in rows)
     if len(result_set) > max_results:
-        if search_for == "property":
-            search_for = "propertie"
-        return f"Constrained search returned more than the maximum \
-number of {search_for}s of {max_results:,} before further filtering with \
-the query '{query}'. Consider constraining the search further if possible or \
-try out using a standalone SPARQL query via the execute_sparql function."
+        if target_position == "property":
+            target_position = "propertie"
+        return f"Got more than the maximum number of {target_position}s of \
+{max_results:,}. Consider constraining further if possible or try \
+to use a standalone SPARQL query via the execute_sparql function."
 
     (entity_map, property_map, other, literal) = manager.parse_autocompletions(
         result_set
@@ -378,17 +441,17 @@ try out using a standalone SPARQL query via the execute_sparql function."
     kg = manager.kg.capitalize()
 
     formatted = []
-    if search_for == "subject":
+    if target_position == "subject":
         alts = manager.get_entity_alternatives(id_map=entity_map, query=query, k=k)
         formatted.append(format_alternatives(f"{kg} entities", alts, k))
 
-    elif search_for == "property":
+    elif target_position == "property":
         alts = manager.get_property_alternatives(id_map=property_map, query=query, k=k)
         formatted.append(format_alternatives(f"{kg} properties", alts, k))
         alts = manager.get_temporary_index_alternatives(data=other, query=query, k=k)
         formatted.append(format_alternatives("other properties", alts, k))
 
-    elif search_for == "object":
+    elif target_position == "object":
         alts = manager.get_entity_alternatives(id_map=entity_map, query=query, k=k)
         formatted.append(format_alternatives(f"{kg} entities", alts, k))
         alts = manager.get_temporary_index_alternatives(data=literal, query=query, k=k)
@@ -501,8 +564,8 @@ Plan:
         {
             "role": "assistant",
             "content": """\
-I identified the entity for France as wd:Q142. Now I will search for the \
-property for capital""",
+I identified the entity for France as wd:Q142. Let's search for properties \
+of France related to capital.""",
             "tool_calls": [
                 {
                     "type": "function",
@@ -513,7 +576,7 @@ property for capital""",
                                 "subject": "wd:Q142",
                                 "property": None,
                                 "object": None,
-                                "search_for": "property",
+                                "list_for": "property",
                                 "query": "capital",
                             }
                         ),
@@ -524,14 +587,14 @@ property for capital""",
         },
         {
             "role": "tool",
-            "content": search_constrained(
+            "content": list_or_search_constrained(
                 manager,
+                "property",
+                "capital",
                 {
                     "subject": "wd:Q142",
                     "property": None,
                     "object": None,
-                    "search_for": "property",
-                    "query": "capital",
                 },
                 args.search_top_k,
             ),
@@ -673,7 +736,8 @@ def generate_sparql(
             break
 
         choice = response.choices[0]
-        api_messages.append(choice.message)
+        # api_messages.append(choice.message)
+        api_messages.append(choice.message.to_dict())
         if choice.message.content:
             cmsg = {"role": "assistant", "content": choice.message.content or ""}
             content_messages.append(cmsg)
