@@ -3,17 +3,10 @@ from collections import Counter
 from scipy.optimize import linear_sum_assignment
 import numpy as np
 
-from sparql_kgqa.sparql.utils2 import (
-    AskResult,
-    KgManager,
-    SelectResult
-)
+from sparql_kgqa.sparql.utils2 import AskResult, KgManager, SelectResult
 
 
-def exact_f1_score(
-    pred: list[list[str]],
-    target: list[list[str]]
-) -> float:
+def exact_f1_score(pred: list[list[str]], target: list[list[str]]) -> float:
     pred_set = Counter(tuple(p) for p in pred)
     target_set = Counter(tuple(t) for t in target)
 
@@ -28,10 +21,7 @@ def exact_f1_score(
     return 2 * prec * rec / (prec + rec)
 
 
-def assignment_f1_score(
-    pred: list[list[str]],
-    target: list[list[str]]
-) -> float:
+def assignment_f1_score(pred: list[list[str]], target: list[list[str]]) -> float:
     # create a matrix of distances between pred and target
     scores = np.zeros((len(pred), len(target)))
 
@@ -60,14 +50,17 @@ def assignment_f1_score(
 def f1_score(
     pred: SelectResult | AskResult,
     target: SelectResult | AskResult,
-    exact: bool = False
+    exact: bool = False,
 ) -> float:
     if isinstance(target, AskResult) or isinstance(pred, AskResult):
         return float(pred == target)
-    elif exact:
-        return exact_f1_score(pred, target)
+
+    _, pred_rows = pred
+    _, target_rows = target
+    if exact:
+        return exact_f1_score(pred_rows, target_rows)
     else:
-        return assignment_f1_score(pred, target)
+        return assignment_f1_score(pred_rows, target_rows)
 
 
 def calculate_f1_score(
@@ -78,31 +71,17 @@ def calculate_f1_score(
     endpoint: str | None = None,
     timeout: float | None = None,
     max_retries: int = 1,
-    exact: bool = False
+    exact: bool = False,
 ) -> tuple[float | None, str | None, str | None]:
     pred_err, predictions = None, None
     try:
-        predictions = manager.execute_sparql(
-            pred,
-            endpoint,
-            timeout,
-            max_retries
-        )
-        if isinstance(predictions, AskResult):
-            predictions = [[str(predictions)]]
+        predictions = manager.execute_sparql(pred, endpoint, timeout, max_retries)
     except Exception as e:
         pred_err = str(e)
 
     targets, target_err = None, None
     try:
-        targets = manager.execute_sparql(
-            target,
-            endpoint,
-            timeout,
-            max_retries
-        )
-        if isinstance(targets, AskResult):
-            targets = [[str(targets)]]
+        targets = manager.execute_sparql(target, endpoint, timeout, max_retries)
     except Exception as e:
         target_err = str(e)
 

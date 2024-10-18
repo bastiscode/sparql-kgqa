@@ -35,7 +35,7 @@ QLEVER_URLS = {
 OBJ_TYPES = ["entity", "property", "other", "literal"]
 SEARCH_TOKEN = "<|search|>"
 
-SelectResult = list[list[str]]
+SelectResult = tuple[list[str], list[list[str]]]
 AskResult = bool
 
 
@@ -737,7 +737,9 @@ class KgManager:
             # > 1 because of header
             return AskResult(len(result) > 1)
         else:
-            return [row.split("\t") for row in result]
+            assert len(result) > 0, "expected at least one result row for the header"
+            header = result[0].split("\t")
+            return header, [result[i].split("\t") for i in range(1, len(result))]
 
     def format_sparql_result(
         self,
@@ -749,8 +751,9 @@ class KgManager:
         if isinstance(result, AskResult):
             return f"Ask query returned {result}"
 
-        num_rows = len(result) - 1
-        num_columns = len(result[0])
+        header, rows = result
+        num_rows = len(rows)
+        num_columns = len(header)
         if num_rows == 0:
             return "Select query returned an empty result"
 
@@ -786,22 +789,21 @@ class KgManager:
             return new_row
 
         # generate a nicely formatted table
-        header = [format_row(result[0])]
-        top_start = 1
-        top_end = min(show_top_bottom_rows + 1, num_rows + 1)
+        header = [format_row(header)]
+        top_end = min(show_top_bottom_rows, num_rows)
         data = [
-            format_row(result[r])
-            for r in range(top_start, top_end)
+            format_row(rows[r])
+            for r in range(top_end)
         ]
 
-        bottom_start = num_rows + 1 - show_top_bottom_rows
+        bottom_start = num_rows - show_top_bottom_rows
         if bottom_start > top_end:
             data.append(format_row(["..."] * num_columns))
 
         bottom_start = max(bottom_start, top_end)
         data.extend(
-            format_row(result[r])
-            for r in range(bottom_start, num_rows + 1)
+            format_row(rows[r])
+            for r in range(bottom_start, num_rows)
         )
 
         table = generate_table(data, header)
