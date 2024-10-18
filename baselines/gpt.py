@@ -700,22 +700,19 @@ def generate_sparql(
     question: str,
     args: argparse.Namespace,
 ) -> None:
-    api_messages: list = [
+    api_messages: list[dict] = [
         system_msg,
         *examples,
         prompt(question, manager),
     ]
-    content_messages: list[dict[str, str]] = []
 
     for msg in api_messages:
-        content_messages.append(msg)
         print(format_message(msg), file=sys.stderr)
         for tool_call in msg.get("tool_calls", []):
             fn_name = tool_call["function"]["name"]
             fn_args = json.loads(tool_call["function"]["arguments"])
-            cmsg = {"role": "tool call", "content": format_fn_call(fn_name, fn_args)}
-            content_messages.append(cmsg)
-            print(format_message(cmsg), file=sys.stderr)
+            msg = {"role": "tool call", "content": format_fn_call(fn_name, fn_args)}
+            print(format_message(msg), file=sys.stderr)
 
     sparqls = []
     while True:
@@ -732,16 +729,14 @@ def generate_sparql(
             )  # type: ignore
         except Exception as e:
             print(f"Failed to generate response: {e}", file=sys.stderr)
-            content_messages.append({"error": f"Failed to generate response: {e}"})
+            api_messages.append({"error": f"Failed to generate response: {e}"})
             break
 
         choice = response.choices[0]
-        # api_messages.append(choice.message)
-        api_messages.append(choice.message.to_dict())
+        msg = choice.message.to_dict()
+        api_messages.append(msg)
         if choice.message.content:
-            cmsg = {"role": "assistant", "content": choice.message.content or ""}
-            content_messages.append(cmsg)
-            print(format_message(cmsg), file=sys.stderr)
+            print(format_message(msg), file=sys.stderr)
 
         if choice.finish_reason == "stop":
             if sparqls:
@@ -752,9 +747,8 @@ def generate_sparql(
                 "content": "No SPARQL query was generated yet. \
 Please continue.",
             }
-            print(format_message(msg), file=sys.stderr)
-            content_messages.append(msg)
             api_messages.append(msg)
+            print(format_message(msg), file=sys.stderr)
             continue
 
         elif not choice.message.tool_calls:
@@ -764,17 +758,15 @@ Please continue.",
         fn_name = tool_call.function.name
         fn_args = json.loads(tool_call.function.arguments)
 
-        cmsg = {
+        msg = {
             "role": "tool call",
             "content": format_fn_call(fn_name, fn_args),
         }
-        content_messages.append(cmsg)
-        print(format_message(cmsg), file=sys.stderr)
+        print(format_message(msg), file=sys.stderr)
 
         result = execute_fn(manager, fn_name, fn_args, args)
         tool_msg = {"role": "tool", "content": result, "tool_call_id": tool_call.id}
         print(format_message(tool_msg), file=sys.stderr)
-        content_messages.append(tool_msg)
         api_messages.append(tool_msg)
 
         if fn_name == "execute_sparql":
@@ -797,7 +789,7 @@ Please continue.",
         json.dumps(
             {
                 "sparql": sparql,
-                "messages": content_messages,
+                "messages": api_messages,
             }
         ),
         flush=True,
