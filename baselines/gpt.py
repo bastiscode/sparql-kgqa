@@ -354,8 +354,9 @@ LIMIT {max_results + 1}"""
     except Exception as e:
         return f"Failed executing SPARQL query\n{sparql}\n" f"with error:\n{e}"
 
-    assert isinstance(result, list)
-    result_set = set(result[i][0] for i in range(1, len(result)))
+    assert isinstance(result, tuple)
+    _, rows = result
+    result_set = set(row[0] for row in rows)
     if len(result_set) > max_results:
         if search_for == "property":
             search_for = "propertie"

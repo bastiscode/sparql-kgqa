@@ -1360,13 +1360,14 @@ Answer: (?:yes|no)"""
             return None, position
 
         # some checks
-        if not isinstance(result, list):
+        if not isinstance(result, tuple):
             return None, position
         elif not all(len(row) == 1 for row in result):
             return None, position
 
         # skip header
-        return {result[i][0] for i in range(1, len(result))}, position
+        _, rows = result
+        return set(row[0] for row in rows), position
 
     def get_entity_alternatives(
         self,
