@@ -727,7 +727,8 @@ Please continue.",
                 "sparql": sparql,
                 "messages": content_messages,
             }
-        )
+        ),
+        flush=True,
     )
 
 
