@@ -6,8 +6,8 @@ import os
 import re
 import json
 import string
-import collections
 import multiprocessing as mp
+from dataclasses import dataclass
 
 from search_index import normalize
 from tqdm import tqdm
@@ -19,11 +19,7 @@ from sparql_kgqa.sparql.utils2 import (
     OBJ_TYPES,
     Chat,
     KgManager,
-    WikidataPropertyMapping,
-    get_index_dir,
-    get_kg_manager,
     clean,
-    load_index_and_mapping,
     load_kg_manager,
     partition_by,
 )
@@ -80,34 +76,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--qlever-endpoint", type=str, default=None)
     sample_group = parser.add_argument_group("samples")
-    sample_group.add_argument(
-        "--max-samples",
-        type=int,
-        default=None
-    )
-    sample_group.add_argument(
-        "--stages-per-sample",
-        type=int,
-        default=None
-    )
-    sample_group.add_argument(
-        "--selections-min-k",
-        type=int,
-        default=5
-    )
-    sample_group.add_argument(
-        "--selections-max-k",
-        type=int,
-        default=5
-    )
+    sample_group.add_argument("--max-samples", type=int, default=None)
+    sample_group.add_argument("--stages-per-sample", type=int, default=None)
+    sample_group.add_argument("--selections-min-k", type=int, default=5)
+    sample_group.add_argument("--selections-max-k", type=int, default=5)
     parser.add_argument("--seed", type=int, default=22)
     parser.add_argument("-n", "--num-workers", type=int, default=None)
-    parser.add_argument("--index-types", nargs="+", default=["prefix"],
-                        choices=["prefix", "qgram"])
+    parser.add_argument(
+        "--index-types", nargs="+", default=["prefix"], choices=["prefix", "qgram"]
+    )
     return parser.parse_args()
 
 
-Sample = collections.namedtuple("Sample", ["question", "sparql"])
+@dataclass
+class Sample:
+    question: str
+    sparql: str
+    info: dict | None = None
+    invalid: bool = False
 
 
 SPLIT_RENAME = {
@@ -119,8 +105,19 @@ SPLIT_RENAME = {
 }
 
 COMMON_SPARQL_KEYWORDS = [
-    "PREFIX", "SELECT", "DISTINCT", "WHERE", "FILTER", "ORDER", "LIMIT",
-    "OFFSET", "OPTIONAL", "UNION", "GROUP", "HAVING", "VALUES"
+    "PREFIX",
+    "SELECT",
+    "DISTINCT",
+    "WHERE",
+    "FILTER",
+    "ORDER",
+    "LIMIT",
+    "OFFSET",
+    "OPTIONAL",
+    "UNION",
+    "GROUP",
+    "HAVING",
+    "VALUES",
 ]
 
 
@@ -172,10 +169,7 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
 
     elif args.lc_quad2_wikidata:
         kg = "wikidata"
-        data = load_dataset(
-            "third_party/KGQA-datasets/lcquad_v2",
-            "lcquad2-wikidata"
-        )
+        data = load_dataset("third_party/KGQA-datasets/lcquad_v2", "lcquad2-wikidata")
         for split, items in data.items():
             split = SPLIT_RENAME.get(split, split)
             assert split in {"train", "val", "test"}
@@ -217,14 +211,12 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
     elif args.qald_7 is not None:
         kg = "wikidata"
         with open(
-            os.path.join(args.qald_7, "qald-7-train-en-wikidata.json"),
-            "r"
+            os.path.join(args.qald_7, "qald-7-train-en-wikidata.json"), "r"
         ) as inf:
             train = json.load(inf)
 
         with open(
-            os.path.join(args.qald_7, "qald-7-test-en-wikidata.json"),
-            "r"
+            os.path.join(args.qald_7, "qald-7-test-en-wikidata.json"), "r"
         ) as inf:
             test = json.load(inf)
 
@@ -251,23 +243,17 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
             for item in data:
                 query = item["questionWithBrackets"]
                 # sub out brackets
-                query = re.sub(
-                    r"\[(.+?)\]",
-                    lambda m: m.group(1),
-                    query
-                )
+                query = re.sub(r"\[(.+?)\]", lambda m: m.group(1), query)
                 # repair some whitespace issues
                 # words followed by 's
                 query = re.sub(
                     r"(\w+)\s+('s)(?:\s+|$)",
                     lambda m: m.group(1) + m.group(2) + " ",
-                    query
+                    query,
                 )
                 # punctuation with surrounding spaces
                 query = re.sub(
-                    r"\s+([,.?!;])(?:\s+|$)",
-                    lambda m: m.group(1) + " ",
-                    query
+                    r"\s+([,.?!;])(?:\s+|$)", lambda m: m.group(1) + " ", query
                 )
                 sparql = item["sparql"]
                 samples.append(Sample(query, sparql))
@@ -285,7 +271,8 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
             for item in data:
                 query = item["utterance"]
                 sparql = item["sparql"]
-                samples.append(Sample(query, sparql))
+                info = {"id": item["id"], "results": item["results"]}
+                samples.append(Sample(query, sparql, info))
             output[split] = samples
 
     elif args.kqa_pro is not None:
@@ -354,28 +341,18 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
 
     elif args.grail_qa:
         kg = "freebase"
-        data = load_dataset(
-            "third_party/KGQA-datasets/grail_qa",
-            "grail_qa"
-        )
+        data = load_dataset("third_party/KGQA-datasets/grail_qa", "grail_qa")
 
         output["train"] = [
-            Sample(item["question"], item["sparql_query"])
-            for item in data["train"]
+            Sample(item["question"], item["sparql_query"]) for item in data["train"]
         ]
         output["val"] = [
             Sample(item["question"], item["sparql_query"])
             for item in data["validation"]
         ]
 
-        data = load_dataset(
-            "third_party/KGQA-datasets/grail_qa",
-            "grailqa_test_public"
-        )
-        output["test"] = [
-            Sample(item["question"], "")
-            for item in data["test"]
-        ]
+        data = load_dataset("third_party/KGQA-datasets/grail_qa", "grailqa_test_public")
+        output["test"] = [Sample(item["question"], "") for item in data["test"]]
 
     elif args.wqsp:
         data = load_dataset("third_party/KGQA-datasets/webqsp")
@@ -386,10 +363,11 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
             samples = []
             for item in items:
                 for sparql in item["Parses"]["Sparql"]:
-                    samples.append(Sample(
-                        item["RawQuestion"],
-                        clean_sparql_for_wqsp_and_cwq(sparql)
-                    ))
+                    samples.append(
+                        Sample(
+                            item["RawQuestion"], clean_sparql_for_wqsp_and_cwq(sparql)
+                        )
+                    )
                     if split == "test":
                         # only first for test
                         break
@@ -397,8 +375,7 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
 
     elif args.cwq:
         data = load_dataset(
-            "third_party/KGQA-datasets/complex_web_questions",
-            "complex_web_questions"
+            "third_party/KGQA-datasets/complex_web_questions", "complex_web_questions"
         )
         kg = "freebase"
         for split, items in data.items():
@@ -406,21 +383,19 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
             assert split in {"train", "val", "test"}
             samples = []
             for item in items:
-                samples.append(Sample(
-                    item["question"],
-                    clean_sparql_for_wqsp_and_cwq(item["sparql"])
-                ))
+                samples.append(
+                    Sample(
+                        item["question"], clean_sparql_for_wqsp_and_cwq(item["sparql"])
+                    )
+                )
             output[split] = samples
 
         data = load_dataset(
             "third_party/KGQA-datasets/complex_web_questions",
-            "complexwebquestions_test"
+            "complexwebquestions_test",
         )
         output["test"] = [
-            Sample(
-                item["question"],
-                clean_sparql_for_wqsp_and_cwq(item["sparql"])
-            )
+            Sample(item["question"], clean_sparql_for_wqsp_and_cwq(item["sparql"]))
             for item in data["test"]
         ]
 
@@ -440,27 +415,23 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
             samples = []
             for idx in indices:
                 item = data[idx]
-                samples.append(Sample(
-                    item["question"],
-                    item["sparql"]
-                ))
+                samples.append(Sample(item["question"], item["sparql"]))
             output[s] = samples
 
     elif args.lc_quad1_dbpedia:
         kg = "dbpedia"
-        data = load_dataset(
-            "third_party/KGQA-datasets/lcquad_v1",
-            "lcquad"
-        )
+        data = load_dataset("third_party/KGQA-datasets/lcquad_v1", "lcquad")
         for split, items in data.items():
             split = SPLIT_RENAME.get(split, split)
             assert split in {"train", "val", "test"}
             samples = []
             for item in items:
-                samples.append(Sample(
-                    item["corrected_question"].replace(" ?", "?"),
-                    item["sparql_query"]
-                ))
+                samples.append(
+                    Sample(
+                        item["corrected_question"].replace(" ?", "?"),
+                        item["sparql_query"],
+                    )
+                )
             output[split] = samples
 
     elif args.qald_9:
@@ -494,16 +465,16 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
             assert split in {"train", "val", "test"}
             samples = []
             for item in items:
-                samples.append(Sample(
-                    item["question"]["string"],
-                    item["query"]["sparql"]
-                ))
+                samples.append(
+                    Sample(item["question"]["string"], item["query"]["sparql"])
+                )
                 if split == "test":
                     continue
-                samples.append(Sample(
-                    item["paraphrased_question"]["string"],
-                    item["query"]["sparql"]
-                ))
+                samples.append(
+                    Sample(
+                        item["paraphrased_question"]["string"], item["query"]["sparql"]
+                    )
+                )
             output[split] = samples
 
     elif args.dblp_quad:
@@ -514,18 +485,14 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
             assert split in {"train", "val", "test"}
             samples = []
             for item in items:
-                samples.append(Sample(
-                    item["question"]["string"],
-                    item["query"]["sparql"]
-                ))
+                samples.append(
+                    Sample(item["question"]["string"], item["query"]["sparql"])
+                )
                 if split == "test":
                     continue
 
                 for q in item["paraphrased_question"]:
-                    samples.append(Sample(
-                        q,
-                        item["query"]["sparql"]
-                    ))
+                    samples.append(Sample(q, item["query"]["sparql"]))
 
             output[split] = samples
 
@@ -536,29 +503,189 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
 
 
 # nltk english stopwords
-STOP = set([
-    'i', 'me', 'my', 'myself', 'we', 'our', 'ours', 'ourselves', 'you',
-    "you're", "you've", "you'll", "you'd", 'your', 'yours', 'yourself',
-    'yourselves', 'he', 'him', 'his', 'himself', 'she', "she's", 'her',
-    'hers', 'herself', 'it', "it's", 'its', 'itself', 'they', 'them',
-    'their', 'theirs', 'themselves', 'what', 'which', 'who', 'whom',
-    'this', 'that', "that'll", 'these', 'those', 'am', 'is', 'are', 'was',
-    'were', 'be', 'been', 'being', 'have', 'has', 'had', 'having', 'do',
-    'does', 'did', 'doing', 'a', 'an', 'the', 'and', 'but', 'if', 'or',
-    'because', 'as', 'until', 'while', 'of', 'at', 'by', 'for', 'with',
-    'about', 'against', 'between', 'into', 'through', 'during', 'before',
-    'after', 'above', 'below', 'to', 'from', 'up', 'down', 'in', 'out', 'on',
-    'off', 'over', 'under', 'again', 'further', 'then', 'once', 'here',
-    'there', 'when', 'where', 'why', 'how', 'all', 'any', 'both', 'each',
-    'few', 'more', 'most', 'other', 'some', 'such', 'no', 'nor', 'not',
-    'only', 'own', 'same', 'so', 'than', 'too', 'very', 's', 't', 'can',
-    'will', 'just', 'don', "don't", 'should', "should've", 'now', 'd', 'll',
-    'm', 'o', 're', 've', 'y', 'ain', 'aren', "aren't", 'couldn', "couldn't",
-    'didn', "didn't", 'doesn', "doesn't", 'hadn', "hadn't", 'hasn', "hasn't",
-    'haven', "haven't", 'isn', "isn't", 'ma', 'mightn', "mightn't", 'mustn',
-    "mustn't", 'needn', "needn't", 'shan', "shan't", 'shouldn', "shouldn't",
-    'wasn', "wasn't", 'weren', "weren't", 'won', "won't", 'wouldn', "wouldn't"
-])
+STOP = set(
+    [
+        "i",
+        "me",
+        "my",
+        "myself",
+        "we",
+        "our",
+        "ours",
+        "ourselves",
+        "you",
+        "you're",
+        "you've",
+        "you'll",
+        "you'd",
+        "your",
+        "yours",
+        "yourself",
+        "yourselves",
+        "he",
+        "him",
+        "his",
+        "himself",
+        "she",
+        "she's",
+        "her",
+        "hers",
+        "herself",
+        "it",
+        "it's",
+        "its",
+        "itself",
+        "they",
+        "them",
+        "their",
+        "theirs",
+        "themselves",
+        "what",
+        "which",
+        "who",
+        "whom",
+        "this",
+        "that",
+        "that'll",
+        "these",
+        "those",
+        "am",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "having",
+        "do",
+        "does",
+        "did",
+        "doing",
+        "a",
+        "an",
+        "the",
+        "and",
+        "but",
+        "if",
+        "or",
+        "because",
+        "as",
+        "until",
+        "while",
+        "of",
+        "at",
+        "by",
+        "for",
+        "with",
+        "about",
+        "against",
+        "between",
+        "into",
+        "through",
+        "during",
+        "before",
+        "after",
+        "above",
+        "below",
+        "to",
+        "from",
+        "up",
+        "down",
+        "in",
+        "out",
+        "on",
+        "off",
+        "over",
+        "under",
+        "again",
+        "further",
+        "then",
+        "once",
+        "here",
+        "there",
+        "when",
+        "where",
+        "why",
+        "how",
+        "all",
+        "any",
+        "both",
+        "each",
+        "few",
+        "more",
+        "most",
+        "other",
+        "some",
+        "such",
+        "no",
+        "nor",
+        "not",
+        "only",
+        "own",
+        "same",
+        "so",
+        "than",
+        "too",
+        "very",
+        "s",
+        "t",
+        "can",
+        "will",
+        "just",
+        "don",
+        "don't",
+        "should",
+        "should've",
+        "now",
+        "d",
+        "ll",
+        "m",
+        "o",
+        "re",
+        "ve",
+        "y",
+        "ain",
+        "aren",
+        "aren't",
+        "couldn",
+        "couldn't",
+        "didn",
+        "didn't",
+        "doesn",
+        "doesn't",
+        "hadn",
+        "hadn't",
+        "hasn",
+        "hasn't",
+        "haven",
+        "haven't",
+        "isn",
+        "isn't",
+        "ma",
+        "mightn",
+        "mightn't",
+        "mustn",
+        "mustn't",
+        "needn",
+        "needn't",
+        "shan",
+        "shan't",
+        "shouldn",
+        "shouldn't",
+        "wasn",
+        "wasn't",
+        "weren",
+        "weren't",
+        "won",
+        "won't",
+        "wouldn",
+        "wouldn't",
+    ]
+)
 
 PUNCT = set(string.punctuation)
 
@@ -569,17 +696,15 @@ def get_search_query(question: str, name: str, index_type: str) -> str:
     if index_type == "prefix":
         # special handling of prefix index
         keywords = list(
-            k for k in set(keywords)
-            if k not in STOP and k not in PUNCT
-            and not any(
-                k.startswith(other) and k != other
-                for other in keywords
-            )
+            k
+            for k in set(keywords)
+            if k not in STOP
+            and k not in PUNCT
+            and not any(k.startswith(other) and k != other for other in keywords)
         )
         query_keywords = normalize(question).split()
         matching, non_matching = partition_by(
-            keywords,
-            lambda kw: any(qk.startswith(kw) for qk in query_keywords)
+            keywords, lambda kw: any(qk.startswith(kw) for qk in query_keywords)
         )
         random.shuffle(matching)
         random.shuffle(non_matching)
@@ -602,27 +727,14 @@ def is_ent_or_prop(obj_type: str) -> bool:
 
 
 def prepare_stages(
-    question: str,
-    sparql: str,
-    managers: list[KgManager],
-    args: argparse.Namespace
+    question: str, sparql: str, managers: list[KgManager], args: argparse.Namespace
 ) -> list[tuple[str | Chat, str]]:
     manager = random.choice(managers)
     sparql_encoded = sparql.encode()
-    parse = manager.parser.parse(
-        sparql,
-        skip_empty=True,
-        collapse_single=False
-    )
+    parse = manager.parser.parse(sparql, skip_empty=True, collapse_single=False)
 
-    mappings = {
-        "entity": manager.entity_mapping,
-        "property": manager.property_mapping
-    }
-    indices = {
-        "entity": manager.entity_index,
-        "property": manager.property_index
-    }
+    mappings = {"entity": manager.entity_mapping, "property": manager.property_mapping}
+    indices = {"entity": manager.entity_index, "property": manager.property_index}
 
     def span(obj, start=sys.maxsize, end=0) -> tuple[int, int]:
         if "children" in obj:
@@ -674,10 +786,7 @@ def prepare_stages(
 
             id = map[norm[0]]
             label = index.get_name(id)
-            syns = [
-                s for s in index.get_val(id, 2).split(";;;")
-                if s != ""
-            ]
+            syns = [s for s in index.get_val(id, 2).split(";;;") if s != ""]
             matching.append((obj_type, *norm, label, syns))
 
         if matching:
@@ -689,19 +798,12 @@ def prepare_stages(
     # get all items in triples
     items = [
         (item, map_item(item))
-        for item in find_all(
-            parse,
-            name="iri",
-            skip={"Prologue"}
-        )
+        for item in find_all(parse, name="iri", skip={"Prologue"})
     ] + [
         # only literals in triples are searchable
         # rest should be predicted directly
         (item, map_item(item))
-        for triple in find_all(
-            parse,
-            name="TriplesSameSubject"
-        )
+        for triple in find_all(parse, name="TriplesSameSubject")
         for item in find_all(
             triple,
             name={"RDFLiteral", "NumericLiteral", "BooleanLiteral"},
@@ -710,16 +812,14 @@ def prepare_stages(
 
     # filter out invalid items and sort by occurence in the query
     items = sorted(
-        ((item, processed)
-         for item, processed in items
-         if processed is not None),
-        key=lambda x: span(x[0])
+        ((item, processed) for item, processed in items if processed is not None),
+        key=lambda x: span(x[0]),
     )
 
     samples = []
     for item_idx in random.sample(
         list(range(len(items) + 1)),
-        min(len(items) + 1, args.stages_per_sample or (len(items) + 1))
+        min(len(items) + 1, args.stages_per_sample or (len(items) + 1)),
     ):
         manager = random.choice(managers)
 
@@ -735,23 +835,15 @@ def prepare_stages(
                 end = span(items[item_idx - 1][0])[1]
 
             sparql_prefix = manager.fix_prefixes(
-                sparql_encoded[:end].decode(),
-                is_prefix=True,
-                remove_known=True
+                sparql_encoded[:end].decode(), is_prefix=True, remove_known=True
             )
-            natural_prefix, inc = manager.replace_iris(
-                sparql_prefix,
-                is_prefix=True
-            )
+            natural_prefix, inc = manager.replace_iris(sparql_prefix, is_prefix=True)
             if inc:
                 continue
 
             final_cont = sparql_encoded[end:].decode()
             final_cont_prompt = manager.get_sparql_continuation_prompt(
-                question,
-                sparql_prefix,
-                natural_prefix,
-                selections
+                question, sparql_prefix, natural_prefix, selections
             )
             samples.append((final_cont_prompt, final_cont))
             continue
@@ -766,10 +858,7 @@ def prepare_stages(
             is_prefix=True,
             remove_known=True,
         )
-        natural_prefix, inc = manager.replace_iris(
-            sparql_prefix,
-            is_prefix=True
-        )
+        natural_prefix, inc = manager.replace_iris(sparql_prefix, is_prefix=True)
         if inc:
             continue
 
@@ -783,13 +872,10 @@ def prepare_stages(
             last_end = span(items[item_idx - 1][0])[1]
             assert last_end < start, "invalid item order"
             last_sparql_prefix = manager.fix_prefixes(
-                sparql_encoded[:last_end].decode(),
-                is_prefix=True,
-                remove_known=True
+                sparql_encoded[:last_end].decode(), is_prefix=True, remove_known=True
             )
             last_natural_prefix, inc = manager.replace_iris(
-                last_sparql_prefix,
-                is_prefix=True
+                last_sparql_prefix, is_prefix=True
             )
             if inc:
                 continue
@@ -803,11 +889,9 @@ def prepare_stages(
             obj_type: str,
             identifier: str,
         ) -> bool:
-            return is_ent_or_prop(obj_type) \
-                and any(
-                    items[i][1][1] == identifier
-                    for i in range(item_idx)
-                )
+            return is_ent_or_prop(obj_type) and any(
+                items[i][1][1] == identifier for i in range(item_idx)
+            )
 
         start_idx = item_idx
         while start_idx < len(items):
@@ -816,10 +900,7 @@ def prepare_stages(
                 break
 
             is_other = is_lit_or_other(start_obj_type)
-            is_known = is_known_ent_or_prop(
-                start_obj_type,
-                start_identifier
-            )
+            is_known = is_known_ent_or_prop(start_obj_type, start_identifier)
             if is_other or is_known:
                 start_idx += 1
             else:
@@ -835,52 +916,38 @@ def prepare_stages(
         cont = sparql_encoded[last_end:start].decode() + token
 
         cont_prompt = manager.get_sparql_continuation_prompt(
-            question,
-            last_sparql_prefix,
-            last_natural_prefix,
-            selections
+            question, last_sparql_prefix, last_natural_prefix, selections
         )
 
         samples.append((cont_prompt, cont))
 
         if len(syns) > 0:
-            num_search_failures = min(random.sample(
-                list(range(len(syns) + 1)),
-                1,
-                counts=list(range(len(syns) + 1, 0, -1))
-            )[0], 3)
+            num_search_failures = min(
+                random.sample(
+                    list(range(len(syns) + 1)),
+                    1,
+                    counts=list(range(len(syns) + 1, 0, -1)),
+                )[0],
+                3,
+            )
             search_failures = set(
-                get_search_query(
-                    question,
-                    syn,
-                    manager.entity_index.get_type()
-                )
+                get_search_query(question, syn, manager.entity_index.get_type())
                 for syn in random.sample(syns, num_search_failures)
             )
         else:
             search_failures = set()
 
-        search = get_search_query(
-            question,
-            label,
-            manager.entity_index.get_type()
-        )
+        search = get_search_query(question, label, manager.entity_index.get_type())
         if len(search_failures) >= len(syns) and random.random() < 0.5:
             search_failures.add(search)
             search = random.choice(list(search_failures))
 
         search_prompt, _ = manager.get_search_prompt_and_regex(
-            question,
-            natural_prefix,
-            selections,
-            search_failures
+            question, natural_prefix, selections, search_failures
         )
         samples.append((search_prompt, search))
 
-        selection_k = random.randint(
-            args.selections_min_k,
-            args.selections_max_k
-        )
+        selection_k = random.randint(args.selections_min_k, args.selections_max_k)
 
         alts = manager.get_selection_alternatives(
             sparql_prefix,
@@ -901,12 +968,12 @@ def prepare_stages(
             (obj_type, alt)
             for obj_type, obj_alts in alts.items()
             for alt in obj_alts
-            if (alt.identifier == identifier
-                or alt.short_identifier == identifier)
+            if (alt.identifier == identifier or alt.short_identifier == identifier)
             and (variant is None or variant in (alt.variants or {}))
         ]
-        target_obj_type, target_alt = random.choice(target_alts) \
-            if target_alts else (obj_type, None)
+        target_obj_type, target_alt = (
+            random.choice(target_alts) if target_alts else (obj_type, None)
+        )
 
         select_failures = set()
 
@@ -935,17 +1002,20 @@ def prepare_stages(
         ]
 
         if len(alts_to_fail) > 0:
-            num_select_failures = min(random.sample(
-                list(range(len(alts_to_fail) + 1)),
-                1,
-                counts=list(range(len(alts_to_fail) + 1, 0, -1))
-            )[0], 3 - len(select_failures))
+            num_select_failures = min(
+                random.sample(
+                    list(range(len(alts_to_fail) + 1)),
+                    1,
+                    counts=list(range(len(alts_to_fail) + 1, 0, -1)),
+                )[0],
+                3 - len(select_failures),
+            )
             select_failures.update(
                 random.sample(
                     alts_to_fail,
                     num_select_failures,
                     # make earlier alts more likely failures
-                    counts=list(range(len(alts_to_fail), 0, -1))
+                    counts=list(range(len(alts_to_fail), 0, -1)),
                 )
             )
 
@@ -955,14 +1025,14 @@ def prepare_stages(
             search,
             alts,
             selections=selections,
-            failures=select_failures
+            failures=select_failures,
         )
         if target_alt is None:
             selection = "0. none"
         else:
             offset = sum(
                 len(alts[obj_type])
-                for obj_type in OBJ_TYPES[:OBJ_TYPES.index(target_obj_type)]
+                for obj_type in OBJ_TYPES[: OBJ_TYPES.index(target_obj_type)]
                 if obj_type in alts
             )
             idx = offset + alts[target_obj_type].index(target_alt)
@@ -974,37 +1044,25 @@ def prepare_stages(
 
 
 def prepare_sample(
-    sample: Sample,
-    args: argparse.Namespace,
-    split: str
-) -> tuple[str, str, list[tuple[str | Chat, str]]] | None:
+    sample: Sample, args: argparse.Namespace, split: str
+) -> tuple[Sample, list[tuple[str | Chat, str]]]:
     global managers
 
     # clean sparql in sample
-    sample = Sample(
-        clean(sample.question),
-        clean(sample.sparql),
-    )
+    sample.question = clean(sample.question)
+    sample.sparql = clean(sample.sparql)
     manager = random.choice(managers)
 
     try:
-        sparql = manager.fix_prefixes(sample.sparql)
+        sample.sparql = manager.fix_prefixes(sample.sparql)
     except Exception:
-        sparql = None
+        sample.invalid = True
 
-    if split == "test":
-        return sample.question, sparql or sample.sparql, []
-    elif sparql is None:
-        return None
+    if split == "test" or sample.invalid:
+        return sample, []
 
-    stages = prepare_stages(
-        sample.question,
-        sample.sparql,
-        managers,
-        args
-    )
-
-    return sample.question, sparql, stages
+    stages = prepare_stages(sample.question, sample.sparql, managers, args)
+    return sample, stages
 
 
 def prepare_sample_mp(args: tuple[Sample, argparse.Namespace, str]):
@@ -1032,7 +1090,7 @@ def prepare(args: argparse.Namespace):
     random.seed(args.seed)
     logging.basicConfig(
         format="[%(asctime)s] {%(name)s - %(levelname)s} %(message)s",
-        level=logging.INFO
+        level=logging.INFO,
     )
     kg, data = load_data(args)
     num_samples = {s: len(samples) for s, samples in data.items()}
@@ -1042,11 +1100,7 @@ def prepare(args: argparse.Namespace):
 
     if not args.sequential:
         print(f"Starting {args.num_workers} workers")
-        pool = mp.Pool(
-            args.num_workers,
-            initializer=init,
-            initargs=(kg, args)
-        )
+        pool = mp.Pool(args.num_workers, initializer=init, initargs=(kg, args))
     else:
         pool = None
         init(kg, args)
@@ -1073,72 +1127,61 @@ def prepare(args: argparse.Namespace):
             continue
 
         if args.max_samples is not None:
-            samples = random.sample(
-                samples,
-                min(len(samples), args.max_samples)
-            )
+            samples = random.sample(samples, min(len(samples), args.max_samples))
 
-        input = os.path.join(
-            args.output,
-            f"{split}_input.jsonl"
-        )
+        input = os.path.join(args.output, f"{split}_input.jsonl")
         if os.path.exists(input) and not args.overwrite:
             print(f"skipping {split} split because it already exists")
             continue
 
-        target = os.path.join(
-            args.output,
-            f"{split}_target.jsonl"
+        target = os.path.join(args.output, f"{split}_target.jsonl")
+        raw = os.path.join(args.output, f"{split}_raw.jsonl")
+        outputs = list(
+            tqdm(
+                (
+                    (prepare_sample(sample, args, split) for sample in samples)
+                    if pool is None
+                    else pool.imap(
+                        prepare_sample_mp, ((sample, args, split) for sample in samples)
+                    )
+                ),  # type: ignore
+                desc=f"processing and writing {split} samples",
+                leave=False,
+                total=len(samples),
+                disable=not args.progress,
+            )
         )
-        raw = os.path.join(
-            args.output,
-            f"{split}_raw.jsonl"
-        )
-        outputs = list(tqdm(
-            (
-                prepare_sample(sample, args, split)
-                for sample in samples
-            ) if pool is None else
-            pool.imap(
-                prepare_sample_mp,
-                ((sample, args, split) for sample in samples)
-            ),  # type: ignore
-            desc=f"processing and writing {split} samples",
-            leave=False,
-            total=len(samples),
-            disable=not args.progress
-        ))
         random.shuffle(outputs)
 
         invalid = 0
         num_sparqls = 0
-        with open(input, "w") as inf, \
-                open(target, "w") as tf, \
-                open(raw, "w") as rf:
+        with open(input, "w") as inf, open(target, "w") as tf, open(raw, "w") as rf:
             for output in outputs:
-                if output is None:
-                    invalid += 1
-                    continue
+                (sample, stages) = output
 
-                (question, raw_sparql, sparqls) = output
-                rf.write(json.dumps({
-                    "question": question,
-                    "sparql": raw_sparql
-                }) + "\n")
+                invalid += int(sample.invalid)
+
+                rf.write(
+                    json.dumps(
+                        {
+                            "question": sample.question,
+                            "sparql": sample.sparql,
+                            "info": sample.info or {},
+                        }
+                    )
+                    + "\n"
+                )
 
                 if split == "test":
-                    assert len(sparqls) == 0
-                    inf.write(json.dumps(question) + "\n")
-                    tf.write(json.dumps(raw_sparql) + "\n")
+                    assert len(stages) == 0
+                    inf.write(json.dumps(sample.question) + "\n")
+                    tf.write(json.dumps(sample.sparql) + "\n")
                     continue
 
-                num_sparqls += len(sparqls)
-                for prompt, target in sparqls:
+                num_sparqls += len(stages)
+                for prompt, target in stages:
                     if isinstance(prompt, str):
-                        prompt = [{
-                            "role": "user",
-                            "text": prompt
-                        }]
+                        prompt = [{"role": "user", "text": prompt}]
                     inf.write(json.dumps(prompt) + "\n")
                     tf.write(json.dumps(target) + "\n")
 
