@@ -1,6 +1,6 @@
 import argparse
+import sys
 import json
-import os
 from typing import Type
 from pydantic import BaseModel
 
@@ -19,7 +19,9 @@ from sparql_kgqa.sparql.utils2 import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("question", type=str, help="Question to translate to SPARQL")
+    parser.add_argument(
+        "-q", "--question", type=str, help="Question to translate to SPARQL"
+    )
     parser.add_argument(
         "-kg",
         "--knowledge-graph",
@@ -64,8 +66,15 @@ def parse_args() -> argparse.Namespace:
         "-t",
         "--temperature",
         type=float,
-        default=0.0,
+        default=1.0,
         help="Temperature to use during decoding",
+    )
+    parser.add_argument(
+        "-tp",
+        "--top-p",
+        type=float,
+        default=0.9,
+        help="Top-p for nucleus sampling",
     )
     parser.add_argument(
         "-sk",
@@ -82,20 +91,15 @@ def parse_args() -> argparse.Namespace:
         help="Number of top and bottom rows to show for a SPARQL query result",
     )
     parser.add_argument(
-        "--save-to",
-        type=str,
-        default=None,
-        help="Save the generation process to the given text file",
-    )
-    parser.add_argument(
         "--no-examples",
         action="store_true",
         help="Do not include examples in the generation process",
     )
     parser.add_argument(
-        "--sparql-only",
-        action="store_true",
-        help="Only output the final SPARQL query as json",
+        "--input-format",
+        type=str,
+        choices=["text", "jsonl"],
+        help="Input format for the question",
     )
     return parser.parse_args()
 
@@ -138,8 +142,8 @@ answer. Then call stop to end the generation process.
 
 Important rules:
 - Do not make up information that is not present in the knowledge graph. \
-Also do not make up identifiers for entities or properties, only use the \
-provided functions to find them.
+Also do not make up identifiers for entities or properties, but use the \
+provided search functions to find them.
 - After each function call, interpret and think about its results and \
 determine how they can be used to help you generate the final SPARQL query.
 - You can change your initial plan as you go along, but make sure to explain \
@@ -290,7 +294,10 @@ Albert Einstein\'s jobs',
 def execute_fn(
     manager: KgManager, fn_name: str, fn_args: dict, args: argparse.Namespace
 ) -> str:
-    if fn_name == "execute_sparql":
+    if fn_name == "stop":
+        return "Stopping the SPARQL generation process"
+
+    elif fn_name == "execute_sparql":
         return execute_sparql(manager, fn_args["sparql"], args.result_top_bottom_k)
 
     elif fn_name == "search_entities":
@@ -456,6 +463,9 @@ def response_format(initial: bool) -> Type[BaseModel]:
 
 
 def wikidata_examples(manager: KgManager, args: argparse.Namespace) -> list[dict]:
+    if args.fn_set != "all":
+        return []
+
     return [
         prompt("What is the capital of France?", manager),
         {
@@ -463,7 +473,7 @@ def wikidata_examples(manager: KgManager, args: argparse.Namespace) -> list[dict
             "content": """\
 Plan:
 - find the entity for France
-- find the property for capital
+- find the property for capital given the entity
 - combine them in a SPARQL query""",
             "tool_calls": [
                 {
@@ -490,8 +500,16 @@ property for capital""",
                 {
                     "type": "function",
                     "function": {
-                        "name": "search_properties",
-                        "arguments": json.dumps({"query": "capital"}),
+                        "name": "search_constrained",
+                        "arguments": json.dumps(
+                            {
+                                "subject": "wd:Q142",
+                                "property": None,
+                                "object": None,
+                                "search_for": "property",
+                                "query": "capital",
+                            }
+                        ),
                     },
                     "id": "2",
                 }
@@ -499,7 +517,17 @@ property for capital""",
         },
         {
             "role": "tool",
-            "content": search_properties(manager, "capital", args.search_top_k),
+            "content": search_constrained(
+                manager,
+                {
+                    "subject": "wd:Q142",
+                    "property": None,
+                    "object": None,
+                    "search_for": "property",
+                    "query": "capital",
+                },
+                args.search_top_k,
+            ),
             "tool_call_id": "2",
         },
         {
@@ -534,8 +562,7 @@ wdt:P36 ?capital }"
         },
         {
             "role": "assistant",
-            "content": """\
-The capital of France is Paris""",
+            "content": "The capital of France is Paris",
             "tool_calls": [
                 {
                     "type": "function",
@@ -555,10 +582,8 @@ The capital of France is Paris""",
     ]
 
 
-def examples(
-    manager: KgManager, args: argparse.Namespace, ignore: bool = False
-) -> list[dict]:
-    if ignore:
+def examples(manager: KgManager, args: argparse.Namespace) -> list[dict]:
+    if args.no_examples:
         return []
     elif manager.kg == "wikidata":
         return wikidata_examples(manager, args)
@@ -568,6 +593,14 @@ def examples(
 
 def run(args: argparse.Namespace) -> None:
     args = parse_args()
+
+    if args.question is None:
+        inputs = [line.rstrip("\r\n") for line in sys.stdin]
+    else:
+        inputs = [args.question]
+
+    if args.input_format == "jsonl":
+        inputs = [json.loads(input) for input in inputs]
 
     client = OpenAI(api_key=args.api_key)
 
@@ -579,49 +612,63 @@ def run(args: argparse.Namespace) -> None:
     )
 
     fns = functions(args.fn_set)
+    system_msg = system_message(fns, manager)
+    example_msgs = examples(manager, args)
 
+    for ipt in inputs:
+        generate_sparql(client, manager, fns, system_msg, example_msgs, ipt, args)
+
+
+def generate_sparql(
+    client: OpenAI,
+    manager: KgManager,
+    fns: list[dict],
+    system_msg: dict,
+    examples: list[dict],
+    question: str,
+    args: argparse.Namespace,
+) -> None:
     api_messages: list = [
-        system_message(fns, manager),
-        *examples(manager, args.search_top_k, args.no_examples),
-        prompt(args.question, manager),
+        system_msg,
+        *examples,
+        prompt(question, manager),
     ]
-    content_messages: list[str] = []
+    content_messages: list[dict[str, str]] = []
+
     for msg in api_messages:
+        content_messages.append(msg)
+        print(format_message(msg), file=sys.stderr)
         for tool_call in msg.get("tool_calls", []):
             fn_name = tool_call["function"]["name"]
-            if fn_name == "stop":
-                continue
-
             fn_args = json.loads(tool_call["function"]["arguments"])
-            fmt = format_message(
-                {"role": "tool call", "content": format_fn_call(fn_name, fn_args)}
-            )
-            content_messages.append(fmt)
-            print(fmt)
-
-        fmt = format_message(msg)
-        content_messages.append(fmt)
-        print(fmt)
+            cmsg = {"role": "tool call", "content": format_fn_call(fn_name, fn_args)}
+            content_messages.append(cmsg)
+            print(format_message(cmsg), file=sys.stderr)
 
     sparqls = []
-
     while True:
-        response = client.chat.completions.create(
-            messages=api_messages,  # type: ignore
-            model=args.model,
-            tools=[{"type": "function", "function": fn} for fn in fns],  # type: ignore
-            parallel_tool_calls=False,
-            temperature=args.temperature,
-        )  # type: ignore
+        try:
+            response = client.chat.completions.create(
+                messages=api_messages,  # type: ignore
+                model=args.model,
+                tools=[
+                    {"type": "function", "function": fn} for fn in fns
+                ],  # type: ignore
+                parallel_tool_calls=False,
+                temperature=args.temperature,
+                top_p=args.top_p,
+            )  # type: ignore
+        except Exception as e:
+            print(f"Failed to generate response: {e}", file=sys.stderr)
+            content_messages.append({"error": f"Failed to generate response: {e}"})
+            break
 
         choice = response.choices[0]
         api_messages.append(choice.message)
         if choice.message.content:
-            fmt = format_message(
-                {"role": "assistant", "content": choice.message.content or ""}
-            )
-            print(fmt)
-            content_messages.append(fmt)
+            cmsg = {"role": "assistant", "content": choice.message.content or ""}
+            content_messages.append(cmsg)
+            print(format_message(cmsg), file=sys.stderr)
 
         if choice.finish_reason == "stop":
             if sparqls:
@@ -632,9 +679,8 @@ def run(args: argparse.Namespace) -> None:
                 "content": "No SPARQL query was generated yet. \
 Please continue.",
             }
-            fmt = format_message(msg)
-            print(fmt)
-            content_messages.append(fmt)
+            print(format_message(msg), file=sys.stderr)
+            content_messages.append(msg)
             api_messages.append(msg)
             continue
 
@@ -643,35 +689,25 @@ Please continue.",
 
         tool_call = choice.message.tool_calls[0]
         fn_name = tool_call.function.name
-        if fn_name == "stop":
-            api_messages.append(
-                {
-                    "role": "tool",
-                    "content": "Stopping the SPARQL generation process",
-                    "tool_call_id": tool_call.id,
-                }
-            )
-            break
-
         fn_args = json.loads(tool_call.function.arguments)
-        if fn_name == "execute_sparql":
-            sparqls.append(fn_args["sparql"])
 
-        fmt = format_message(
-            {
-                "role": "tool call",
-                "content": format_fn_call(fn_name, fn_args),
-            }
-        )
-        print(fmt)
-        content_messages.append(fmt)
+        cmsg = {
+            "role": "tool call",
+            "content": format_fn_call(fn_name, fn_args),
+        }
+        content_messages.append(cmsg)
+        print(format_message(cmsg), file=sys.stderr)
 
         result = execute_fn(manager, fn_name, fn_args, args)
         tool_msg = {"role": "tool", "content": result, "tool_call_id": tool_call.id}
-        fmt = format_message(tool_msg)
-        print(fmt)
-        content_messages.append(fmt)
+        print(format_message(tool_msg), file=sys.stderr)
+        content_messages.append(tool_msg)
         api_messages.append(tool_msg)
+
+        if fn_name == "execute_sparql":
+            sparqls.append(fn_args["sparql"])
+        elif fn_name == "stop":
+            break
 
     if sparqls:
         sparql = sparqls[-1]
@@ -680,18 +716,18 @@ Please continue.",
             sparql = manager.prettify(sparql)
         except Exception:
             pass
+    else:
+        sparql = ""
 
-        fmt = format_message({"role": "sparql", "content": sparql})
-        print(fmt)
-        content_messages.append(fmt)
-
-    if args.save_to is not None:
-        dir = os.path.dirname(args.save_to)
-        if dir:
-            os.makedirs(dir, exist_ok=True)
-
-        with open(args.save_to, "w") as f:
-            f.write("\n".join(content_messages))
+    print(format_message({"role": "sparql", "content": sparql}), file=sys.stderr)
+    print(
+        json.dumps(
+            {
+                "sparql": sparql,
+                "messages": content_messages,
+            }
+        )
+    )
 
 
 if __name__ == "__main__":
