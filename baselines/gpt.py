@@ -13,24 +13,20 @@ from sparql_kgqa.sparql.utils2 import (
     KgManager,
     AskResult,
     SelectResult,
-    load_kg_manager
+    load_kg_manager,
 )
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "question",
-        type=str,
-        help="Question to translate to SPARQL"
-    )
+    parser.add_argument("question", type=str, help="Question to translate to SPARQL")
     parser.add_argument(
         "-kg",
         "--knowledge-graph",
         type=str,
         choices=list(QLEVER_URLS),
         default="wikidata",
-        help="Knowledge graph used"
+        help="Knowledge graph used",
     )
     parser.add_argument(
         "-i",
@@ -38,21 +34,13 @@ def parse_args() -> argparse.Namespace:
         type=str,
         choices=["prefix", "qgram"],
         default="prefix",
-        help="Index type to use"
+        help="Index type to use",
     )
     parser.add_argument(
-        "-e",
-        "--entities",
-        type=str,
-        default=None,
-        help="Path to entity index"
+        "-e", "--entities", type=str, default=None, help="Path to entity index"
     )
     parser.add_argument(
-        "-p",
-        "--properties",
-        type=str,
-        default=None,
-        help="Path to property index"
+        "-p", "--properties", type=str, default=None, help="Path to property index"
     )
     parser.add_argument(
         "-a",
@@ -62,11 +50,7 @@ def parse_args() -> argparse.Namespace:
         help="OpenAI API key",
     )
     parser.add_argument(
-        "-m",
-        "--model",
-        type=str,
-        default="gpt-4o",
-        help="OpenAI model to use"
+        "-m", "--model", type=str, default="gpt-4o", help="OpenAI model to use"
     )
     parser.add_argument(
         "-fn",
@@ -74,39 +58,44 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="all",
         choices=["all", "execute", "execute_search"],
-        help="Set of functions to use"
+        help="Set of functions to use",
     )
     parser.add_argument(
         "-t",
         "--temperature",
         type=float,
         default=0.0,
-        help="Temperature to use during decoding"
+        help="Temperature to use during decoding",
     )
     parser.add_argument(
         "-sk",
         "--search-top-k",
         type=int,
         default=10,
-        help="Number of top search results to show"
+        help="Number of top search results to show",
     )
     parser.add_argument(
         "-rk",
         "--result-top-bottom-k",
         type=int,
         default=10,
-        help="Number of top and bottom rows to show for a SPARQL query result"
+        help="Number of top and bottom rows to show for a SPARQL query result",
     )
     parser.add_argument(
         "--save-to",
         type=str,
         default=None,
-        help="Save the generation process to the given text file"
+        help="Save the generation process to the given text file",
     )
     parser.add_argument(
         "--no-examples",
         action="store_true",
-        help="Do not include examples in the generation process"
+        help="Do not include examples in the generation process",
+    )
+    parser.add_argument(
+        "--sparql-only",
+        action="store_true",
+        help="Only output the final SPARQL query as json",
     )
     return parser.parse_args()
 
@@ -114,8 +103,8 @@ def parse_args() -> argparse.Namespace:
 def system_message(fns: list[dict], manager: KgManager) -> dict:
     kg = manager.kg.capitalize()
     prefixes = "\n".join(
-        f"{prefix}: {url}>" for prefix, url in
-        (manager.prefixes | manager.custom_prefixes).items()
+        f"{prefix}: {url}>"
+        for prefix, url in (manager.prefixes | manager.custom_prefixes).items()
     )
     functions = "\n".join(
         f"- {fn['name']}: {fn['description']}"
@@ -165,7 +154,7 @@ SPARQL query, e.g. by using them in VALUES clauses.
 - Do not stop early if there are still obvious improvements to be made to \
 your SPARQL query.
 - Do not use the wikibase:label service in your SPARQL queries, as it is not \
-SPARQL standard and not supported by the SPARQL engine used here."""
+SPARQL standard and not supported by the SPARQL engine used here.""",
     }
 
 
@@ -177,7 +166,7 @@ def prompt(question: str, manager: KgManager) -> dict:
 Write a SPARQL query over {kg} to answer the given question.
 
 Question:
-{question}"""
+{question}""",
     }
 
 
@@ -189,9 +178,9 @@ def functions(fn_set: str) -> list[dict]:
             "parameters": {
                 "type": "object",
                 "properties": {},
-                "additionalProperties": False
+                "additionalProperties": False,
             },
-            "strict": True
+            "strict": True,
         },
         {
             "name": "execute_sparql",
@@ -202,153 +191,123 @@ as a text formatted table.",
                 "properties": {
                     "sparql": {
                         "type": "string",
-                        "description": "The SPARQL query to execute"
+                        "description": "The SPARQL query to execute",
                     }
                 },
                 "required": ["sparql"],
-                "additionalProperties": False
+                "additionalProperties": False,
             },
             "strict": True,
-            "example": "execute_sparql(sparql=\"SELECT ?job WHERE { wd:Q937 \
-wdt:P106 ?job }\")"
+            "example": 'execute_sparql(sparql="SELECT ?job WHERE { wd:Q937 \
+wdt:P106 ?job }")',
         },
     ]
     if fn_set == "execute":
         return fns
 
-    fns.extend([
-        {
-            "name": "search_entities",
-            "description": "Search for entities in the knowledge graph.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The search query"
-                    }
+    fns.extend(
+        [
+            {
+                "name": "search_entities",
+                "description": "Search for entities in the knowledge graph.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "The search query"}
+                    },
+                    "required": ["query"],
+                    "additionalProperties": False,
                 },
-                "required": ["query"],
-                "additionalProperties": False
+                "strict": True,
+                "example": 'search_entities(query="Angela Merkel")',
             },
-            "strict": True,
-            "example": "search_entities(query=\"Angela Merkel\")"
-        },
-        {
-            "name": "search_properties",
-            "description": "Search for properties in the knowledge graph.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The search query"
-                    }
+            {
+                "name": "search_properties",
+                "description": "Search for properties in the knowledge graph.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "The search query"}
+                    },
+                    "required": ["query"],
+                    "additionalProperties": False,
                 },
-                "required": ["query"],
-                "additionalProperties": False
+                "strict": True,
+                "example": 'search_properties(query="instance of")',
             },
-            "strict": True,
-            "example": "search_properties(query=\"instance of\")"
-        }
-    ])
+        ]
+    )
     if fn_set == "execute_search":
         return fns
 
-    fns.append({
-        "name": "search_constrained",
-        "description": "Search for entities, properties or literals in the \
+    fns.append(
+        {
+            "name": "search_constrained",
+            "description": "Search for entities, properties or literals in the \
 knowledge graph while respecting some given constraints in terms of known \
 entities, properties, or literals. The constraints must be properly formatted \
 IRIs or literals, like wdt:P31 or \
 <http://www.wikidata.org/property/direct/P31>.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "subject": {
-                    "type": ["string", "null"],
-                    "description": "An optional known subject entity"
-                },
-                "property": {
-                    "type": ["string", "null"],
-                    "description": "An optional known property"
-                },
-                "object": {
-                    "type": ["string", "null"],
-                    "description": "An optional known object entity or literal"
-                },
-                "search_for": {
-                    "type": "string",
-                    "enum": ["subject", "property", "object"],
-                    "description": "What to search for (the respective \
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "subject": {
+                        "type": ["string", "null"],
+                        "description": "An optional known subject entity",
+                    },
+                    "property": {
+                        "type": ["string", "null"],
+                        "description": "An optional known property",
+                    },
+                    "object": {
+                        "type": ["string", "null"],
+                        "description": "An optional known object entity or literal",
+                    },
+                    "search_for": {
+                        "type": "string",
+                        "enum": ["subject", "property", "object"],
+                        "description": "What to search for (the respective \
 constraining parameter should be null)",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "A search query used to filter \
+the search results",
+                    },
                 },
-                "query": {
-                    "type": "string",
-                    "description": "A search query used to filter \
-the search results"
-                }
+                "required": ["subject", "property", "object", "search_for", "query"],
+                "additionalProperties": False,
             },
-            "required": [
-                "subject",
-                "property",
-                "object",
-                "search_for",
-                "query"
-            ],
-            "additionalProperties": False
-        },
-        "strict": True,
-        "example": "search_constrained(subject=\"wd:Q937\", \
-property=\"wdt:P106\", object=None, search_for=\"object\") to get a list of \
-Albert Einstein's jobs"
-    })
+            "strict": True,
+            "example": 'search_constrained(subject="wd:Q937", \
+property="wdt:P106", object=None, search_for="object") to get a list of \
+Albert Einstein\'s jobs',
+        }
+    )
     return fns
 
 
 def execute_fn(
-    manager: KgManager,
-    fn_name: str,
-    fn_args: dict,
-    args: argparse.Namespace
+    manager: KgManager, fn_name: str, fn_args: dict, args: argparse.Namespace
 ) -> str:
     if fn_name == "execute_sparql":
-        return execute_sparql(
-            manager,
-            fn_args["sparql"],
-            args.result_top_bottom_k
-        )
+        return execute_sparql(manager, fn_args["sparql"], args.result_top_bottom_k)
 
     elif fn_name == "search_entities":
-        return search_entities(
-            manager,
-            fn_args["query"],
-            args.search_top_k
-        )
+        return search_entities(manager, fn_args["query"], args.search_top_k)
 
     elif fn_name == "search_properties":
-        return search_properties(
-            manager,
-            fn_args["query"],
-            args.search_top_k
-        )
+        return search_properties(manager, fn_args["query"], args.search_top_k)
 
     elif fn_name == "search_constrained":
-        return search_constrained(
-            manager,
-            fn_args,
-            args.search_top_k
-        )
+        return search_constrained(manager, fn_args, args.search_top_k)
 
     else:
         raise ValueError(f"Unknown function: {fn_name}")
 
 
 def search_constrained(
-    manager: KgManager,
-    args: dict,
-    k: int,
-    max_results: int = 1024 * 64
+    manager: KgManager, args: dict, k: int, max_results: int = 1024 * 64
 ) -> str:
     search_for = args["search_for"]
     search_for_constr = args[search_for]
@@ -358,8 +317,7 @@ def search_constrained(
 
     positions = ["subject", "property", "object"]
     if all(args[p] is None for p in positions):
-        return "At least one of subject, property, or object should be \
-constrained."
+        return "At least one of subject, property, or object should be constrained."
 
     for p in positions:
         constr = args[p]
@@ -387,8 +345,7 @@ LIMIT {max_results + 1}"""
     try:
         result = query_sparql(manager, sparql)
     except Exception as e:
-        return f"Failed executing SPARQL query\n{sparql}\n" \
-            f"with error:\n{e}"
+        return f"Failed executing SPARQL query\n{sparql}\n" f"with error:\n{e}"
 
     assert isinstance(result, list)
     result_set = set(result[i][0] for i in range(1, len(result)))
@@ -400,71 +357,28 @@ number of {search_for}s of {max_results:,} before further filtering with \
 the query '{query}'. Consider constraining the search further if possible or \
 try out using a standalone SPARQL query via the execute_sparql function."
 
-    (
-        entity_map,
-        property_map,
-        other,
-        literal
-    ) = manager.parse_autocompletions(result_set)
+    (entity_map, property_map, other, literal) = manager.parse_autocompletions(
+        result_set
+    )
 
     kg = manager.kg.capitalize()
 
     formatted = []
     if search_for == "subject":
-        alts = manager.get_entity_alternatives(
-            id_map=entity_map,
-            query=query,
-            k=k
-        )
-        formatted.append(format_alternatives(
-            f"{kg} entities",
-            alts,
-            k
-        ))
+        alts = manager.get_entity_alternatives(id_map=entity_map, query=query, k=k)
+        formatted.append(format_alternatives(f"{kg} entities", alts, k))
 
     elif search_for == "property":
-        alts = manager.get_property_alternatives(
-            id_map=property_map,
-            query=query,
-            k=k
-        )
-        formatted.append(format_alternatives(
-            f"{kg} properties",
-            alts,
-            k
-        ))
-        alts = manager.get_temporary_index_alternatives(
-            data=other,
-            query=query,
-            k=k
-        )
-        formatted.append(format_alternatives(
-            "other properties",
-            alts,
-            k
-        ))
+        alts = manager.get_property_alternatives(id_map=property_map, query=query, k=k)
+        formatted.append(format_alternatives(f"{kg} properties", alts, k))
+        alts = manager.get_temporary_index_alternatives(data=other, query=query, k=k)
+        formatted.append(format_alternatives("other properties", alts, k))
 
     elif search_for == "object":
-        alts = manager.get_entity_alternatives(
-            id_map=entity_map,
-            query=query,
-            k=k
-        )
-        formatted.append(format_alternatives(
-            f"{kg} entities",
-            alts,
-            k
-        ))
-        alts = manager.get_temporary_index_alternatives(
-            data=literal,
-            query=query,
-            k=k
-        )
-        formatted.append(format_alternatives(
-            "literals",
-            alts,
-            k
-        ))
+        alts = manager.get_entity_alternatives(id_map=entity_map, query=query, k=k)
+        formatted.append(format_alternatives(f"{kg} entities", alts, k))
+        alts = manager.get_temporary_index_alternatives(data=literal, query=query, k=k)
+        formatted.append(format_alternatives("literals", alts, k))
 
     return "\n\n".join(formatted)
 
@@ -482,42 +396,28 @@ def execute_sparql(manager: KgManager, sparql: str, k: int) -> str:
     try:
         result = query_sparql(manager, sparql)
     except Exception as e:
-        return f"Failed executing SPARQL query\n{sparql}\n" \
-            f"with error:\n{e}"
+        return f"Failed executing SPARQL query\n{sparql}\n" f"with error:\n{e}"
 
     return manager.format_sparql_result(result, show_top_bottom_rows=k)
 
 
-def format_alternatives(
-    name: str,
-    alternatives: list[Alternative],
-    k: int
-) -> str:
+def format_alternatives(name: str, alternatives: list[Alternative], k: int) -> str:
     if len(alternatives) == 0:
         return f"No {name} found"
 
     top_k_string = "\n".join(
-        f"{i + 1}. {alt.get_string()}"
-        for i, alt in enumerate(alternatives[:k])
+        f"{i + 1}. {alt.get_string()}" for i, alt in enumerate(alternatives[:k])
     )
     return f"Top {k} {name}:\n{top_k_string}"
 
 
-def search_entities(
-    manager: KgManager,
-    query: str,
-    k: int
-) -> str:
+def search_entities(manager: KgManager, query: str, k: int) -> str:
     alts = manager.get_entity_alternatives(query=query, k=k)
     kg = manager.kg.capitalize()
     return format_alternatives(f"{kg} entities", alts, k)
 
 
-def search_properties(
-    manager: KgManager,
-    query: str,
-    k: int
-) -> str:
+def search_properties(manager: KgManager, query: str, k: int) -> str:
     alts = manager.get_property_alternatives(query=query, k=k)
     kg = manager.kg.capitalize()
     return format_alternatives(f"{kg} properties", alts, k)
@@ -533,9 +433,7 @@ def format_message(message: dict) -> str:
 
 
 def format_fn_call(fn_name: str, fn_args: dict) -> str:
-    fn_args_string = "\n".join(
-        f"{key} => {value}" for key, value in fn_args.items()
-    )
+    fn_args_string = "\n".join(f"{key} => {value}" for key, value in fn_args.items())
     return f"Calling function {fn_name} with arguments:\n{fn_args_string}"
 
 
@@ -557,7 +455,7 @@ def response_format(initial: bool) -> Type[BaseModel]:
         return Continuation
 
 
-def wikidata_examples(manager: KgManager, k: int) -> list[dict]:
+def wikidata_examples(manager: KgManager, args: argparse.Namespace) -> list[dict]:
     return [
         prompt("What is the capital of France?", manager),
         {
@@ -574,14 +472,14 @@ Plan:
                         "name": "search_entities",
                         "arguments": json.dumps({"query": "France"}),
                     },
-                    "id": "1"
+                    "id": "1",
                 }
-            ]
+            ],
         },
         {
             "role": "tool",
-            "content": search_entities(manager, "France", k),
-            "tool_call_id": "1"
+            "content": search_entities(manager, "France", args.search_top_k),
+            "tool_call_id": "1",
         },
         {
             "role": "assistant",
@@ -595,14 +493,14 @@ property for capital""",
                         "name": "search_properties",
                         "arguments": json.dumps({"query": "capital"}),
                     },
-                    "id": "2"
+                    "id": "2",
                 }
-            ]
+            ],
         },
         {
             "role": "tool",
-            "content": search_properties(manager, "capital", k),
-            "tool_call_id": "2"
+            "content": search_properties(manager, "capital", args.search_top_k),
+            "tool_call_id": "2",
         },
         {
             "role": "assistant",
@@ -614,23 +512,25 @@ in a SPARQL query.""",
                     "type": "function",
                     "function": {
                         "name": "execute_sparql",
-                        "arguments": json.dumps({
-                            "sparql": "SELECT ?capital WHERE { wd:Q142 \
+                        "arguments": json.dumps(
+                            {
+                                "sparql": "SELECT ?capital WHERE { wd:Q142 \
 wdt:P36 ?capital }"
-                        }),
+                            }
+                        ),
                     },
-                    "id": "3"
+                    "id": "3",
                 }
-            ]
+            ],
         },
         {
             "role": "tool",
             "content": execute_sparql(
                 manager,
                 "SELECT ?capital WHERE { wd:Q142 wdt:P36 ?capital }",
-                args.top_bottom
+                args.result_top_bottom_k,
             ),
-            "tool_call_id": "3"
+            "tool_call_id": "3",
         },
         {
             "role": "assistant",
@@ -643,23 +543,25 @@ The capital of France is Paris""",
                         "name": "stop",
                         "arguments": "{}",
                     },
-                    "id": "4"
+                    "id": "4",
                 }
-            ]
+            ],
         },
         {
             "role": "tool",
             "content": "Stopping the SPARQL generation process",
-            "tool_call_id": "4"
-        }
+            "tool_call_id": "4",
+        },
     ]
 
 
-def examples(manager: KgManager, k: int, ignore: bool = False) -> list[dict]:
+def examples(
+    manager: KgManager, args: argparse.Namespace, ignore: bool = False
+) -> list[dict]:
     if ignore:
         return []
     elif manager.kg == "wikidata":
-        return wikidata_examples(manager, k)
+        return wikidata_examples(manager, args)
     else:
         return []
 
@@ -681,7 +583,7 @@ def run(args: argparse.Namespace) -> None:
     api_messages: list = [
         system_message(fns, manager),
         *examples(manager, args.search_top_k, args.no_examples),
-        prompt(args.question, manager)
+        prompt(args.question, manager),
     ]
     content_messages: list[str] = []
     for msg in api_messages:
@@ -691,10 +593,9 @@ def run(args: argparse.Namespace) -> None:
                 continue
 
             fn_args = json.loads(tool_call["function"]["arguments"])
-            fmt = format_message({
-                "role": "tool call",
-                "content": format_fn_call(fn_name, fn_args)
-            })
+            fmt = format_message(
+                {"role": "tool call", "content": format_fn_call(fn_name, fn_args)}
+            )
             content_messages.append(fmt)
             print(fmt)
 
@@ -708,22 +609,17 @@ def run(args: argparse.Namespace) -> None:
         response = client.chat.completions.create(
             messages=api_messages,  # type: ignore
             model=args.model,
-            tools=[
-                {"type": "function", "function": fn}
-                for fn in fns
-            ],  # type: ignore
-            # response_format=response_format(initial),  # type: ignore
+            tools=[{"type": "function", "function": fn} for fn in fns],  # type: ignore
             parallel_tool_calls=False,
-            temperature=args.temperature
+            temperature=args.temperature,
         )  # type: ignore
 
         choice = response.choices[0]
         api_messages.append(choice.message)
         if choice.message.content:
-            fmt = format_message({
-                "role": "assistant",
-                "content": choice.message.content or ""
-            })
+            fmt = format_message(
+                {"role": "assistant", "content": choice.message.content or ""}
+            )
             print(fmt)
             content_messages.append(fmt)
 
@@ -734,7 +630,7 @@ def run(args: argparse.Namespace) -> None:
             msg = {
                 "role": "user",
                 "content": "No SPARQL query was generated yet. \
-Please continue."
+Please continue.",
             }
             fmt = format_message(msg)
             print(fmt)
@@ -748,30 +644,30 @@ Please continue."
         tool_call = choice.message.tool_calls[0]
         fn_name = tool_call.function.name
         if fn_name == "stop":
-            api_messages.append({
-                "role": "tool",
-                "content": "Stopping the SPARQL generation process",
-                "tool_call_id": tool_call.id
-            })
+            api_messages.append(
+                {
+                    "role": "tool",
+                    "content": "Stopping the SPARQL generation process",
+                    "tool_call_id": tool_call.id,
+                }
+            )
             break
 
         fn_args = json.loads(tool_call.function.arguments)
         if fn_name == "execute_sparql":
             sparqls.append(fn_args["sparql"])
 
-        fmt = format_message({
-            "role": "tool call",
-            "content": format_fn_call(fn_name, fn_args),
-        })
+        fmt = format_message(
+            {
+                "role": "tool call",
+                "content": format_fn_call(fn_name, fn_args),
+            }
+        )
         print(fmt)
         content_messages.append(fmt)
 
         result = execute_fn(manager, fn_name, fn_args, args)
-        tool_msg = {
-            "role": "tool",
-            "content": result,
-            "tool_call_id": tool_call.id
-        }
+        tool_msg = {"role": "tool", "content": result, "tool_call_id": tool_call.id}
         fmt = format_message(tool_msg)
         print(fmt)
         content_messages.append(fmt)
@@ -785,10 +681,7 @@ Please continue."
         except Exception:
             pass
 
-        fmt = format_message({
-            "role": "sparql",
-            "content": sparql
-        })
+        fmt = format_message({"role": "sparql", "content": sparql})
         print(fmt)
         content_messages.append(fmt)
 
