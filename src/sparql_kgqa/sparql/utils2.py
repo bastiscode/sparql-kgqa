@@ -48,25 +48,17 @@ def get_index_dir() -> str | None:
 
 
 def load_sparql_grammar() -> tuple[str, str]:
-    sparql_grammar = resources.read_text(
-        "sparql_kgqa.sparql.grammar",
-        "sparql.y"
-    )
-    sparql_lexer = resources.read_text(
-        "sparql_kgqa.sparql.grammar",
-        "sparql2.l"
-    )
+    sparql_grammar = resources.read_text("sparql_kgqa.sparql.grammar", "sparql.y")
+    sparql_lexer = resources.read_text("sparql_kgqa.sparql.grammar", "sparql2.l")
     return sparql_grammar, sparql_lexer
 
 
 def load_iri_and_literal_grammar() -> tuple[str, str]:
     iri_and_literal_grammar = resources.read_text(
-        "sparql_kgqa.sparql.grammar",
-        "iri_literal.y"
+        "sparql_kgqa.sparql.grammar", "iri_literal.y"
     )
     iri_and_literal_lexer = resources.read_text(
-        "sparql_kgqa.sparql.grammar",
-        "iri_literal.l"
+        "sparql_kgqa.sparql.grammar", "iri_literal.l"
     )
     return iri_and_literal_grammar, iri_and_literal_lexer
 
@@ -96,17 +88,13 @@ def parse_to_string(parse: dict) -> str:
 
 
 def find(
-    parse: dict,
-    name: str | set[str],
-    skip: set[str] | None = None
+    parse: dict, name: str | set[str], skip: set[str] | None = None
 ) -> dict | None:
     return next(find_all(parse, name, skip), None)
 
 
 def find_all(
-    parse: dict,
-    name: str | set[str],
-    skip: set[str] | None = None
+    parse: dict, name: str | set[str], skip: set[str] | None = None
 ) -> Iterator[dict]:
     if skip is not None and parse["name"] in skip:
         return
@@ -123,7 +111,7 @@ def ask_to_select(
     sparql: str,
     parser: grammar.LR1Parser,
     var: str | None = None,
-    distinct: bool = False
+    distinct: bool = False,
 ) -> str | None:
     parse = parser.parse(sparql)
 
@@ -140,9 +128,9 @@ def ask_to_select(
         ask_var = next(
             filter(
                 lambda p: p["children"][0]["value"] == var,
-                find_all(sub_parse, "Var", skip={"SubSelect"})
+                find_all(sub_parse, "Var", skip={"SubSelect"}),
             ),
-            None
+            None,
         )
         assert ask_var is not None, "could not find specified var"
     else:
@@ -155,22 +143,13 @@ def ask_to_select(
         # replace ASK terminal with SelectClause
         sel_clause = [
             {
-                'name': 'SELECT',
-                'value': 'SELECT',
+                "name": "SELECT",
+                "value": "SELECT",
             },
-            {
-                'name': 'DISTINCT',
-                'value': 'DISTINCT' * distinct
-            },
-            {
-                'name': 'Var',
-                'value': var
-            }
+            {"name": "DISTINCT", "value": "DISTINCT" * distinct},
+            {"name": "Var", "value": var},
         ]
-        ask_query["children"][0] = {
-            'name': 'SelectClause',
-            'children': sel_clause
-        }
+        ask_query["children"][0] = {"name": "SelectClause", "children": sel_clause}
         return parse_to_string(parse)
 
     # ask query does not have a var, convert to select
@@ -191,35 +170,22 @@ def ask_to_select(
         raise ValueError(f"unsupported iri format {iri}")
 
     where_clause = ask_query["children"][2]
-    group_graph_pattern = find(
-        where_clause,
-        "GroupGraphPattern",
-        skip={"SubSelect"}
-    )
+    group_graph_pattern = find(where_clause, "GroupGraphPattern", skip={"SubSelect"})
     assert group_graph_pattern is not None
-    values = {
-        "name": "CustomValuesClause",
-        "value": f"VALUES {var} {{ {iri} }}"
-    }
+    values = {"name": "CustomValuesClause", "value": f"VALUES {var} {{ {iri} }}"}
     group_graph_pattern["children"].insert(1, values)
 
     ask_query["name"] = "SelectQuery"
     # replace ASK terminal with SelectClause
     ask_query["children"][0] = {
-        'name': 'SelectClause',
-        'children': [
+        "name": "SelectClause",
+        "children": [
             {
-                'name': 'SELECT',
-                'value': 'SELECT',
+                "name": "SELECT",
+                "value": "SELECT",
             },
-            {
-                'name': 'DISTINCT',
-                'value': 'DISTINCT' * distinct
-            },
-            {
-                'name': 'Var',
-                'value': var
-            }
+            {"name": "DISTINCT", "value": "DISTINCT" * distinct},
+            {"name": "Var", "value": var},
         ],
     }
     return parse_to_string(parse)
@@ -233,7 +199,7 @@ class Alternative:
         label: str | None = None,
         variants: dict[str, str] | None = None,
         aliases: list[str] | None = None,
-        infos: list[str] | None = None
+        infos: list[str] | None = None,
     ) -> None:
         self.identifier = identifier
         self.short_identifier = short_identifier
@@ -243,8 +209,9 @@ class Alternative:
         self.infos = infos
 
     def __repr__(self) -> str:
-        return f"Alternative({self.label}, {self.get_identifier()}, " \
-            f"{self.variants})"
+        return (
+            f"Alternative({self.label}, {self.get_identifier()}, " f"{self.variants})"
+        )
 
     @staticmethod
     def _clip(s: str | None, max_len: int = 128) -> str:
@@ -267,17 +234,15 @@ class Alternative:
 
     def get_sparql_label(self, variant: str | None = None) -> str:
         identifier = self.get_variant_or_identifier(variant)
-        assert identifier is not None, \
-            "failed to get sparql label due to invalid variant"
+        assert (
+            identifier is not None
+        ), "failed to get sparql label due to invalid variant"
         if not self.label:
             return identifier
 
         return f"{self.get_label()} ({identifier})"
 
-    def get_variant_or_identifier(
-        self,
-        variant: str | None
-    ) -> str | None:
+    def get_variant_or_identifier(self, variant: str | None) -> str | None:
         if not variant:
             return self.get_identifier()
         elif not self.variants:
@@ -285,27 +250,19 @@ class Alternative:
         else:
             return self.variants.get(variant, None)
 
-    def get_variant_by_name(
-        self,
-        name: str
-    ) -> str | None:
+    def get_variant_by_name(self, name: str) -> str | None:
         if not self.variants:
             return None
 
-        return next((
-            item[0] for item in
-            filter(
-                lambda item: item[1] == name,
-                self.variants.items()
-            )),
-            None
+        return next(
+            (
+                item[0]
+                for item in filter(lambda item: item[1] == name, self.variants.items())
+            ),
+            None,
         )
 
-    def get_string(
-        self,
-        max_aliases: int = 5,
-        add_infos: bool = True
-    ) -> str:
+    def get_string(self, max_aliases: int = 5, add_infos: bool = True) -> str:
         s = self.get_label()
 
         desc = []
@@ -322,8 +279,7 @@ class Alternative:
 
         if add_infos and max_aliases and self.aliases:
             aliases = random.sample(
-                self.aliases,
-                min(len(self.aliases), max_aliases or len(self.aliases))
+                self.aliases, min(len(self.aliases), max_aliases or len(self.aliases))
             )
             s += ", also known as " + ", ".join(self._clip(a) for a in aliases)
 
@@ -332,10 +288,13 @@ class Alternative:
     def get_regex(self) -> str:
         r = re.escape(self.get_label())
         if self.variants:
-            r += re.escape(" (") + "(?:" + "|".join(map(
-                re.escape,
-                self.variants.values()
-            )) + ")" + re.escape(")")
+            r += (
+                re.escape(" (")
+                + "(?:"
+                + "|".join(map(re.escape, self.variants.values()))
+                + ")"
+                + re.escape(")")
+            )
         return r
 
 
@@ -344,11 +303,7 @@ class NoneAlternative(Alternative):
         super().__init__("none", "none")
         self.obj_type = obj_type
 
-    def get_string(
-        self,
-        max_aliases: int | None = 5,
-        add_infos: bool = True
-    ) -> str:
+    def get_string(self, max_aliases: int | None = 5, add_infos: bool = True) -> str:
         return f"{self.label} (if no other {self.obj_type} fits well enough)"
 
     def get_regex(self, variants: list[str] | None = None) -> str:
@@ -410,8 +365,7 @@ class WikidataPropertyMapping(Mapping):
     def __init__(self) -> None:
         super().__init__()
         self.inverse_variants = {
-            var: pfx
-            for pfx, var in WIKIDATA_PROPERTY_VARIANTS.items()
+            var: pfx for pfx, var in WIKIDATA_PROPERTY_VARIANTS.items()
         }
 
     @staticmethod
@@ -428,7 +382,7 @@ class WikidataPropertyMapping(Mapping):
         longest = self._longest_prefix(iri)
         if longest is None:
             return None
-        key = self.NORM_PREFIX + iri[len(longest):]
+        key = self.NORM_PREFIX + iri[len(longest) :]
         return key, WIKIDATA_PROPERTY_VARIANTS[longest]
 
     def denormalize(self, key: str, variant: str | None) -> str | None:
@@ -439,7 +393,7 @@ class WikidataPropertyMapping(Mapping):
         elif not is_prefix_of_iri(self.NORM_PREFIX, key):
             return None
         pfx = self.inverse_variants[variant]
-        return pfx + key[len(self.NORM_PREFIX):]
+        return pfx + key[len(self.NORM_PREFIX) :]
 
     def default_variants(self) -> set[str]:
         return {"wdt", "p"}
@@ -474,48 +428,32 @@ class KgManager:
         entity_mapping: Mapping,
         property_mapping: Mapping,
     ):
-        assert entity_index.get_type() == property_index.get_type(), \
-            "entity and property index types do not match"
+        assert (
+            entity_index.get_type() == property_index.get_type()
+        ), "entity and property index types do not match"
         self.entity_index = entity_index
         self.property_index = property_index
         self.entity_mapping = entity_mapping
         self.property_mapping = property_mapping
         self.parser = grammar.LR1Parser(*load_sparql_grammar())
-        self.iri_literal_parser = grammar.LR1Parser(
-            *load_iri_and_literal_grammar()
-        )
+        self.iri_literal_parser = grammar.LR1Parser(*load_iri_and_literal_grammar())
         self.search_pattern = re.compile(re.escape(SEARCH_TOKEN))
 
     def get_constraint(
-        self,
-        continuations: list[bytes],
-        exact: bool
+        self, continuations: list[bytes], exact: bool
     ) -> grammar.LR1Constraint:
-        return grammar.LR1Constraint(
-            *load_sparql_grammar(),
-            continuations,
-            exact
-        )
+        return grammar.LR1Constraint(*load_sparql_grammar(), continuations, exact)
 
-    def prettify(
-        self,
-        sparql: str,
-        indent: int = 2,
-        is_prefix: bool = False
-    ) -> str:
+    def prettify(self, sparql: str, indent: int = 2, is_prefix: bool = False) -> str:
         try:
             if is_prefix:
                 parse, rest = self.parser.prefix_parse(
-                    (sparql + " ").encode(),
-                    skip_empty=True,
-                    collapse_single=False
+                    (sparql + " ").encode(), skip_empty=True, collapse_single=False
                 )
                 rest_str = bytes(rest[:-1]).decode(errors="replace")
             else:
                 parse = self.parser.parse(
-                    sparql,
-                    skip_empty=True,
-                    collapse_single=False
+                    sparql, skip_empty=True, collapse_single=False
                 )
                 rest_str = ""
         except Exception as e:
@@ -538,10 +476,7 @@ class KgManager:
             newline = False
 
             if "value" in parse:
-                if parse["name"] in [
-                    "UNION",
-                    "MINUS"
-                ]:
+                if parse["name"] in ["UNION", "MINUS"]:
                     s = s.rstrip() + " "
 
                 elif parse["name"] == "}":
@@ -576,7 +511,7 @@ class KgManager:
                 "OrderClause",
                 "LimitClause",
                 "OffsetClause",
-                "GraphPatternNotTriples"
+                "GraphPatternNotTriples",
             ]:
                 s += "\n" + " " * current_indent
                 newline = True
@@ -590,9 +525,7 @@ class KgManager:
         return (s.strip() + " " + rest_str).strip()
 
     def autocomplete_prefix(
-        self,
-        prefix: str,
-        limit: int | None = None
+        self, prefix: str, limit: int | None = None
     ) -> tuple[str, str] | None:
         """
         Autocomplete the SPARQL prefix by running
@@ -617,8 +550,9 @@ class KgManager:
                 bracket_stack.append(item["name"])
                 continue
 
-            assert bracket_stack and bracket_stack[-1] == item["name"], \
-                "bracket mismatch"
+            assert (
+                bracket_stack and bracket_stack[-1] == item["name"]
+            ), "bracket mismatch"
             bracket_stack.pop()
 
         if rest_str in ["{", "("]:
@@ -676,7 +610,7 @@ class KgManager:
                         {"name": "SELECT", "value": "SELECT"},
                         {"name": "DISTINCT", "value": "DISTINCT"},
                         {"name": "VAR1", "value": f"?{select_var}"},
-                    ]
+                    ],
                 }
             else:
                 continue
@@ -699,7 +633,7 @@ class KgManager:
         sparql: str,
         endpoint: str | None = None,
         timeout: float | tuple[float, float] | None = None,
-        max_retries: int = 1
+        max_retries: int = 1,
     ) -> SelectResult | AskResult:
         # ask_to_select returns None if sparql is not an ask query
         select_sparql = ask_to_select(sparql, self.parser)
@@ -708,8 +642,9 @@ class KgManager:
         sparql = self.fix_prefixes(sparql)
 
         if endpoint is None:
-            assert self.kg in QLEVER_URLS, \
-                f"no QLever endpoint for knowledge graph {self.kg}"
+            assert (
+                self.kg in QLEVER_URLS
+            ), f"no QLever endpoint for knowledge graph {self.kg}"
             endpoint = QLEVER_URLS[self.kg]
 
         response = None
@@ -718,10 +653,10 @@ class KgManager:
                 endpoint,
                 headers={
                     "Content-type": "application/sparql-query",
-                    "Accept": "text/tab-separated-values"
+                    "Accept": "text/tab-separated-values",
                 },
                 data=sparql,
-                timeout=timeout
+                timeout=timeout,
             )
             if response.status_code == 200:
                 break
@@ -791,20 +726,14 @@ class KgManager:
         # generate a nicely formatted table
         header = [format_row(header)]
         top_end = min(show_top_bottom_rows, num_rows)
-        data = [
-            format_row(rows[r])
-            for r in range(top_end)
-        ]
+        data = [format_row(rows[r]) for r in range(top_end)]
 
         bottom_start = num_rows - show_top_bottom_rows
         if bottom_start > top_end:
             data.append(format_row(["..."] * num_columns))
 
         bottom_start = max(bottom_start, top_end)
-        data.extend(
-            format_row(rows[r])
-            for r in range(bottom_start, num_rows)
-        )
+        data.extend(format_row(rows[r]) for r in range(bottom_start, num_rows))
 
         table = generate_table(data, header)
 
@@ -828,17 +757,8 @@ for the first {show_columns} variables at maximum below:
         max_columns: int = 5,
     ) -> tuple[str, str]:
         try:
-            result = self.execute_sparql(
-                sparql,
-                endpoint,
-                timeout,
-                max_retries
-            )
-            formatted = self.format_sparql_result(
-                result,
-                max_rows,
-                max_columns
-            )
+            result = self.execute_sparql(sparql, endpoint, timeout, max_retries)
+            formatted = self.format_sparql_result(result, max_rows, max_columns)
         except Exception as e:
             formatted = f"SPARQL execution failed:\n{e}"
 
@@ -863,10 +783,7 @@ Explanation: [\\w ]{1, 128}
 Answer: (?:yes|no)"""
         return prompt, regex
 
-    def parse_judgement(
-        self,
-        judgement: str
-    ) -> tuple[str, bool]:
+    def parse_judgement(self, judgement: str) -> tuple[str, bool]:
         exp = "Explanation: "
         exp_start = judgement.find(exp)
         if exp_start == -1:
@@ -888,35 +805,28 @@ Answer: (?:yes|no)"""
         return explanation, answer == "yes"
 
     def find_longest_prefix(
-        self,
-        iri: str,
-        prefixes: dict[str, str] | None = None
+        self, iri: str, prefixes: dict[str, str] | None = None
     ) -> tuple[str, str] | None:
         return next(
-            iter(sorted(
-                filter(
-                    lambda pair: is_prefix_of_iri(pair[1], iri),
-                    (
-                        prefixes
-                        or (self.prefixes | self.custom_prefixes)
-                    ).items()
-                ),
-                key=lambda pair: len(pair[1]),
-                reverse=True
-            )),
-            None
+            iter(
+                sorted(
+                    filter(
+                        lambda pair: is_prefix_of_iri(pair[1], iri),
+                        (prefixes or (self.prefixes | self.custom_prefixes)).items(),
+                    ),
+                    key=lambda pair: len(pair[1]),
+                    reverse=True,
+                )
+            ),
+            None,
         )
 
     def process_iri_or_literal(
-        self,
-        data: str,
-        prefixes: dict[str, str] | None = None
+        self, data: str, prefixes: dict[str, str] | None = None
     ) -> tuple[str, str, str | None] | None:
         try:
             parse = self.iri_literal_parser.parse(
-                data,
-                skip_empty=True,
-                collapse_single=True
+                data, skip_empty=True, collapse_single=True
             )
         except Exception:
             return None
@@ -943,7 +853,7 @@ Answer: (?:yes|no)"""
                     return (
                         "literal",
                         self.format_string_literal(s["value"]),
-                        langtag["value"]
+                        langtag["value"],
                     )
 
                 elif len(parse["children"]) == 3:
@@ -952,24 +862,21 @@ Answer: (?:yes|no)"""
                     return (
                         "literal",
                         self.format_string_literal(s["value"]),
-                        self.format_iri(datatype["value"])
+                        self.format_iri(datatype["value"]),
                     )
 
             case "INTEGER" | "DECIMAL" | "DOUBLE" | "true" | "false":
                 return "literal", data, None
 
     def format_iri(
-        self,
-        iri: str,
-        prefixes: dict[str, str] | None = None,
-        safe: bool = False
+        self, iri: str, prefixes: dict[str, str] | None = None, safe: bool = False
     ) -> str:
         longest = self.find_longest_prefix(iri, prefixes)
         if longest is None:
             return iri
 
         short, long = longest
-        val = iri[len(long):-1]
+        val = iri[len(long) : -1]
 
         # check if no bad characters are in the short form
         # by url encoding it and checking if it is still the same
@@ -985,50 +892,29 @@ Answer: (?:yes|no)"""
             return literal.strip('"')
 
     def denormalize_selection(
-        self,
-        obj_type: str,
-        identifier: str,
-        variant: str | None
+        self, obj_type: str, identifier: str, variant: str | None
     ) -> str | None:
         if obj_type == "entity":
-            return self.entity_mapping.denormalize(
-                identifier,
-                variant
-            )
+            return self.entity_mapping.denormalize(identifier, variant)
         elif obj_type == "property":
-            return self.property_mapping.denormalize(
-                identifier,
-                variant
-            )
+            return self.property_mapping.denormalize(identifier, variant)
         else:
             return identifier
 
     def fix_prefixes(
-        self,
-        sparql: str,
-        is_prefix: bool = False,
-        remove_known: bool = False
+        self, sparql: str, is_prefix: bool = False, remove_known: bool = False
     ) -> str:
         if is_prefix:
             parse, rest = self.parser.prefix_parse(
-                (sparql + " ").encode(),
-                skip_empty=False,
-                collapse_single=True
+                (sparql + " ").encode(), skip_empty=False, collapse_single=True
             )
             rest_str = bytes(rest[:-1]).decode(errors="replace")
         else:
-            parse = self.parser.parse(
-                sparql,
-                skip_empty=False,
-                collapse_single=True
-            )
+            parse = self.parser.parse(sparql, skip_empty=False, collapse_single=True)
             rest_str = ""
 
         prefixes = self.prefixes | self.custom_prefixes
-        reverse_prefixes = {
-            long: short
-            for short, long in prefixes.items()
-        }
+        reverse_prefixes = {long: short for short, long in prefixes.items()}
 
         prologue = find(parse, "Prologue")
         assert prologue is not None
@@ -1056,11 +942,7 @@ Answer: (?:yes|no)"""
             iri["name"] = "PNAME_LN"
             seen.add(pfx)
 
-        for pfx in find_all(
-            parse,
-            {"PNAME_NS", "PNAME_LN"},
-            skip={"Prologue"}
-        ):
+        for pfx in find_all(parse, {"PNAME_NS", "PNAME_LN"}, skip={"Prologue"}):
             short, val = pfx["value"].split(":", 1)
             long = exist.get(short, "")
 
@@ -1090,17 +972,13 @@ Answer: (?:yes|no)"""
                         {"name": "PREFIX", "value": "PREFIX"},
                         {"name": "PNAME_NS", "value": f"{pfx}:"},
                         {"name": "IRIREF", "value": f"{long}>"},
-                    ]
+                    ],
                 }
             )
 
         return parse_to_string(parse) + rest_str
 
-    def replace_iri(
-        self,
-        parse: dict[str, Any],
-        with_iri: bool = True
-    ) -> bool:
+    def replace_iri(self, parse: dict[str, Any], with_iri: bool = True) -> bool:
         if parse["name"] == "PNAME_LN":
             short = parse["value"]
             # convert to long form iri
@@ -1145,25 +1023,16 @@ Answer: (?:yes|no)"""
         return False
 
     def replace_iris(
-        self,
-        sparql: str,
-        is_prefix: bool = False,
-        with_iri: bool = True
+        self, sparql: str, is_prefix: bool = False, with_iri: bool = True
     ) -> tuple[str, bool]:
 
         if is_prefix:
             parse, rest = self.parser.prefix_parse(
-                (sparql + " ").encode(),
-                skip_empty=True,
-                collapse_single=False
+                (sparql + " ").encode(), skip_empty=True, collapse_single=False
             )
             rest_str = bytes(rest[:-1]).decode(errors="replace")
         else:
-            parse = self.parser.parse(
-                sparql,
-                skip_empty=True,
-                collapse_single=False
-            )
+            parse = self.parser.parse(sparql, skip_empty=True, collapse_single=False)
             rest_str = ""
 
         incomplete = False
@@ -1174,10 +1043,7 @@ Answer: (?:yes|no)"""
 
         if not incomplete:
             # remove custom prefixes if they are not used
-            for pfx in find_all(
-                parse,
-                "PrefixDecl"
-            ):
+            for pfx in find_all(parse, "PrefixDecl"):
                 if len(pfx["children"]) != 3:
                     continue
 
@@ -1190,16 +1056,10 @@ Answer: (?:yes|no)"""
         return parse_to_string(parse) + rest_str, incomplete
 
     def replace_entities_and_properties(self, sparql: str) -> str:
-        parse = self.parser.parse(
-            sparql,
-            skip_empty=True,
-            collapse_single=True
-        )
+        parse = self.parser.parse(sparql, skip_empty=True, collapse_single=True)
 
         for obj in find_all(
-            parse,
-            {"IRIREF", "PNAME_LN", "PNAME_NS"},
-            skip={"Prologue"}
+            parse, {"IRIREF", "PNAME_LN", "PNAME_NS"}, skip={"Prologue"}
         ):
             if "value" not in obj:
                 continue
@@ -1240,13 +1100,10 @@ Answer: (?:yes|no)"""
         return parse_to_string(parse)
 
     def build_variants(
-        self,
-        mapping: Mapping,
-        identifier: str,
-        variants: set[str] | None = None
+        self, mapping: Mapping, identifier: str, variants: set[str] | None = None
     ) -> dict[str, str]:
         denorm_variants = {}
-        for var in (variants or mapping.default_variants()):
+        for var in variants or mapping.default_variants():
             denorm = mapping.denormalize(identifier, var)
             if denorm is None:
                 continue
@@ -1256,23 +1113,18 @@ Answer: (?:yes|no)"""
         return denorm_variants
 
     def build_alternative(
-        self,
-        data: str,
-        map: Mapping | None = None,
-        variants: set[str] | None = None
+        self, data: str, map: Mapping | None = None, variants: set[str] | None = None
     ) -> Alternative:
         label, _, syns, id, infos = data.rstrip("\r\n").split("\t")
         return Alternative(
             id,
             short_identifier=self.format_iri(id),
             label=label,
-            variants=self.build_variants(
-                map,
-                id,
-                variants
-            ) if map is not None else None,
+            variants=(
+                self.build_variants(map, id, variants) if map is not None else None
+            ),
             aliases=[s for s in syns.split(";;;") if s != ""],
-            infos=[i for i in infos.split(";;;") if i != ""]
+            infos=[i for i in infos.split(";;;") if i != ""],
         )
 
     def parse_autocompletions(
@@ -1282,7 +1134,7 @@ Answer: (?:yes|no)"""
         dict[int, set[str]],
         dict[int, set[str]],
         list[tuple[str, str, str]],
-        list[tuple[str, str, str]]
+        list[tuple[str, str, str]],
     ]:
         entities = {}
         properties = {}
@@ -1301,7 +1153,7 @@ Answer: (?:yes|no)"""
             unmatched = True
             for id_map, map in [
                 (entities, self.entity_mapping),
-                (properties, self.property_mapping)
+                (properties, self.property_mapping),
             ]:
                 norm = map.normalize(res)
                 if norm is None:
@@ -1338,20 +1190,14 @@ Answer: (?:yes|no)"""
     ) -> tuple[set[str] | None, str] | None:
         autocompletion = self.autocomplete_prefix(
             prefix,
-            max_candidates + 1
-            if max_candidates is not None else None,
+            max_candidates + 1 if max_candidates is not None else None,
         )
         if autocompletion is None:
             return None
 
         sparql, position = autocompletion
         try:
-            result = self.execute_sparql(
-                sparql,
-                endpoint,
-                timeout,
-                max_retries
-            )
+            result = self.execute_sparql(sparql, endpoint, timeout, max_retries)
         except Exception as e:
             LOGGER.debug(
                 f"getting autocompletion result with sparql\n{sparql}\n"
@@ -1376,11 +1222,7 @@ Answer: (?:yes|no)"""
         k: int = 10,
     ) -> list[Alternative]:
         return self.get_index_alternatives(
-            self.entity_index,
-            self.entity_mapping,
-            id_map,
-            query,
-            k
+            self.entity_index, self.entity_mapping, id_map, query, k
         )
 
     def get_property_alternatives(
@@ -1390,11 +1232,7 @@ Answer: (?:yes|no)"""
         k: int = 10,
     ) -> list[Alternative]:
         return self.get_index_alternatives(
-            self.property_index,
-            self.property_mapping,
-            id_map,
-            query,
-            k
+            self.property_index, self.property_mapping, id_map, query, k
         )
 
     def get_index_alternatives(
@@ -1418,10 +1256,9 @@ Answer: (?:yes|no)"""
 
         return [
             self.build_alternative(
-                index.get_row(id),
-                mapping,
-                id_map[id] if id_map is not None else None
-            ) for id in ids
+                index.get_row(id), mapping, id_map[id] if id_map is not None else None
+            )
+            for id in ids
         ]
 
     def get_temporary_index_alternatives(
@@ -1450,7 +1287,6 @@ Answer: (?:yes|no)"""
             index_cls.build(
                 data_file,
                 index_dir,
-
             )
             index = index_cls.load(data_file, index_dir)
             if query is None:
@@ -1476,20 +1312,16 @@ Answer: (?:yes|no)"""
             if not skip_autocomplete:
                 result = self.get_autocompletion_result(
                     prefix,
-                    max_candidates + 1
-                    if max_candidates is not None else None,
+                    max_candidates + 1 if max_candidates is not None else None,
                     endpoint,
                     timeout,
-                    max_retries
+                    max_retries,
                 )
                 LOGGER.debug(
-                    f"Got {len(result or set())} results "
-                    f"for prefix {prefix}"
+                    f"Got {len(result or set())} results " f"for prefix {prefix}"
                 )
         except Exception as e:
-            LOGGER.debug(
-                f"autocompleting prefix {prefix} failed: {e}"
-            )
+            LOGGER.debug(f"autocompleting prefix {prefix} failed: {e}")
 
         if result is None:
             objects, position = None, None
@@ -1515,28 +1347,19 @@ Answer: (?:yes|no)"""
             # than max_results, because creating an extra index
             # for that would be too expensive
             if add_entities:
-                alternatives["entity"] = self.get_entity_alternatives(
-                    None,
-                    search,
-                    k
-                )
+                alternatives["entity"] = self.get_entity_alternatives(None, search, k)
             if add_properties:
                 alternatives["property"] = self.get_property_alternatives(
-                    None,
-                    search,
-                    k
+                    None, search, k
                 )
             return alternatives
 
         # split result into entities, properties, other iris
         # and literals
         start = time.perf_counter()
-        (
-            entity_map,
-            property_map,
-            others,
-            literals
-        ) = self.parse_autocompletions(objects)
+        (entity_map, property_map, others, literals) = self.parse_autocompletions(
+            objects
+        )
         end = time.perf_counter()
         LOGGER.debug(
             f"parsing {len(objects):,} autocompletion results "
@@ -1545,16 +1368,10 @@ Answer: (?:yes|no)"""
 
         start = time.perf_counter()
         if add_entities:
-            alternatives["entity"] = self.get_entity_alternatives(
-                entity_map,
-                search,
-                k
-            )
+            alternatives["entity"] = self.get_entity_alternatives(entity_map, search, k)
         if add_properties:
             alternatives["property"] = self.get_property_alternatives(
-                property_map,
-                search,
-                k
+                property_map, search, k
             )
         end = time.perf_counter()
         LOGGER.debug(
@@ -1563,11 +1380,7 @@ Answer: (?:yes|no)"""
         )
 
         start = time.perf_counter()
-        alternatives["other"] = self.get_temporary_index_alternatives(
-            others,
-            search,
-            k
-        )
+        alternatives["other"] = self.get_temporary_index_alternatives(others, search, k)
         if add_literals:
             alternatives["literal"] = self.get_temporary_index_alternatives(
                 literals,
@@ -1592,7 +1405,7 @@ Answer: (?:yes|no)"""
         add_infos: bool = True,
         selections: list[tuple[str, str, str | None]] | None = None,
         failures: set[tuple[str, str, str | None]] | None = None,
-        add_none_alternative: bool = True
+        add_none_alternative: bool = True,
     ) -> tuple[str, str]:
         failed = []
         for obj_type, identifier, variant in failures or set():
@@ -1600,9 +1413,12 @@ Answer: (?:yes|no)"""
                 continue
 
             nxt = next(
-                (alt for alt in enumerate(alternatives[obj_type])
-                 if alt[1].identifier == identifier),
-                None
+                (
+                    alt
+                    for alt in enumerate(alternatives[obj_type])
+                    if alt[1].identifier == identifier
+                ),
+                None,
             )
             if nxt is None:
                 continue
@@ -1610,7 +1426,7 @@ Answer: (?:yes|no)"""
             idx, alt = nxt
             offset = sum(
                 len(alternatives[obj_type])
-                for obj_type in OBJ_TYPES[:OBJ_TYPES.index(obj_type)]
+                for obj_type in OBJ_TYPES[: OBJ_TYPES.index(obj_type)]
                 if obj_type in alternatives
             )
             idx = offset + idx
@@ -1630,23 +1446,22 @@ Answer: (?:yes|no)"""
                 continue
 
             counts = Counter(
-                alternative.get_identifier().lower()
-                for alternative in alts
+                alternative.get_identifier().lower() for alternative in alts
             )
             strings = []
             regexes = []
             for alternative in alts:
                 alt_label = alternative.get_identifier()
                 alt_idx_str = f"{alt_idx + 1}. "
-                strings.append(alt_idx_str + alternative.get_string(
-                    max_aliases,
-                    # add info to non unique labels
-                    add_infos or counts[alt_label.lower()] > 1
-                ))
-                regexes.append(
-                    re.escape(alt_idx_str)
-                    + alternative.get_regex()
+                strings.append(
+                    alt_idx_str
+                    + alternative.get_string(
+                        max_aliases,
+                        # add info to non unique labels
+                        add_infos or counts[alt_label.lower()] > 1,
+                    )
                 )
+                regexes.append(re.escape(alt_idx_str) + alternative.get_regex())
 
                 alt_idx += 1
 
@@ -1654,8 +1469,8 @@ Answer: (?:yes|no)"""
             alt_regexes[obj_type] = regexes
 
         alt_string = "\n\n".join(
-            f"{obj_type.capitalize()} alternatives:\n" +
-            "\n".join(alt_strings[obj_type])
+            f"{obj_type.capitalize()} alternatives:\n"
+            + "\n".join(alt_strings[obj_type])
             for obj_type in OBJ_TYPES
             if obj_type in alt_strings
         )
@@ -1670,8 +1485,11 @@ Answer: (?:yes|no)"""
         # none alternative
         num_alts = sum(len(alts) for alts in alternatives.values())
         if add_none_alternative or num_alts == 0:
-            alt_string = "0. none (if no other alternative fits well enough)" \
-                + "\n\n" * (num_alts > 0) + alt_string
+            alt_string = (
+                "0. none (if no other alternative fits well enough)"
+                + "\n\n" * (num_alts > 0)
+                + alt_string
+            )
             alt_regex += "|" * (num_alts > 0) + re.escape("0. none")
         alt_regex += ")"
 
@@ -1715,9 +1533,7 @@ Selection:
         return prompt, alt_regex
 
     def parse_selection(
-        self,
-        alternatives: dict[str, list[Alternative]],
-        result: str
+        self, alternatives: dict[str, list[Alternative]], result: str
     ) -> tuple[str, tuple[str, str, str | None]] | None:
         num, selection = result.split(". ", 1)
         idx = int(num)
@@ -1740,7 +1556,7 @@ Selection:
 
         if alternative.has_variants():
             label = alternative.get_label()
-            rest = selection[len(label) + 2:-1]
+            rest = selection[len(label) + 2 : -1]
             variant = alternative.get_variant_by_name(rest)
         else:
             variant = None
@@ -1753,7 +1569,7 @@ Selection:
         question: str,
         prefix: str,
         selections: list[tuple[str, str, str | None]] | None = None,
-        failures: set[str] | None = None
+        failures: set[str] | None = None,
     ) -> tuple[str, str]:
         prefix = prefix + "..."
 
@@ -1838,27 +1654,25 @@ SPARQL query:
         formatted = []
         for obj_type, id_map, index, map in [
             ("entities", entities, self.entity_index, self.entity_mapping),
-            ("properties", properties, self.property_index,
-             self.property_mapping)
+            ("properties", properties, self.property_index, self.property_mapping),
         ]:
             if not id_map:
                 continue
 
-            formatted.append((
-                obj_type,
-                "\n".join(
-                    self.build_alternative(
-                        index.get_row(id),
-                        map,
-                        variants
-                    ).get_string()
-                    for id, variants in id_map.items()
+            formatted.append(
+                (
+                    obj_type,
+                    "\n".join(
+                        self.build_alternative(
+                            index.get_row(id), map, variants
+                        ).get_string()
+                        for id, variants in id_map.items()
+                    ),
                 )
-            ))
+            )
 
         return "\n\n".join(
-            f"Using {obj_type}:\n{selection}"
-            for obj_type, selection in formatted
+            f"Using {obj_type}:\n{selection}" for obj_type, selection in formatted
         )
 
     def get_sparql_continuation_prompt(
@@ -1868,7 +1682,7 @@ SPARQL query:
         natural_prefix: str,
         selections: list[tuple[str, str, str | None]] | None = None,
         failures: set[str] | None = None,
-        examples: list[tuple[str, str]] | None = None
+        examples: list[tuple[str, str]] | None = None,
     ) -> Chat:
         prompt = f"""\
 Continue the SPARQL prefix to answer the question either \
@@ -1907,29 +1721,20 @@ Continuation:
                 # skip invalid examples
                 continue
 
-            messages.extend([
-                {
-                    "role": "user",
-                    "text": self.get_sparql_prompt(q)
-                },
-                {
-                    "role": "assistant",
-                    "text": s
-                }
-            ])
+            messages.extend(
+                [
+                    {"role": "user", "text": self.get_sparql_prompt(q)},
+                    {"role": "assistant", "text": s},
+                ]
+            )
 
         # add actual question
-        messages.extend([
-            {
-                "role": "user",
-                "text": prompt
-            },
-            {
-                "role": "assistant",
-                "text": sparql_prefix,
-                "partial": True
-            }
-        ])
+        messages.extend(
+            [
+                {"role": "user", "text": prompt},
+                {"role": "assistant", "text": sparql_prefix, "partial": True},
+            ]
+        )
 
         return messages
 
@@ -1951,9 +1756,11 @@ class DBLPManager(KgManager):
             property_mapping,
         )
         # add dblp specific prefixes
-        self.custom_prefixes.update({
-            "dblp": "<https://dblp.org/rdf/schema#",
-        })
+        self.custom_prefixes.update(
+            {
+                "dblp": "<https://dblp.org/rdf/schema#",
+            }
+        )
 
 
 class FreebaseManager(KgManager):
@@ -1973,9 +1780,11 @@ class FreebaseManager(KgManager):
             property_mapping,
         )
         # add freebase specific prefixes
-        self.custom_prefixes.update({
-            "fb": "<http://rdf.freebase.com/ns/",
-        })
+        self.custom_prefixes.update(
+            {
+                "fb": "<http://rdf.freebase.com/ns/",
+            }
+        )
 
 
 class DBPediaManager(KgManager):
@@ -1995,11 +1804,13 @@ class DBPediaManager(KgManager):
             property_mapping,
         )
         # add dbpedia specific prefixes
-        self.custom_prefixes.update({
-            "dbp": "<http://dbpedia.org/property/",
-            "dbo": "<http://dbpedia.org/ontology/",
-            "dbr": "<http://dbpedia.org/resource/",
-        })
+        self.custom_prefixes.update(
+            {
+                "dbp": "<http://dbpedia.org/property/",
+                "dbo": "<http://dbpedia.org/ontology/",
+                "dbr": "<http://dbpedia.org/resource/",
+            }
+        )
 
 
 class ORKGManager(KgManager):
@@ -2019,12 +1830,14 @@ class ORKGManager(KgManager):
             property_mapping,
         )
         # add dbpedia specific prefixes
-        self.custom_prefixes.update({
-            "orkgc": "<http://orkg.org/orkg/class/",
-            "orkgp": "<http://orkg.org/orkg/predicate/",
-            "orkgsh": "<http://orkg.org/orkg/shapes/",
-            "orkgr": "<http://orkg.org/orkg/resource/",
-        })
+        self.custom_prefixes.update(
+            {
+                "orkgc": "<http://orkg.org/orkg/class/",
+                "orkgp": "<http://orkg.org/orkg/predicate/",
+                "orkgsh": "<http://orkg.org/orkg/shapes/",
+                "orkgr": "<http://orkg.org/orkg/resource/",
+            }
+        )
 
 
 class WikidataManager(KgManager):
@@ -2045,15 +1858,14 @@ class WikidataManager(KgManager):
             property_mapping,
         )
         # add wikidata specific prefixes
-        self.custom_prefixes.update({
-            "wd": "<http://www.wikidata.org/entity/",
-            "wds": "<http://www.wikidata.org/entity/statement/",
-            "wdref": "<http://www.wikidata.org/reference/",
-            **{
-                short: long
-                for long, short in WIKIDATA_PROPERTY_VARIANTS.items()
+        self.custom_prefixes.update(
+            {
+                "wd": "<http://www.wikidata.org/entity/",
+                "wds": "<http://www.wikidata.org/entity/statement/",
+                "wdref": "<http://www.wikidata.org/reference/",
+                **{short: long for long, short in WIKIDATA_PROPERTY_VARIANTS.items()},
             }
-        })
+        )
 
 
 KG_TO_MANAGER: dict[str, Type[KgManager]] = {
@@ -2077,10 +1889,7 @@ def get_kg_manager(
 
     kg_manager_cls = KG_TO_MANAGER[kg]
     return kg_manager_cls(
-        entity_index,
-        property_index,
-        entity_mapping,
-        property_mapping
+        entity_index, property_index, entity_mapping, property_mapping
     )
 
 
@@ -2088,7 +1897,7 @@ def load_index_and_mapping(
     index_dir: str,
     index_type: str,
     mapping_cls: Type[Mapping] | None = None,
-    **kwargs: Any
+    **kwargs: Any,
 ) -> tuple[SearchIndex, Mapping]:
     if index_type == "prefix":
         index_cls = PrefixIndex
@@ -2100,15 +1909,14 @@ def load_index_and_mapping(
     index = index_cls.load(
         os.path.join(index_dir, "data.tsv"),
         os.path.join(index_dir, index_type),
-        **kwargs
+        **kwargs,
     )
 
     if mapping_cls is None:
         mapping_cls = Mapping
 
     mapping = mapping_cls.load(
-        index,
-        os.path.join(index_dir, index_type, "index.mapping")
+        index, os.path.join(index_dir, index_type, "index.mapping")
     )
     return index, mapping
 
@@ -2117,44 +1925,27 @@ def load_kg_manager(
     kg: str,
     entities: str | None = None,
     properties: str | None = None,
-    index_type: str = "prefix"
+    index_type: str = "prefix",
 ) -> KgManager:
     index_dir = get_index_dir()
     if entities is None:
-        assert index_dir is not None, \
-            "SEARCH_INDEX_DIR environment variable not set"
+        assert index_dir is not None, "SEARCH_INDEX_DIR environment variable not set"
         entities = os.path.join(index_dir, f"{kg}-entities")
 
     if properties is None:
-        assert index_dir is not None, \
-            "SEARCH_INDEX_DIR environment variable not set"
+        assert index_dir is not None, "SEARCH_INDEX_DIR environment variable not set"
         properties = os.path.join(index_dir, f"{kg}-properties")
 
-    ent_index, ent_mapping = load_index_and_mapping(
-        entities,
-        index_type
-    )
+    ent_index, ent_mapping = load_index_and_mapping(entities, index_type)
 
     is_wikidata = kg == "wikidata"
     prop_index, prop_mapping = load_index_and_mapping(
-        properties,
-        index_type,
-        WikidataPropertyMapping if is_wikidata else None
+        properties, index_type, WikidataPropertyMapping if is_wikidata else None
     )
-    return get_kg_manager(
-        kg,
-        ent_index,
-        prop_index,
-        ent_mapping,
-        prop_mapping
-    )
+    return get_kg_manager(kg, ent_index, prop_index, ent_mapping, prop_mapping)
 
 
-def run_parallel(
-    fn: Callable,
-    inputs: Iterable,
-    n: int | None = None
-) -> Iterator:
+def run_parallel(fn: Callable, inputs: Iterable, n: int | None = None) -> Iterator:
     with ThreadPoolExecutor(max_workers=n) as executor:
         futures = []
         for input in inputs:
@@ -2168,37 +1959,29 @@ def run_parallel(
 T = TypeVar("T")
 
 
-def flatten(
-    iter: Iterable[Iterable[T]]
-) -> Iterator[T]:
+def flatten(iter: Iterable[Iterable[T]]) -> Iterator[T]:
     for sub_iter in iter:
         yield from sub_iter
 
 
-def enumerate_flatten(
-    iter: Iterable[Iterable[T]]
-) -> Iterator[tuple[int, T]]:
+def enumerate_flatten(iter: Iterable[Iterable[T]]) -> Iterator[tuple[int, T]]:
     for i, sub_iter in enumerate(iter):
         for item in sub_iter:
             yield i, item
 
 
-def split(
-    items: list[T],
-    splits: list[int]
-) -> list[list[T]]:
+def split(items: list[T], splits: list[int]) -> list[list[T]]:
     assert sum(splits) == len(items), "splits do not match items"
     start = 0
     result = []
     for split in splits:
-        result.append(items[start:start + split])
+        result.append(items[start : start + split])
         start += split
     return result
 
 
 def partition_by(
-    iter: Iterable[T],
-    key: Callable[[T], bool]
+    iter: Iterable[T], key: Callable[[T], bool]
 ) -> tuple[list[T], list[T]]:
     a, b = [], []
     for item in iter:
@@ -2209,3 +1992,13 @@ def partition_by(
     return a, b
 
 
+def extract_fields(data: dict[str, Any], fields: list[str]) -> dict[str, Any]:
+    return {field: extract_field(data, field) for field in fields}
+
+
+def extract_field(data: dict[str, Any], field: str) -> Any | None:
+    for key in field.split("."):
+        if key not in data:
+            return None
+        data = data[key]
+    return data

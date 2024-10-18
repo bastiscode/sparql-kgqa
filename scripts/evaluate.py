@@ -14,7 +14,8 @@ from sparql_kgqa.sparql.utils2 import (
     AskResult,
     KgManager,
     run_parallel,
-    load_kg_manager
+    load_kg_manager,
+    extract_field,
 )
 from sparql_kgqa.sparql.metrics import calculate_f1_score
 
@@ -32,25 +33,22 @@ def parse_args() -> argparse.Namespace:
         "--knowledge_graph",
         type=str,
         choices=list(QLEVER_URLS),
-        default="wikidata"
+        default="wikidata",
     )
     parser.add_argument("--entities", type=str)
     parser.add_argument("--properties", type=str)
-    parser.add_argument("--index-type", type=str,
-                        choices=["prefix", "qgram"],
-                        default="prefix")
+    parser.add_argument(
+        "--index-type", type=str, choices=["prefix", "qgram"], default="prefix"
+    )
     parser.add_argument("--endpoint", type=str, default=None)
     parser.add_argument("--timeout", type=float, default=None)
     parser.add_argument("--max-retries", type=int, default=1)
     parser.add_argument("-n", "--num-workers", type=int, default=None)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--exact", action="store_true")
-    parser.add_argument(
-        "--prediction-format",
-        type=str,
-        choices=["text", "jsonl"],
-        default="jsonl"
-    )
+    parser.add_argument("--input-field", type=str)
+    parser.add_argument("--target-field", type=str)
+    parser.add_argument("--prediction-field", type=str)
     return parser.parse_args()
 
 
@@ -65,25 +63,17 @@ def get_result_set_or_error(
     manager: KgManager,
     endpoint: str | None = None,
     timeout: float | None = None,
-    max_retries: int = 1
+    max_retries: int = 1,
 ) -> tuple[Counter | None, str | None]:
     try:
-        result = manager.execute_sparql(
-            sparql,
-            endpoint,
-            timeout,
-            max_retries
-        )
+        result = manager.execute_sparql(sparql, endpoint, timeout, max_retries)
     except Exception as e:
         return None, str(e)
 
     if isinstance(result, AskResult):
         return Counter({result: 1}), None
     else:
-        return Counter(
-            tuple(result[i])
-            for i in range(1, len(result))
-        ), None
+        return Counter(tuple(result[i]) for i in range(1, len(result))), None
 
 
 def evaluate(args: argparse.Namespace):
@@ -103,51 +93,54 @@ def evaluate(args: argparse.Namespace):
         num_samples = result["num_samples"]
 
     else:
-        targets = load_text_file(args.target)
-        targets = [json.loads(t) for t in targets]
-        inputs = load_text_file(args.input)
-        inputs = [json.loads(i) for i in inputs]
-        assert len(inputs) == len(targets), \
-            "expected same number of inputs and targets"
+        targets = [json.loads(t) for t in load_text_file(args.target)]
+        if args.target_field:
+            targets = [extract_field(t, args.target_field) for t in targets]
 
-        predictions = load_text_file(args.prediction)
-        if args.prediction_format == "jsonl":
-            predictions = [json.loads(p) for p in predictions]
+        inputs = [json.loads(i) for i in load_text_file(args.input)]
+        if args.input_field:
+            inputs = [extract_field(i, args.input_field) for i in inputs]
+        assert len(inputs) == len(targets), "expected same number of inputs and targets"
+
+        predictions = [json.loads(p) for p in load_text_file(args.prediction)]
+        if args.prediction_field:
+            predictions = [extract_field(p, args.prediction_field) for p in predictions]
 
         if not args.allow_subset:
-            assert len(targets) == len(predictions), \
-                "expected same number of predictions and targets"
+            assert len(targets) == len(
+                predictions
+            ), "expected same number of predictions and targets"
 
         if args.limit:
-            targets = targets[:args.limit]
-            inputs = inputs[:args.limit]
-            predictions = predictions[:args.limit]
+            targets = targets[: args.limit]
+            inputs = inputs[: args.limit]
+            predictions = predictions[: args.limit]
 
         manager = load_kg_manager(
-            args.knowledge_graph,
-            args.entities,
-            args.properties,
-            args.index_type
+            args.knowledge_graph, args.entities, args.properties, args.index_type
         )
 
         incorrect = {}
         invalid = {}
         f1s = []
         iter = (
-            (pred, target, manager,
-             not args.empty_target_invalid,
-             args.endpoint, args.timeout, args.max_retries, args.exact)
+            (
+                pred,
+                target,
+                manager,
+                not args.empty_target_invalid,
+                args.endpoint,
+                args.timeout,
+                args.max_retries,
+                args.exact,
+            )
             for pred, target in zip(predictions, targets)
         )
         for i, (f1, pred, tgt) in tqdm(
-            enumerate(run_parallel(
-                calculate_f1_score,
-                iter,
-                args.num_workers
-            )),
+            enumerate(run_parallel(calculate_f1_score, iter, args.num_workers)),
             desc="evaluating",
             total=len(predictions),
-            leave=False
+            leave=False,
         ):
             invalid_pred = isinstance(pred, str)
             if invalid_pred:
@@ -172,16 +165,14 @@ def evaluate(args: argparse.Namespace):
         result_file = f"{base}.result.json"
         create_dir(result_file)
 
-        def format_indices_and_infos(
-            indices: dict[int, dict[str, Any]]
-        ) -> list[dict]:
+        def format_indices_and_infos(indices: dict[int, dict[str, Any]]) -> list[dict]:
             return [
                 {
                     "sample": i + 1,
                     "input": inputs[i],
                     "target": targets[i],
                     "prediction": predictions[i],
-                    "infos": infos
+                    "infos": infos,
                 }
                 for i, infos in indices.items()
             ]
@@ -197,30 +188,18 @@ def evaluate(args: argparse.Namespace):
                 {
                     "num_samples": num_samples,
                     "scores": {
-                        "f1": {
-                            "mean": mean_f1,
-                            "values": f1s
-                        },
-                        "em": {
-                            "mean": mean_em,
-                            "values": ems
-                        }
+                        "f1": {"mean": mean_f1, "values": f1s},
+                        "em": {"mean": mean_em, "values": ems},
                     },
                     "invalid": invalid,
-                    "incorrect": incorrect
+                    "incorrect": incorrect,
                 },
                 outf,
-                indent=2
+                indent=2,
             )
 
-    pred_invalid = sum(
-        int("prediction" in item["infos"])
-        for item in invalid
-    )
-    tgt_invalid = sum(
-        int("target" in item["infos"])
-        for item in invalid
-    )
+    pred_invalid = sum(int("prediction" in item["infos"]) for item in invalid)
+    tgt_invalid = sum(int("target" in item["infos"]) for item in invalid)
     print(
         f"Mean F1: {mean_f1:.2%}\n"
         f"Mean EM: {mean_em:.2%}\n"

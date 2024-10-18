@@ -20,6 +20,7 @@ from sparql_kgqa.sparql.utils2 import (
     Chat,
     KgManager,
     clean,
+    extract_fields,
     load_kg_manager,
     partition_by,
 )
@@ -80,6 +81,7 @@ def parse_args() -> argparse.Namespace:
     sample_group.add_argument("--stages-per-sample", type=int, default=None)
     sample_group.add_argument("--selections-min-k", type=int, default=5)
     sample_group.add_argument("--selections-max-k", type=int, default=5)
+    sample_group.add_argument("--skip-stages", action="store_true")
     parser.add_argument("--seed", type=int, default=22)
     parser.add_argument("-n", "--num-workers", type=int, default=None)
     parser.add_argument(
@@ -271,7 +273,7 @@ def load_data(args: argparse.Namespace) -> tuple[str, dict[str, list[Sample]]]:
             for item in data:
                 query = item["utterance"]
                 sparql = item["sparql"]
-                info = {"id": item["id"], "results": item["results"]}
+                info = extract_fields(item, ["id", "results"])
                 samples.append(Sample(query, sparql, info))
             output[split] = samples
 
@@ -1058,7 +1060,7 @@ def prepare_sample(
     except Exception:
         sample.invalid = True
 
-    if split == "test" or sample.invalid:
+    if split == "test" or sample.invalid or args.skip_stages:
         return sample, []
 
     stages = prepare_stages(sample.question, sample.sparql, managers, args)

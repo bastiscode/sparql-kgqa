@@ -13,6 +13,7 @@ from sparql_kgqa.sparql.utils2 import (
     KgManager,
     AskResult,
     SelectResult,
+    extract_field,
     load_kg_manager,
 )
 
@@ -100,6 +101,11 @@ def parse_args() -> argparse.Namespace:
         type=str,
         choices=["text", "jsonl"],
         help="Input format for the question",
+    )
+    parser.add_argument(
+        "--input-field",
+        type=str,
+        help="Field to extract as question from the input JSON object",
     )
     return parser.parse_args()
 
@@ -602,6 +608,8 @@ def run(args: argparse.Namespace) -> None:
 
     if args.input_format == "jsonl":
         inputs = [json.loads(input) for input in inputs]
+        if args.input_field is not None:
+            inputs = [extract_field(ipt, args.input_field) for ipt in inputs]
 
     client = OpenAI(api_key=args.api_key)
 
