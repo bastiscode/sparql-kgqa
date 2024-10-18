@@ -57,7 +57,9 @@ def f1_score(
 
     _, pred_rows = pred
     _, target_rows = target
-    if exact:
+    if len(pred_rows) == 0 and len(target_rows) == 0:
+        return 1.0
+    elif exact:
         return exact_f1_score(pred_rows, target_rows)
     else:
         return assignment_f1_score(pred_rows, target_rows)
@@ -88,11 +90,12 @@ def calculate_f1_score(
     if pred_err is not None or target_err is not None:
         return (None, pred_err, target_err)
 
-    assert isinstance(predictions, list) and isinstance(targets, list)
-    if len(targets) == 0 and not allow_empty_target:
+    assert targets is not None and predictions is not None
+    if (
+        not isinstance(targets, AskResult)
+        and len(targets[1]) == 0
+        and not allow_empty_target
+    ):
         return None, None, "target set is empty"
-
-    if len(predictions) == 0 and len(targets) == 0:
-        return 1.0, None, None
 
     return f1_score(predictions, targets, exact), None, None
