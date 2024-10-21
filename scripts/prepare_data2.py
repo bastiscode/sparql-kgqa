@@ -825,11 +825,6 @@ def prepare_stages(
     ):
         manager = random.choice(managers)
 
-        selections = [
-            (obj_type, identifier, variant)
-            for _, (obj_type, identifier, variant, *_) in items[:item_idx]
-        ]
-
         if item_idx >= len(items):
             if item_idx == 0:
                 end = 0
@@ -839,7 +834,9 @@ def prepare_stages(
             sparql_prefix = manager.fix_prefixes(
                 sparql_encoded[:end].decode(), is_prefix=True, remove_known=True
             )
-            natural_prefix, inc = manager.replace_iris(sparql_prefix, is_prefix=True)
+            natural_prefix, selections, inc = manager.replace_iris(
+                sparql_prefix, is_prefix=True
+            )
             if inc:
                 continue
 
@@ -860,7 +857,9 @@ def prepare_stages(
             is_prefix=True,
             remove_known=True,
         )
-        natural_prefix, inc = manager.replace_iris(sparql_prefix, is_prefix=True)
+        natural_prefix, selections, inc = manager.replace_iris(
+            sparql_prefix, is_prefix=True
+        )
         if inc:
             continue
 
@@ -876,7 +875,7 @@ def prepare_stages(
             last_sparql_prefix = manager.fix_prefixes(
                 sparql_encoded[:last_end].decode(), is_prefix=True, remove_known=True
             )
-            last_natural_prefix, inc = manager.replace_iris(
+            last_natural_prefix, last_selection, inc = manager.replace_iris(
                 last_sparql_prefix, is_prefix=True
             )
             if inc:
@@ -885,6 +884,7 @@ def prepare_stages(
         else:
             last_sparql_prefix = ""
             last_natural_prefix = ""
+            last_selection = []
             last_end = 0
 
         def is_known_ent_or_prop(
@@ -918,7 +918,7 @@ def prepare_stages(
         cont = sparql_encoded[last_end:start].decode() + token
 
         cont_prompt = manager.get_sparql_continuation_prompt(
-            question, last_sparql_prefix, last_natural_prefix, selections
+            question, last_sparql_prefix, last_natural_prefix, last_selection
         )
 
         samples.append((cont_prompt, cont))
@@ -959,12 +959,6 @@ def prepare_stages(
             endpoint=args.qlever_endpoint,
             max_retries=3,
         )
-        if alts is None:
-            if is_lit_or_other:
-                # this only makes sense if there are actually alternatives
-                continue
-
-            alts = {}
 
         target_alts = [
             (obj_type, alt)
