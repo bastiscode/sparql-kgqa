@@ -4,14 +4,14 @@ import os
 import json
 from enum import Enum
 from pydantic import BaseModel
-from typing import Any
 
 from openai import OpenAI
 from tqdm import tqdm
 
-from sparql_kgqa.sparql.metrics import calculate_f1_score, f1_score
+from sparql_kgqa.sparql.metrics import f1_score
 from sparql_kgqa.sparql.utils2 import (
     QLEVER_URLS,
+    TIMEOUT,
     AskResult,
     KgManager,
     find,
@@ -22,6 +22,7 @@ from sparql_kgqa.sparql.utils2 import (
 
 
 DIR = os.path.dirname(os.path.realpath(__file__))
+MAX_RESULTS = 10_000
 
 
 def parse_args() -> argparse.Namespace:
@@ -60,20 +61,31 @@ natural language version. You then need to generate a question that \
 the SPARQL query answers.
 
 Follow this step-by-step process:
-1. Clean the SPARQL query:
-- remove unnecessary parts of the query, e.g. unused columns or variables
-- remove SERVICE clauses for retrieving labels via wikibase:label and replace \
-them with FILTER clauses; they are not supported by the SPARQL engine
-- the cleaned SPARQL query should still return the same results as the \
-original query, at least for the main columns and variables
-2. Think about the question that the SPARQL query answers:
+1. Think about the SPARQL query and the question it answers:
 - understand the SPARQL query and its natural language version
 - look at the entities and properties involved in the query
+- in the SPARQL query variable names are normalized as ?var1, ?var2, ... \
+and string literals are anonymized as "string1", "string2", ...; think \
+about meaningful variable names and string literals that could be used \
+as a replacement in the context of the query
+2. Clean the SPARQL query:
+- replace normalized variable names ?var1, ?var2, ... with meaningful \
+variable names like ?country, ?population, ...
+- replace anonymized string literals "string1", "string2", ... with \
+meaningful string literals like "Germany", "Berlin", ...
+- remove unnecessary parts of the query, e.g. unused columns or variables
+- remove SERVICE clauses for retrieving labels via wikibase:label and replace \
+them with rdfs:label and FILTER clauses wrapped in OPTIONAL or \
+leave them out entirely; SERVICE is supported by the SPARQL engine
+- the cleaned SPARQL query should still return the same results as the \
+original query, at least for the main columns and variables
 3. Generate the question that the SPARQL query answers:
 - the question should be as concise as possible
 - the question should not sound like a description of the SPARQL query itself
-- DO NOT include entities and properties from the query verbatim in the \
-question, but rather ask about the information that the query retrieves
+- avoid verbatim mentions of entities and properties in \
+the question as much as possible, but rather ask about the information that the query \
+retrieves; exceptions can be made, e.g. for very specific entities or \
+properties or when VALUES clauses are used to filter for specific entities
 - the question can be formulated in an asking or requesting manner, e.g. \
 "What is the population of Germany?" or "number of people living in Germany"
 4. Judge the complexity of the SPARQL query:
@@ -104,8 +116,8 @@ queries:
     prompt += f"""\
 For the following SPARQL query and its natural language version, do \
 the following:
+- Think about the SPARQL query and the question it answers
 - Clean the SPARQL query
-- Think about the question that the SPARQL query answers
 - Generate the question
 - Judge the complexity of the SPARQL query
 - Generate up to 3 paraphrases of the question
@@ -186,18 +198,15 @@ def generate_question(
     output["fixed_sparql_no_service"] = sparql_no_service
 
     try:
-        original_result = manager.execute_sparql(sparql_no_service)
+        original_result = manager.execute_sparql(
+            sparql_no_service,
+            timeout=TIMEOUT,
+            max_results=MAX_RESULTS,
+        )
     except Exception as e:
         output["error"] = {
             "type": "execute_original_sparql",
             "message": str(e),
-        }
-        return output
-
-    if not isinstance(original_result, AskResult) and len(original_result[1]) == 0:
-        output["error"] = {
-            "type": "empty_original_result",
-            "message": "original SPARQL query returns an empty result",
         }
         return output
 
@@ -243,13 +252,36 @@ def generate_question(
         return output
 
     output["output"] = json.loads(content)
+    # some diagnostics
+    print(natural_sparql, file=sys.stderr)
+    print(parsed.sparql, file=sys.stderr)
+    print(parsed.question, file=sys.stderr)
+    print(parsed.paraphrases, file=sys.stderr)
+    print(parsed.complexity, file=sys.stderr)
+    print("-" * 80, file=sys.stderr)
 
     try:
-        cleaned_result = manager.execute_sparql(parsed.sparql)
+        cleaned_result = manager.execute_sparql(
+            parsed.sparql, timeout=TIMEOUT, max_results=MAX_RESULTS
+        )
     except Exception as e:
         output["error"] = {
             "type": "execute_cleaned_sparql",
             "message": str(e),
+        }
+        return output
+
+    if not isinstance(original_result, AskResult) and len(original_result[1]) == 0:
+        output["error"] = {
+            "type": "empty_original_result",
+            "message": "original SPARQL query returns an empty result",
+        }
+        return output
+
+    if not isinstance(cleaned_result, AskResult) and len(cleaned_result[1]) == 0:
+        output["error"] = {
+            "type": "empty_cleaned_result",
+            "message": "cleaned SPARQL query returns an empty result",
         }
         return output
 

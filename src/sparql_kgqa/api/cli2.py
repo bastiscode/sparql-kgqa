@@ -1,5 +1,4 @@
 import json
-import os
 import sys
 import random
 from typing import Iterator
@@ -12,12 +11,7 @@ from text_utils.api.processor import TextProcessor
 from sparql_kgqa import version
 from sparql_kgqa.api.generator2 import SPARQLGenerator
 from sparql_kgqa.api.server2 import SPARQLGenerationServer
-from sparql_kgqa.sparql.utils2 import (
-    WikidataPropertyMapping,
-    get_index_dir,
-    load_index_and_mapping,
-    load_kg_manager
-)
+from sparql_kgqa.sparql.utils2 import load_kg_manager
 
 
 class SPARQLGenerationCli(TextProcessingCli):
@@ -54,12 +48,14 @@ class SPARQLGenerationCli(TextProcessingCli):
             force_exact=self.args.force_exact,
         )
 
-        gen.set_kg_manager(load_kg_manager(
-            self.args.knowledge_graph,
-            self.args.entities,
-            self.args.properties,
-            self.args.index_type,
-        ))
+        gen.set_kg_manager(
+            load_kg_manager(
+                self.args.knowledge_graph,
+                self.args.entities,
+                self.args.properties,
+                self.args.index_type,
+            )
+        )
 
         if self.args.example_index is not None:
             gen.set_examples(example_index=self.args.example_index)
@@ -69,9 +65,7 @@ class SPARQLGenerationCli(TextProcessingCli):
         return gen
 
     def process_iter(
-        self,
-        processor: TextProcessor,
-        iter: Iterator[str]
+        self, processor: TextProcessor, iter: Iterator[str]
     ) -> Iterator[str]:
         assert isinstance(processor, SPARQLGenerator)
         jsonl_in = self.args.input_format == "jsonl"
@@ -92,63 +86,59 @@ class SPARQLGenerationCli(TextProcessingCli):
 
 def main():
     parser = SPARQLGenerationCli.parser(
-        "SPARQL Generator",
-        "Generate SPARQL from natural language queries."
+        "SPARQL Generator", "Generate SPARQL from natural language queries."
     )
     parser.add_argument(
         "--sampling-strategy",
         choices=["greedy", "top_k", "top_p"],
         type=str,
         default="greedy",
-        help="Sampling strategy to use during decoding"
+        help="Sampling strategy to use during decoding",
     )
     parser.add_argument(
         "--beam-width",
         type=int,
         default=1,
-        help="Beam width to use for beam search decoding"
+        help="Beam width to use for beam search decoding",
     )
     parser.add_argument(
-        "--top-k",
-        type=int,
-        default=10,
-        help="Restrict to top k tokens during sampling"
+        "--top-k", type=int, default=10, help="Restrict to top k tokens during sampling"
     )
     parser.add_argument(
         "--top-p",
         type=float,
         default=0.95,
-        help="Restrict to top p cumulative probability tokens during sampling"
+        help="Restrict to top p cumulative probability tokens during sampling",
     )
     parser.add_argument(
         "--temperature",
         type=float,
         default=1.0,
-        help="Temperature to use during sampling"
+        help="Temperature to use during sampling",
     )
     parser.add_argument(
         "--max-length",
         type=int,
         default=None,
-        help="Maximum supported input/output length in tokens"
+        help="Maximum supported input/output length in tokens",
     )
     parser.add_argument(
         "--max-new-tokens",
         type=int,
         default=None,
-        help="Maximum number of new tokens to generate"
+        help="Maximum number of new tokens to generate",
     )
     parser.add_argument(
         "--input-format",
         choices=["text", "jsonl"],
         default="text",
-        help="Whether to treat input files as jsonl or text"
+        help="Whether to treat input files as jsonl or text",
     )
     parser.add_argument(
         "--output-format",
         choices=["text", "jsonl"],
         default="text",
-        help="Whether to format output as jsonl or text"
+        help="Whether to format output as jsonl or text",
     )
     parser.add_argument(
         "-kg",
@@ -159,119 +149,100 @@ def main():
         help="Knowledge graph to use for generation",
     )
     parser.add_argument(
-        "--entities",
-        type=str,
-        default=None,
-        help="Directory of entity index"
+        "--entities", type=str, default=None, help="Directory of entity index"
     )
     parser.add_argument(
-        "--properties",
-        type=str,
-        default=None,
-        help="Directory of property index"
+        "--properties", type=str, default=None, help="Directory of property index"
     )
     parser.add_argument(
         "--index-type",
         type=str,
         choices=["prefix", "qgram"],
         default="prefix",
-        help="Index type to use for entity and property indices"
+        help="Index type to use for entity and property indices",
     )
     parser.add_argument(
         "--system-message",
         type=str,
         default=None,
         help="System message to add to the generation process "
-        "(only works with chat models)"
+        "(only works with chat models)",
     )
     example_group = parser.add_mutually_exclusive_group()
     example_group.add_argument(
-        "--example-index",
-        type=str,
-        default=None,
-        help="Path to example index file"
+        "--example-index", type=str, default=None, help="Path to example index file"
     )
     example_group.add_argument(
-        "--examples",
-        type=str,
-        default=None,
-        help="Path to examples file"
+        "--examples", type=str, default=None, help="Path to examples file"
     )
     parser.add_argument(
         "--num-examples",
         type=int,
         default=3,
         help="Number of examples to add to the generation process; top_k "
-        "for example index, randomly selected for examples file"
+        "for example index, randomly selected for examples file",
     )
     parser.add_argument(
         "--min-tries",
         type=int,
         default=0,
         help="Minimum number of different paths to take in each state before "
-        "backtracking"
+        "backtracking",
     )
     parser.add_argument(
         "--max-failures",
         type=int,
         default=3,
-        help="Maximum number of failures allowed in each state before "
-        "backtracking"
+        help="Maximum number of failures allowed in each state before " "backtracking",
     )
     parser.add_argument(
         "--no-sparql-constraint",
         action="store_true",
-        help="Whether to remove SPARQL grammar constraint"
+        help="Whether to remove SPARQL grammar constraint",
     )
     parser.add_argument(
         "--no-subgraph-constraint",
         action="store_true",
-        help="Whether to remove SPARQL subgraph constraint"
+        help="Whether to remove SPARQL subgraph constraint",
     )
     parser.add_argument(
         "--no-sparql-judgement",
         action="store_true",
-        help="Whether to skip SPARQL judgement step"
+        help="Whether to skip SPARQL judgement step",
     )
     parser.add_argument(
         "--pretty",
         action="store_true",
-        help="Whether to pretty format SPARQL during postprocessing"
+        help="Whether to pretty format SPARQL during postprocessing",
     )
     parser.add_argument(
         "--force-exact",
         action="store_true",
-        help="Whether to force using an exact terminal-level SPARQL constraint"
+        help="Whether to force using an exact terminal-level SPARQL constraint",
     )
     parser.add_argument(
-        "--seed",
-        type=int,
-        default=None,
-        help="Seed for random number generator"
+        "--seed", type=int, default=None, help="Seed for random number generator"
     )
     parser.add_argument(
-        "--select-k",
-        type=int,
-        default=10,
-        help="Number of candidates to select from"
+        "--select-k", type=int, default=10, help="Number of candidates to select from"
     )
     parser.add_argument(
         "--select-max-candidates",
         type=int,
         default=16384,
-        help="Maximum number of candidates for which a sub-index is created"
+        help="Maximum number of candidates for which a sub-index is created",
     )
     parser.add_argument(
         "--select-max-aliases",
         type=int,
         default=5,
-        help="Maximum number of aliases for each selection candidate"
+        help="Maximum number of aliases for each selection candidate",
     )
     parser.add_argument(
         "--select-no-info-for-unique",
         action="store_true",
         help="Whether to only show additional info for non-unique selection "
-        "candidates"
+        "candidates",
     )
     args = parser.parse_args()
     if args.seed is not None:

@@ -23,7 +23,7 @@ def exact_f1_score(pred: list[list[str]], target: list[list[str]]) -> float:
 
 def assignment_f1_score(pred: list[list[str]], target: list[list[str]]) -> float:
     # create a matrix of distances between pred and target
-    scores = np.zeros((len(pred), len(target)))
+    scores = np.zeros((len(pred), len(target)), dtype=np.float32)
 
     pred_sets = [Counter(p) for p in pred]
     target_sets = [Counter(t) for t in target]

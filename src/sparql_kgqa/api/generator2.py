@@ -2,7 +2,6 @@ from typing import Any, Generator, Iterable, Iterator
 import logging
 import random
 
-from search_index.index import SearchIndex
 import torch
 from torch import nn
 
@@ -13,10 +12,7 @@ from text_utils.api.utils import (
     device_info,
     get_devices,
 )
-from text_utils.inference import (
-    utils as inference_utils,
-    beam_search
-)
+from text_utils.inference import utils as inference_utils, beam_search
 from text_utils.inference.utils import Beam
 
 from sparql_kgqa.api.utils import Chat, format_chat
@@ -24,15 +20,11 @@ from sparql_kgqa.model import (
     Model,
     PretrainedDecoder,
     model_from_config,
-    peft_model_from_config
+    peft_model_from_config,
 )
 from sparql_kgqa.sparql.utils import load_examples
 from sparql_kgqa.sim_index import SimilarityIndex
-from sparql_kgqa.sparql.utils2 import (
-    KgManager,
-    Mapping,
-    get_kg_manager,
-)
+from sparql_kgqa.sparql.utils2 import KgManager
 
 logging.getLogger("requests").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
@@ -58,11 +50,7 @@ class SPARQLGenerator(TextProcessor):
         return self.cfg["experiment"]["name"]
 
     @classmethod
-    def _model_from_config(
-        cls,
-        cfg: dict[str, Any],
-        device: Device
-    ) -> nn.Module:
+    def _model_from_config(cls, cfg: dict[str, Any], device: Device) -> nn.Module:
         model = model_from_config(cfg["model"])
         assert isinstance(model, PretrainedDecoder)
         peft = cfg["train"].get("peft", None)
@@ -73,17 +61,9 @@ class SPARQLGenerator(TextProcessor):
     @property
     def max_length(self) -> int:
         cfg_max_length = self.cfg["inference"].get("max_length", 512)
-        return min(
-            self._max_length or cfg_max_length,
-            cfg_max_length
-        )
+        return min(self._max_length or cfg_max_length, cfg_max_length)
 
-    def __init__(
-        self,
-        model: Model,
-        cfg: dict[str, Any],
-        device: Device
-    ) -> None:
+    def __init__(self, model: Model, cfg: dict[str, Any], device: Device) -> None:
         super().__init__(model, cfg, device)
         assert isinstance(model, PretrainedDecoder)
         self.logger.debug(f"got model config:\n{self.cfg['model']}")
@@ -97,11 +77,10 @@ class SPARQLGenerator(TextProcessor):
 
         # some options for inference
         self._eos_token = self.cfg["inference"]["eos"]
-        self._eos_token_id = self.tokenizer.token_to_id(
-            self._eos_token
-        )
-        assert self._eos_token_id is not None, \
-            f"token {self._eos_token} not in tokenizer"
+        self._eos_token_id = self.tokenizer.token_to_id(self._eos_token)
+        assert (
+            self._eos_token_id is not None
+        ), f"token {self._eos_token} not in tokenizer"
 
         # continuations are the postprocessed tokens from the vocab
         # (already sorted by token id)
@@ -131,9 +110,7 @@ class SPARQLGenerator(TextProcessor):
         self._disable_sparql_judgement = False
         self._manager: None | KgManager = None
 
-        self.model = self.model.compile(
-            **self.cfg["inference"].get("compile", {})
-        )
+        self.model = self.model.compile(**self.cfg["inference"].get("compile", {}))
 
         self._example_index: SimilarityIndex | None = None
         self._examples: Examples | None = None
@@ -162,13 +139,11 @@ class SPARQLGenerator(TextProcessor):
         assert self._manager is not None, "kg indices not set"
         if examples is None and self._example_index is not None:
             examples = self._example_index.find_matches(
-                question,
-                self._num_examples
+                question, self._num_examples
             )  # type: ignore
         elif examples is None and self._examples is not None:
             examples = random.sample(
-                self._examples,
-                min(self._num_examples, len(self._examples))
+                self._examples, min(self._num_examples, len(self._examples))
             )
         else:
             examples = []
@@ -176,10 +151,7 @@ class SPARQLGenerator(TextProcessor):
         assert examples is not None
 
         messages = self._manager.get_sparql_continuation_prompt(
-            question,
-            "",
-            "",
-            examples=examples
+            question, "", "", examples=examples
         )
         prompt = self._format_chat(messages)
         return data.InferenceData(
@@ -187,30 +159,27 @@ class SPARQLGenerator(TextProcessor):
             {
                 "question": question,
                 "prompt": prompt,
-            }
+            },
         )
 
     def _format_chat(self, input: str | Chat) -> str:
-        assert "chat_template" in self.cfg["inference"], \
-            "chat template not set in config, expect one even for " \
+        assert "chat_template" in self.cfg["inference"], (
+            "chat template not set in config, expect one even for "
             "non-chat models (use default)"
+        )
         chat_template = self.cfg["inference"]["chat_template"]
 
         system_message = self._system_message or self._default_system_message
         if system_message is not None and not isinstance(input, str):
-            assert all(m["role"] != "system" for m in input), \
-                "system message already in input"
-            assert "system" in chat_template["roles"], \
-                "chat template must have a system role"
-            input.insert(0, {
-                "role": "system",
-                "text": system_message
-            })
+            assert all(
+                m["role"] != "system" for m in input
+            ), "system message already in input"
+            assert (
+                "system" in chat_template["roles"]
+            ), "chat template must have a system role"
+            input.insert(0, {"role": "system", "text": system_message})
 
-        return format_chat(
-            input,
-            chat_template
-        )
+        return format_chat(input, chat_template)
 
     @torch.inference_mode()
     def _decode_fn(
@@ -226,10 +195,7 @@ class SPARQLGenerator(TextProcessor):
         return dec, {}
 
     def _partial_inference(
-        self,
-        beam: Beam,
-        stop_fn: inference_utils.StopFn,
-        no_sampling: bool = False
+        self, beam: Beam, stop_fn: inference_utils.StopFn, no_sampling: bool = False
     ) -> Iterator[Beam]:
         def update_fn(beam: Beam) -> Beam | None:
             const = beam.info.get("const", None)
@@ -246,8 +212,7 @@ class SPARQLGenerator(TextProcessor):
 
         logit_fns = [
             inference_utils.constraint_logit_fn(
-                lambda beam: beam.info.get("const", None),
-                self._eos_token_id
+                lambda beam: beam.info.get("const", None), self._eos_token_id
             )
         ]
 
@@ -255,8 +220,9 @@ class SPARQLGenerator(TextProcessor):
             sample_fn = inference_utils.greedy()
 
         elif self._sampling_strategy == "top_k":
-            assert self._top_k >= self._beam_width, \
-                "top k must be greater than or equal to beam width"
+            assert (
+                self._top_k >= self._beam_width
+            ), "top k must be greater than or equal to beam width"
             logit_fns.append(inference_utils.top_k_masking(self._top_k))
             sample_fn = inference_utils.sample()
 
@@ -265,9 +231,7 @@ class SPARQLGenerator(TextProcessor):
             sample_fn = inference_utils.sample()
 
         if self._sampling_strategy != "greedy" and self._temp != 1.0:
-            logit_fns.append(inference_utils.temperature_scaling(
-                self._temp
-            ))
+            logit_fns.append(inference_utils.temperature_scaling(self._temp))
 
         for beams in beam_search(
             decode_fn=self._decode_fn,
@@ -288,10 +252,7 @@ class SPARQLGenerator(TextProcessor):
 
         yield beam
 
-    def _live_inference(
-        self,
-        batch: data.InferenceBatch
-    ) -> Iterator[str]:
+    def _live_inference(self, batch: data.InferenceBatch) -> Iterator[str]:
         assert self._manager is not None, "kg indices not set"
         assert self._sparql_constraint is not None, "sparql constraint not set"
         # decode fn gets in token ids and additional kwargs,
@@ -300,8 +261,7 @@ class SPARQLGenerator(TextProcessor):
         self._sparql_constraint.reset()
 
         batch_size = len(batch)
-        assert batch_size == 1, \
-            "only supporting single batched inference for now"
+        assert batch_size == 1, "only supporting single batched inference for now"
 
         info = batch.infos()[0]
         token_ids = batch.token_ids()[0]
@@ -357,14 +317,9 @@ class SPARQLGenerator(TextProcessor):
                 elif s == "select" and typ == "sparql":
                     obj_type, identifier, variant = val[1]
                     iri = self._manager.denormalize_selection(
-                        obj_type,
-                        identifier,
-                        variant
+                        obj_type, identifier, variant
                     )
-                    pfx += self._manager.format_iri(
-                        iri or identifier,
-                        safe=True
-                    )
+                    pfx += self._manager.format_iri(iri or identifier, safe=True)
                 # skip search, done and none states
             return pfx
 
@@ -399,7 +354,7 @@ class SPARQLGenerator(TextProcessor):
         assert s == "sparql", "initial state must be sparql"
 
         while s:
-            prev = state(len(current) - 1) if current else 'start'
+            prev = state(len(current) - 1) if current else "start"
             self.logger.debug(
                 f"current state:\n"
                 f"name:     {s}\n"
@@ -427,9 +382,7 @@ class SPARQLGenerator(TextProcessor):
 
             if s == "done":
                 accept = self._judge_sparql(
-                    question,
-                    prefix("sparql"),
-                    prefix("natural")
+                    question, prefix("sparql"), prefix("natural")
                 )
                 if accept:
                     # breaking early will return final sparql query
@@ -482,11 +435,9 @@ class SPARQLGenerator(TextProcessor):
                     previous(),
                     selections(),
                     failed,
-                    min_tries_reached
+                    min_tries_reached,
                 )
-                if selection is None or (
-                    selection in failed and min_tries_reached
-                ):
+                if selection is None or (selection in failed and min_tries_reached):
                     backtrack()
                 else:
                     advance(selection)
@@ -496,12 +447,7 @@ class SPARQLGenerator(TextProcessor):
 
         yield prefix("sparql")
 
-    def _judge_sparql(
-        self,
-        question: str,
-        sparql: str,
-        natural_sparql: str
-    ) -> bool:
+    def _judge_sparql(self, question: str, sparql: str, natural_sparql: str) -> bool:
         if self._disable_sparql_judgement:
             return True
         assert self._manager is not None, "kg indices not set"
@@ -510,18 +456,12 @@ class SPARQLGenerator(TextProcessor):
             sparql,
             natural_sparql,
         )
-        token_ids = self.tokenizer.tokenize(
-            self._format_chat(prompt),
-            True
-        ).token_ids
+        token_ids = self.tokenizer.tokenize(self._format_chat(prompt), True).token_ids
         beam = Beam(
             token_ids,
             info={
-                "const": grammar.RegexConstraint(
-                    regex,
-                    self._continuations
-                ),
-            }
+                "const": grammar.RegexConstraint(regex, self._continuations),
+            },
         )
 
         *_, beam = self._partial_inference(
@@ -550,7 +490,7 @@ class SPARQLGenerator(TextProcessor):
             sparql_prefix,
             natural_prefix,
             selections=selections,
-            failures=failures
+            failures=failures,
         )
         info: dict = {"continuation": "", "search_token": ""}
         # add sparql constraint if not disabled
@@ -560,11 +500,8 @@ class SPARQLGenerator(TextProcessor):
             info["const"] = const
 
         beam = Beam(
-            self.tokenizer.tokenize(
-                self._format_chat(prompt),
-                True
-            ).token_ids,
-            info=info
+            self.tokenizer.tokenize(self._format_chat(prompt), True).token_ids,
+            info=info,
         )
 
         def eos_stop_fn(beam: Beam) -> bool:
@@ -581,7 +518,7 @@ class SPARQLGenerator(TextProcessor):
             if match is None:
                 return False
 
-            part = decoded[:match.start()]
+            part = decoded[: match.start()]
             beam.info["continuation"] = part
             beam.info["search_token"] = match.group(0)
             return True
@@ -590,11 +527,9 @@ class SPARQLGenerator(TextProcessor):
         for output in self._partial_inference(
             beam,
             stop_fn,
-            no_sampling=True  # for sparql continuations turn off sampling
+            no_sampling=True,  # for sparql continuations turn off sampling
         ):
-            self.logger.debug(self.tokenizer.de_tokenize(
-                output.decoded_token_ids
-            ))
+            self.logger.debug(self.tokenizer.de_tokenize(output.decoded_token_ids))
             yield self.tokenizer.de_tokenize(output.decoded_token_ids)
             last = output
 
@@ -617,27 +552,17 @@ class SPARQLGenerator(TextProcessor):
     ) -> str:
         assert self._manager is not None, "kg indices not set"
         prompt, regex = self._manager.get_search_prompt_and_regex(
-            question,
-            prefix,
-            selections,
-            failures
+            question, prefix, selections, failures
         )
         beam = Beam(
-            self.tokenizer.tokenize(
-                self._format_chat(prompt),
-                True
-            ).token_ids,
+            self.tokenizer.tokenize(self._format_chat(prompt), True).token_ids,
             info={
-                "const": grammar.RegexConstraint(
-                        regex,
-                        self._continuations
-                    ),
-            }
+                "const": grammar.RegexConstraint(regex, self._continuations),
+            },
         )
 
         *_, search = self._partial_inference(
-            beam,
-            lambda beam: beam.token_ids[-1] == self._eos_token_id
+            beam, lambda beam: beam.token_ids[-1] == self._eos_token_id
         )
 
         search_query = self.tokenizer.de_tokenize(search.decoded_token_ids)
@@ -652,7 +577,7 @@ class SPARQLGenerator(TextProcessor):
         search_query: str,
         selections: list[tuple[str, str, str | None]] | None = None,
         failures: set[tuple[str, str, str | None]] | None = None,
-        allow_none: bool = True
+        allow_none: bool = True,
     ) -> tuple[str, tuple[str, str, str | None]] | None:
         assert self._manager is not None, "kg indices not set"
 
@@ -662,7 +587,7 @@ class SPARQLGenerator(TextProcessor):
             self._k,
             self._max_candidates,
             max_retries=3,
-            skip_autocomplete=self._disable_subgraph_constraint
+            skip_autocomplete=self._disable_subgraph_constraint,
         )
 
         prompt, regex = self._manager.get_selection_prompt_and_regex(
@@ -674,7 +599,7 @@ class SPARQLGenerator(TextProcessor):
             add_infos=self._add_infos,
             selections=selections,
             failures=failures,
-            add_none_alternative=allow_none
+            add_none_alternative=allow_none,
         )
 
         beam = Beam(
@@ -683,39 +608,29 @@ class SPARQLGenerator(TextProcessor):
                 True,
             ).token_ids,
             info={
-                "const": grammar.RegexConstraint(
-                    regex,
-                    self._continuations
-                ),
-            }
+                "const": grammar.RegexConstraint(regex, self._continuations),
+            },
         )
 
         *_, selection = self._partial_inference(
-            beam,
-            lambda beam: beam.token_ids[-1] == self._eos_token_id
+            beam, lambda beam: beam.token_ids[-1] == self._eos_token_id
         )
 
         selected = self.tokenizer.de_tokenize(selection.decoded_token_ids)
         self.logger.debug(f"selection:\n{prompt}{selected}")
-        return self._manager.parse_selection(
-            alternatives,
-            selected
-        )
+        return self._manager.parse_selection(alternatives, selected)
 
     def set_examples(
         self,
         examples: Examples | str | None = None,
-        example_index: SimilarityIndex | str | list[str] | None = None
+        example_index: SimilarityIndex | str | list[str] | None = None,
     ) -> None:
         self._example_index = None
         self._examples = None
         if isinstance(example_index, SimilarityIndex):
             self._example_index = example_index
 
-        elif (
-            isinstance(example_index, str)
-            or isinstance(example_index, list)
-        ):
+        elif isinstance(example_index, str) or isinstance(example_index, list):
             index = SimilarityIndex()
             index.load(example_index)
             self._example_index = index
@@ -732,8 +647,7 @@ class SPARQLGenerator(TextProcessor):
     def set_kg_manager(self, manager: KgManager) -> None:
         self._manager = manager
         self._sparql_constraint = self._manager.get_constraint(
-            self._continuations,
-            self._exact or self._force_exact
+            self._continuations, self._exact or self._force_exact
         )
 
     def set_inference_options(
@@ -756,7 +670,7 @@ class SPARQLGenerator(TextProcessor):
         select_max_aliases: int = 5,
         select_add_infos: bool = True,
         system_message: str | None = None,
-        force_exact: bool = False
+        force_exact: bool = False,
     ) -> None:
         assert sampling_strategy in ["greedy", "top_k", "top_p"]
         self._sampling_strategy = sampling_strategy
@@ -770,8 +684,9 @@ class SPARQLGenerator(TextProcessor):
         self._disable_subgraph_constraint = disable_subgraph_constraint
         self._disable_sparql_judgement = disable_sparql_judgement
         self._force_exact = force_exact
-        assert max_failures >= (min_tries or max_failures), \
-            f"got max {max_failures} failures but min {min_tries} tries"
+        assert max_failures >= (
+            min_tries or max_failures
+        ), f"got max {max_failures} failures but min {min_tries} tries"
         self._num_examples = num_examples
         self._max_failures = max_failures
         self._min_tries = min_tries
@@ -787,7 +702,7 @@ class SPARQLGenerator(TextProcessor):
         sort: bool = True,
         num_threads: int | None = None,
         show_progress: bool = False,
-        pretty: bool = False
+        pretty: bool = False,
     ) -> Iterator[str | list[str]]:
         def inference_fn(batch: data.InferenceBatch) -> list[str]:
             *_, last = self._live_inference(batch)
@@ -802,10 +717,7 @@ class SPARQLGenerator(TextProcessor):
             output = outputs[0]
 
             if pretty:
-                output = self._manager.prettify(
-                    output,
-                    is_prefix=True
-                )
+                output = self._manager.prettify(output, is_prefix=True)
 
             return output
 
@@ -818,7 +730,7 @@ class SPARQLGenerator(TextProcessor):
             sort=sort,
             num_threads=num_threads,
             show_progress=show_progress,
-            ignore_special_tokens=True
+            ignore_special_tokens=True,
         )
 
     def generate_live(
@@ -826,16 +738,18 @@ class SPARQLGenerator(TextProcessor):
         query: str,
         examples: Examples | None = None,
         postprocess: bool = True,
-        pretty: bool = False
+        pretty: bool = False,
     ) -> Iterator[str]:
         assert self._manager is not None, "kg indices not set"
         input = self._prepare_input(query, examples)
-        batch = next(data.InferenceLoader.from_iterator(
-            iter([input]),
-            self.cfg["inference"]["tokenizer"],
-            self.cfg["inference"].get("window", {"type": "full"}),
-            ignore_special_tokens=True
-        ))
+        batch = next(
+            data.InferenceLoader.from_iterator(
+                iter([input]),
+                self.cfg["inference"]["tokenizer"],
+                self.cfg["inference"].get("window", {"type": "full"}),
+                ignore_special_tokens=True,
+            )
+        )
 
         # yield the prompt
         item = batch.items()[0]
@@ -850,10 +764,7 @@ class SPARQLGenerator(TextProcessor):
 
         if pretty:
             try:
-                output = self._manager.prettify(
-                    output,
-                    is_prefix=False
-                )
+                output = self._manager.prettify(output, is_prefix=False)
             except Exception:
                 pass
 

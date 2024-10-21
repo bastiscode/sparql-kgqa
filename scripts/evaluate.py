@@ -11,6 +11,7 @@ from text_utils.io import load_text_file
 
 from sparql_kgqa.sparql.utils2 import (
     QLEVER_URLS,
+    TIMEOUT,
     AskResult,
     KgManager,
     run_parallel,
@@ -62,7 +63,7 @@ def get_result_set_or_error(
     sparql: str,
     manager: KgManager,
     endpoint: str | None = None,
-    timeout: float | None = None,
+    timeout: float | tuple[float, float] | None = TIMEOUT,
     max_retries: int = 1,
 ) -> tuple[Counter | None, str | None]:
     try:

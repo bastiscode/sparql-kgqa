@@ -1,6 +1,7 @@
 from collections import Counter
 from urllib.parse import quote_plus
 import time
+import copy
 import requests
 import tempfile
 import os
@@ -31,6 +32,10 @@ QLEVER_URLS = {
     "dblp": f"{QLEVER_API}/dblp",
     "orkg": f"{QLEVER_API}/orkg",
 }
+# default timeout
+# 4 seconds for establishing a connection, 8 seconds for processing query
+# and beginning to receive the response
+TIMEOUT = (4, 8)
 
 OBJ_TYPES = ["entity", "property", "other", "literal"]
 SEARCH_TOKEN = "<|search|>"
@@ -107,12 +112,7 @@ def find_all(
             yield from find_all(child, name, skip)
 
 
-def ask_to_select(
-    sparql: str,
-    parser: grammar.LR1Parser,
-    var: str | None = None,
-    distinct: bool = False,
-) -> str | None:
+def ask_to_select(sparql: str, parser: grammar.LR1Parser) -> str | None:
     parse = parser.parse(sparql)
 
     sub_parse = find(parse, "QueryType")
@@ -122,73 +122,61 @@ def ask_to_select(
     if ask_query["name"] != "AskQuery":
         return None
 
-    # we have an ask query
-    # find the first var or iri
-    if var is not None:
-        ask_var = next(
-            filter(
-                lambda p: p["children"][0]["value"] == var,
-                find_all(sub_parse, "Var", skip={"SubSelect"}),
-            ),
-            None,
-        )
-        assert ask_var is not None, "could not find specified var"
-    else:
-        ask_var = find(sub_parse, "Var", skip={"SubSelect"})
+    # find all triples
+    triples = list(find_all(ask_query, "TriplesSameSubjectPath"))
+    for triple in triples:
+        # find first var in triple
+        var = find(triple, "Var")
+        if var is not None:
+            continue
 
-    if ask_var is not None:
-        var = ask_var["children"][0]["value"]
-        # ask query has a var, convert to select
-        ask_query["name"] = "SelectQuery"
-        # replace ASK terminal with SelectClause
-        sel_clause = [
+        iri = find(triple, "iri")
+        assert iri is not None
+
+        # triple block does not have a var
+        # introduce one in VALUES clause and replace iri with var
+        var = uuid.uuid4().hex
+        triple["children"].append(
             {
-                "name": "SELECT",
-                "value": "SELECT",
-            },
-            {"name": "DISTINCT", "value": "DISTINCT" * distinct},
-            {"name": "Var", "value": var},
-        ]
-        ask_query["children"][0] = {"name": "SelectClause", "children": sel_clause}
-        return parse_to_string(parse)
+                "name": "ValuesClause",
+                "children": [
+                    {"name": "VALUES", "value": "VALUES"},
+                    {"name": "Var", "value": f"?{var}"},
+                    {"name": "{", "value": "{"},
+                    copy.deepcopy(iri),
+                    {"name": "}", "value": "}"},
+                ],
+            }
+        )
+        iri.pop("children")
+        iri["name"] = "Var"
+        iri["value"] = f"?{var}"
 
-    # ask query does not have a var, convert to select
-    # and introduce own var
-    # generate unique var name with uuid
-    var = f"?{uuid.uuid4().hex}"
-    iri = find(sub_parse, "iri", skip={"SubSelect"})
-    assert iri is not None, "could not find an iri in ask query"
-
-    child = iri["children"][0]
-    if child["name"] == "PrefixedName":
-        iri = child["children"][0]["value"]
-        child["children"][0]["value"] = var
-    elif child["name"] == "IRIREF":
-        iri = child["value"]
-        child["value"] = var
-    else:
-        raise ValueError(f"unsupported iri format {iri}")
-
-    where_clause = ask_query["children"][2]
-    group_graph_pattern = find(where_clause, "GroupGraphPattern", skip={"SubSelect"})
-    assert group_graph_pattern is not None
-    values = {"name": "CustomValuesClause", "value": f"VALUES {var} {{ {iri} }}"}
-    group_graph_pattern["children"].insert(1, values)
-
+    # ask query has a var, convert to select
     ask_query["name"] = "SelectQuery"
     # replace ASK terminal with SelectClause
     ask_query["children"][0] = {
         "name": "SelectClause",
         "children": [
-            {
-                "name": "SELECT",
-                "value": "SELECT",
-            },
-            {"name": "DISTINCT", "value": "DISTINCT" * distinct},
-            {"name": "Var", "value": var},
+            {"name": "SELECT", "value": "SELECT"},
+            {"name": "*", "value": "*"},
         ],
     }
-    return parse_to_string(parse)
+    limit = find(ask_query, "LimitClause", skip={"SubSelect"})
+    if limit is None:
+        return parse_to_string(parse) + " LIMIT 1"
+    else:
+        limit["children"] = [
+            {
+                "name": "LIMIT",
+                "value": "LIMIT",
+            },
+            {
+                "name": "INTEGER",
+                "value": "1",
+            },
+        ]
+        return parse_to_string(parse)
 
 
 class Alternative:
@@ -524,9 +512,7 @@ class KgManager:
 
         return (s.strip() + " " + rest_str).strip()
 
-    def autocomplete_prefix(
-        self, prefix: str, limit: int | None = None
-    ) -> tuple[str, str] | None:
+    def autocomplete_prefix(self, prefix: str) -> tuple[str, str] | None:
         """
         Autocomplete the SPARQL prefix by running
         it against the SPARQL grammar parser.
@@ -619,10 +605,6 @@ class KgManager:
             fix_latest_subselect(parse, select_var)
 
             final_query = parse_to_string(parse)
-            # add limit clause
-            if limit is not None:
-                final_query += f" LIMIT {limit}"
-
             query_and_position = (final_query, position)
             break
 
@@ -632,8 +614,9 @@ class KgManager:
         self,
         sparql: str,
         endpoint: str | None = None,
-        timeout: float | tuple[float, float] | None = None,
+        timeout: float | tuple[float, float] | None = TIMEOUT,
         max_retries: int = 1,
+        max_results: int | None = None,
     ) -> SelectResult | AskResult:
         # ask_to_select returns None if sparql is not an ask query
         select_sparql = ask_to_select(sparql, self.parser)
@@ -657,24 +640,37 @@ class KgManager:
                 },
                 data=sparql,
                 timeout=timeout,
+                stream=True,
             )
             if response.status_code == 200:
                 break
 
         assert response is not None, "cannot happen"
 
+        header = None
+        result = []
+        for line in response.iter_lines(decode_unicode=True):
+            if max_results is not None and len(result) > max_results:
+                raise RuntimeError(
+                    f"too many results, got {len(result):,} "
+                    f"but limit is {max_results:,}"
+                )
+
+            row = line.split("\t")
+            if header is None:
+                header = row
+            else:
+                result.append(row)
+
         if response.status_code != 200:
             exception = response.json().get("exception", "")
             raise RuntimeError(exception)
 
-        result = response.text.splitlines()
         if select_sparql is not None:
-            # > 1 because of header
-            return AskResult(len(result) > 1)
+            return AskResult(len(result) > 0)
         else:
-            assert len(result) > 0, "expected at least one result row for the header"
-            header = result[0].split("\t")
-            return header, [result[i].split("\t") for i in range(1, len(result))]
+            assert header is not None, "expected at least one row for the header"
+            return header, result
 
     def format_sparql_result(
         self,
@@ -751,7 +747,7 @@ for the first {show_columns} variables at maximum below:
         sparql: str,
         natural_sparql: str,
         endpoint: str | None = None,
-        timeout: float | None = None,
+        timeout: float | tuple[float, float] | None = TIMEOUT,
         max_retries: int = 1,
         max_rows: int = 10,
         max_columns: int = 5,
@@ -1185,19 +1181,18 @@ Answer: (?:yes|no)"""
         prefix: str,
         max_candidates: int | None = None,
         endpoint: str | None = None,
-        timeout: float | tuple[float, float] | None = None,
+        timeout: float | tuple[float, float] | None = TIMEOUT,
         max_retries: int = 1,
     ) -> tuple[set[str] | None, str] | None:
-        autocompletion = self.autocomplete_prefix(
-            prefix,
-            max_candidates + 1 if max_candidates is not None else None,
-        )
+        autocompletion = self.autocomplete_prefix(prefix)
         if autocompletion is None:
             return None
 
         sparql, position = autocompletion
         try:
-            result = self.execute_sparql(sparql, endpoint, timeout, max_retries)
+            result = self.execute_sparql(
+                sparql, endpoint, timeout, max_retries, max_candidates
+            )
         except Exception as e:
             LOGGER.debug(
                 f"getting autocompletion result with sparql\n{sparql}\n"
@@ -1303,7 +1298,7 @@ Answer: (?:yes|no)"""
         k: int,
         max_candidates: int | None = None,
         endpoint: str | None = None,
-        timeout: float | tuple[float, float] | None = None,
+        timeout: float | tuple[float, float] | None = TIMEOUT,
         max_retries: int = 1,
         skip_autocomplete: bool = False,
     ) -> dict[str, list[Alternative]]:
