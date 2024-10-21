@@ -649,13 +649,14 @@ class KgManager:
 
         header = None
         result = []
-        for line in response.iter_lines(decode_unicode=True):
+        for line in response.iter_lines():
             if max_results is not None and len(result) > max_results:
                 raise RuntimeError(
                     f"too many results, got {len(result):,} "
                     f"but limit is {max_results:,}"
                 )
 
+            line = line.decode(errors="replace")
             row = line.split("\t")
             if header is None:
                 header = row
@@ -974,36 +975,36 @@ Answer: (?:yes|no)"""
 
         return parse_to_string(parse) + rest_str
 
-    def replace_iri(self, parse: dict[str, Any], with_iri: bool = True) -> bool:
+    def replace_iri(
+        self, parse: dict[str, Any], with_iri: bool = True
+    ) -> tuple[tuple[str, str, str | None] | None, bool]:
         if parse["name"] == "PNAME_LN":
             short = parse["value"]
             # convert to long form iri
             pfx, val = short.split(":", 1)
             if pfx not in self.custom_prefixes:
-                return False
+                return None, False
 
             iri = self.custom_prefixes[pfx] + val + ">"
 
         elif parse["name"] == "IRIREF":
-            start, end = parse["byte_span"]
-            if start == end:
-                return False
-
             iri = parse["value"]
 
         else:
-            return False
+            return None, False
 
-        norm = self.entity_mapping.normalize(iri)
-        map = self.entity_mapping
-        index = self.entity_index
+        norm = self.property_mapping.normalize(iri)
+        map = self.property_mapping
+        index = self.property_index
+        obj_type = "property"
         if norm is None or norm[0] not in map:
-            norm = self.property_mapping.normalize(iri)
-            map = self.property_mapping
-            index = self.property_index
+            norm = self.entity_mapping.normalize(iri)
+            map = self.entity_mapping
+            index = self.entity_index
+            obj_type = "entity"
 
         if norm is None or norm[0] not in map:
-            return True
+            return None, True
 
         key, variant = norm
         label = index.get_name(map[key])
@@ -1016,11 +1017,11 @@ Answer: (?:yes|no)"""
         parse["name"] = "IRIREF"
         parse.pop("children", None)
         parse["value"] = f"<{label}>"
-        return False
+        return (obj_type, key, variant), False
 
     def replace_iris(
         self, sparql: str, is_prefix: bool = False, with_iri: bool = True
-    ) -> tuple[str, bool]:
+    ) -> tuple[str, list[tuple[str, str, str | None]], bool]:
 
         if is_prefix:
             parse, rest = self.parser.prefix_parse(
@@ -1032,10 +1033,13 @@ Answer: (?:yes|no)"""
             rest_str = ""
 
         incomplete = False
+        selections = []
 
         for obj in find_all(parse, {"PNAME_LN", "IRIREF"}, skip={"Prologue"}):
-            iri_incomplete = self.replace_iri(obj, with_iri)
-            incomplete |= iri_incomplete
+            selection, inc = self.replace_iri(obj, with_iri)
+            if selection:
+                selections.append(selection)
+            incomplete |= inc
 
         if not incomplete:
             # remove custom prefixes if they are not used
@@ -1049,7 +1053,7 @@ Answer: (?:yes|no)"""
 
                 pfx["children"] = []
 
-        return parse_to_string(parse) + rest_str, incomplete
+        return parse_to_string(parse) + rest_str, selections, incomplete
 
     def replace_entities_and_properties(self, sparql: str) -> str:
         parse = self.parser.parse(sparql, skip_empty=True, collapse_single=True)

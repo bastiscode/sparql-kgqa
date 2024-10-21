@@ -56,14 +56,16 @@ def system_prompt(manager: KgManager) -> str:
     kg = manager.kg.capitalize()
     return f"""\
 You are a question generation model that generates questions from \
-SPARQL queries over {kg}. You are given a SPARQL query and its \
-natural language version. You then need to generate a question that \
+SPARQL queries over {kg}. You are given a SPARQL query, its \
+natural language version, the entities and properties it contains, and its \
+execution result. You then need to generate a question that \
 the SPARQL query answers.
 
 Follow this step-by-step process:
 1. Think about the SPARQL query and the question it answers:
 - understand the SPARQL query and its natural language version
 - look at the entities and properties involved in the query
+- look at the execution result of the SPARQL query
 - in the SPARQL query variable names are normalized as ?var1, ?var2, ... \
 and string literals are anonymized as "string1", "string2", ...; think \
 about meaningful variable names and string literals that could be used \
@@ -100,7 +102,13 @@ features
 - the paraphrases should be as concise as possible"""
 
 
-def prompt(sparql: str, natural_sparql: str, examples: list[tuple[str, str]]) -> str:
+def prompt(
+    sparql: str,
+    natural_sparql: str,
+    selections: str,
+    result: str,
+    examples: list[tuple[str, str]],
+) -> str:
     prompt = ""
     if examples:
         prompt += """\
@@ -116,22 +124,32 @@ queries:
     prompt += f"""\
 For the following SPARQL query and its natural language version, do \
 the following:
-- Think about the SPARQL query and the question it answers
+- Think about the SPARQL query, its execution result, and the question it answers
 - Clean the SPARQL query
 - Generate the question
 - Judge the complexity of the SPARQL query
 - Generate up to 3 paraphrases of the question
 
 Keep in mind to generate questions that are as concise as possible \
-and contain little to none verbatim mentions of entities and properties \
-from the SPARQL query. You are given examples above that you can and \
+and contain as few verbatim mentions of entities and properties \
+from the SPARQL query as possible. You are given examples above that you can and \
 should use as a reference.
 
 SPARQL query:
 {sparql}
 
 Natural language SPARQL query:
-{natural_sparql}"""
+{natural_sparql}
+"""
+
+    if selections:
+        prompt += f"""
+{selections}
+"""
+
+    prompt += f"""
+Execution result (ignoring SERVICE clauses for retrieving labels):
+{result}"""
     return prompt
 
 
@@ -149,10 +167,14 @@ class Output(BaseModel):
     paraphrases: list[str]
 
 
+class Sparql(BaseModel):
+    sparql: str
+
+
 def prepare_sparql(manager: KgManager, sparql: str) -> str | None:
     try:
         sparql = manager.fix_prefixes(sparql, remove_known=True)
-        sparql, inc = manager.replace_iris(sparql)
+        sparql, _, inc = manager.replace_iris(sparql)
         if inc:
             return None
     except Exception:
@@ -173,6 +195,20 @@ def remove_service(manager: KgManager, sparql: str) -> str:
         service.pop("children")
 
     return parse_to_string(parse)
+
+
+def check_service(manager: KgManager, sparql: str) -> bool:
+    parse = manager.parser.parse(sparql)
+
+    for service in find_all(parse, "ServiceGraphPattern"):
+        var_or_iri = service["children"][2]
+        pname = find(var_or_iri, "PNAME_LN")
+        if pname is None or pname["value"] != "wikibase:label":
+            continue
+
+        return True
+
+    return False
 
 
 def generate_question(
@@ -210,7 +246,7 @@ def generate_question(
         }
         return output
 
-    natural_sparql, inc = manager.replace_iris(sparql)
+    natural_sparql, selections, inc = manager.replace_iris(sparql)
     output["natural_sparql"] = natural_sparql
 
     if inc:
@@ -221,9 +257,17 @@ def generate_question(
         }
         return output
 
+    result_formatted = manager.format_sparql_result(original_result)
+    selections_formatted = manager.format_selections(selections)
+
     messages = [
         {"role": "system", "content": system_prompt(manager)},
-        {"role": "user", "content": prompt(sparql, natural_sparql, examples)},
+        {
+            "role": "user",
+            "content": prompt(
+                sparql, natural_sparql, selections_formatted, result_formatted, examples
+            ),
+        },
     ]
 
     try:
@@ -235,6 +279,7 @@ def generate_question(
             top_p=0.9,
         )
         message = response.choices[0].message
+        messages.append({"role": message.role, "content": message.content or ""})
         content = message.content
         parsed = message.parsed
     except Exception as e:
@@ -251,7 +296,48 @@ def generate_question(
         }
         return output
 
-    output["output"] = json.loads(content)
+    found_service = check_service(manager, parsed.sparql)
+    for _ in range(3):
+        if not found_service:
+            break
+
+        messages.append(
+            {
+                "role": "user",
+                "content": """Your SPARQL query still contains a SERVICE clause to \
+retrieve labels. Either replace it with rdfs:label and FILTER clauses wrapped in \
+OPTIONAL or remove it entirely. SERVICE is supported by the SPARQL engine.""",
+            }
+        )
+        try:
+            response = client.beta.chat.completions.parse(
+                messages=messages,  # type: ignore
+                response_format=Sparql,
+                model=args.model,
+                temperature=1.0,
+                top_p=0.9,
+            )
+            message = response.choices[0].message
+            messages.append({"role": message.role, "content": message.content or ""})
+            new_parsed = message.parsed
+        except Exception as e:
+            output["error"] = {
+                "type": "service_clause_removal",
+                "message": str(e),
+            }
+            return output
+
+        if new_parsed is None:
+            output["error"] = {
+                "type": "service_clause_removal",
+                "message": "no response",
+            }
+            return output
+
+        parsed.sparql = new_parsed.sparql
+        found_service = check_service(manager, parsed.sparql)
+
+    output["output"] = parsed.model_dump_json()
     # some diagnostics
     print(natural_sparql, file=sys.stderr)
     print(parsed.sparql, file=sys.stderr)
