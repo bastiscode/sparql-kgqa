@@ -192,10 +192,10 @@ wikidata-search-data:
 	@head -n 10000001 data/search-index/wikidata-entities/data.tsv \
 	> data/search-index/wikidata-entities-small/data.tsv
 	# wikidata properties
-	# https://qlever.cs.uni-freiburg.de/wikidata/dAqs2J
+	# https://qlever.cs.uni-freiburg.de/wikidata/7lUrT8
 	@mkdir -p data/search-index/wikidata-properties
 	@curl -s $(WD_URL) -H "Accept: text/tab-separated-values" \
-	--data-urlencode query="PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX skos: <http://www.w3.org/2004/02/skos/core#> PREFIX schema: <http://schema.org/> PREFIX wikibase: <http://wikiba.se/ontology#> PREFIX wd: <http://www.wikidata.org/entity/> PREFIX wdt: <http://www.wikidata.org/prop/direct/> SELECT DISTINCT ?label ?score (GROUP_CONCAT(DISTINCT ?alias; SEPARATOR=\";;;\") AS ?synonyms) ?id (GROUP_CONCAT(DISTINCT ?info; SEPARATOR=\";;;\") AS ?infos) WHERE { { SELECT ?p (COUNT(?p) AS ?score) WHERE { ?s ?p ?o } GROUP BY ?p } ?id wikibase:directClaim ?p . ?id @en@rdfs:label ?label . OPTIONAL { ?id @en@skos:altLabel ?alias } OPTIONAL { { ?id @en@schema:description ?info } UNION { ?id wdt:P1647 ?sub_ . ?sub_ @en@rdfs:label ?info } } } GROUP BY ?label ?score ?id ORDER BY DESC(?score)" \
+	--data-urlencode query="PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX skos: <http://www.w3.org/2004/02/skos/core#> PREFIX schema: <http://schema.org/> PREFIX wikibase: <http://wikiba.se/ontology#> PREFIX wd: <http://www.wikidata.org/entity/> PREFIX wdt: <http://www.wikidata.org/prop/direct/> SELECT DISTINCT ?label ?score (GROUP_CONCAT(DISTINCT ?alias; SEPARATOR=\";\") AS ?synonyms) ?id (GROUP_CONCAT(DISTINCT ?info; SEPARATOR=\"\t\") AS ?infos) WHERE { { SELECT ?p (COUNT(?p) AS ?count) WHERE { ?s ?p ?o } GROUP BY ?p } { SELECT (MAX(?count) AS ?max) WHERE { SELECT (COUNT(?p) AS ?count) WHERE { ?s ?p ?o . ?p ^wikibase:claim/wikibase:propertyType wikibase:ExternalId } GROUP BY ?p } } ?id wikibase:claim ?p . ?id @en@rdfs:label ?label . OPTIONAL { ?id @en@skos:altLabel ?alias } ?id wikibase:propertyType ?type . BIND(IF(?type = wikibase:ExternalId, ?count, ?max + 1 + ?count) AS ?score) OPTIONAL { { ?id @en@schema:description ?info } UNION { ?id wdt:P1647/@en@rdfs:label ?info } } } GROUP BY ?label ?score ?id ORDER BY DESC(?score)" \
 	--data-urlencode timeout=$(QLEVER_TIMEOUT) \
 	--data-urlencode access-token=$(WD_ACCESS_TOKEN) \
 	| python scripts/prepare_search_index.py \
