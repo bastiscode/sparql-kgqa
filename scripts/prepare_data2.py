@@ -778,7 +778,7 @@ def prepare_stages(
             return None
 
         # check whether the iri is a valid entity or property
-        matching = []
+        matching = {}
         for obj_type in ["entity", "property"]:
             map = mappings[obj_type]
             index = indices[obj_type]
@@ -789,10 +789,10 @@ def prepare_stages(
             id = map[norm[0]]
             label = index.get_name(id)
             syns = [s for s in index.get_val(id, 2).split(";;;") if s != ""]
-            matching.append((obj_type, *norm, label, syns))
+            matching[obj_type] = (obj_type, *norm, label, syns)
 
         if matching:
-            return random.choice(matching)
+            return matching.get("property", None) or matching.get("entity", None)
 
         elif manager.find_longest_prefix(iri, manager.prefixes) is not None:
             return "other", iri, None, iri, []
